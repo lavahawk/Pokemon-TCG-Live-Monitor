@@ -1,0 +1,1 @@
+pyinstaller --onefile --noconsole --add-data "ding.mp3;." --icon=icon.ico --name TCGLiveMonitorNOCONSOLE TCGLiveMonitor.py
