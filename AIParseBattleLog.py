@@ -92,7 +92,7 @@ battlelog = pyperclip.paste()
 
 # Load the deck lists from the Excel file
 deck_df = pd.read_excel(file_path, deck_sheet, usecols="B", skiprows=0, nrows=40)
-print(f'{deck_df}')
+#print(f'{deck_df}')  #for debugging decks
 possibledecks = deck_df
 
 # Debugging: Print the variables to ensure they're being populated correctly
@@ -108,6 +108,8 @@ Export the data Saying Win or Loss, and then the deck the opponent of {username}
 Battlelog:
 "{battlelog}"
 """
+#print(f'{prompt}) for debugging prompt
+
 class BattleLogOutput(BaseModel):
     My_deck: str
     OpponentsDeck: str
