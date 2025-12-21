@@ -1,0 +1,69 @@
+# API Keys and Sensitive Data
+.openai_key
+.user_config
+*.key
+
+# User-specific runtime data
+.last_rank
+.last_deck
+.max_rank
+
+# Database files (contains personal battle history)
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+ENV/
+
+# Logs and battle history
+Logs/
+*.log
+battle_log_*.txt
+Archived_BattleLogs/
+
+# Excel files with personal data
+*.xlsx
+!TCGExampleSheet_TEMPLATE.xlsx
+~$*.xlsx
+
+# OCR debug images
+debug_*.png
+debug_*.jpg
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+BackgroundRun/build/
+BackgroundRun/dist/
+*.spec
+
+# Shortcuts and links
+*.lnk
+
+# Temporary test files
+Testing New Stuff/
+
+# Archive folders
+_Archive/

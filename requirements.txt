@@ -1,0 +1,27 @@
+# Pokemon TCG Live Monitor - Required Packages
+# Core monitoring dependencies
+psutil==5.9.8
+pyperclip==1.8.2
+pygame==2.5.2
+pyfiglet==1.0.2
+colorama==0.4.6
+
+# Excel/Data processing
+pandas==2.2.0
+pyarrow==22.0.0
+openpyxl==3.1.2
+xlwings==0.30.13
+
+# OpenAI API
+openai==1.12.0
+pydantic==2.6.1
+
+# OCR and Screen Capture (NEW - for rank detection)
+opencv-python==4.9.0.80
+pytesseract==0.3.10
+mss==9.0.1
+Pillow==10.2.0
+pywin32==306  # For window detection and positioning
+
+# UI/Overlay (NEW - for minimal overlay display)
+PySide6==6.10.1  # Qt6 framework for overlay UI

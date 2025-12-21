@@ -13,9 +13,12 @@ import os
 import sys
 import tkinter as tk
 from tkinter import simpledialog
+import threading
+from multiprocessing import Process
+from BattleDatabase import BattleDatabase
 
 
-###Version=1.2
+###Version=2.0
 # Get the script's directory (where the script is located)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -197,7 +200,198 @@ def run_other_script():
     # Run the script using Python
     print(f"Running {script_path}...")
     subprocess.run(["python", script_path])
+    
+    # After AI parsing, wait for user to return to main menu
+    wait_for_main_menu_and_detect()
+
+def wait_for_main_menu_and_detect():
+    """Wait for user to return to main menu, then detect rank and deck name with OCR."""
+    print(Fore.YELLOW + "\n" + "="*50)
+    print(Fore.YELLOW + "⏳ Waiting for you to return to the main menu...")
+    print(Fore.CYAN + "   OCR will auto-detect your rank and deck name")
+    print(Fore.YELLOW + "="*50)
+    
+    try:
+        from RankDetector import RankDetector
+        
+        detector = RankDetector()
+        max_attempts = 60  # Wait up to 2 minutes (60 * 2 seconds)
+        attempt = 0
+        
+        while attempt < max_attempts:
+            # First check if menu text is detected (quick check)
+            menu_text_found = False
+            if "menu_text" in detector.regions:
+                menu_text_found = detector.validate_screen_by_text(
+                    "menu_text", 
+                    ["PLAY", "SHOP", "CARDS", "BATTLE PASS", "DECK", "RANKED"]
+                )
+            
+            if menu_text_found:
+                print(Fore.GREEN + "\n✓ Main menu text detected!")
+                
+                # Wait 4 seconds for the rank to fully populate on screen
+                print(Fore.CYAN + "   Waiting 4 seconds for rank to populate...")
+                time.sleep(4)
+                
+                # Now verify full menu detection (rank + deck + menu text)
+                if detector.is_on_main_menu(validation_method="auto", debug=False):
+                    print(Fore.GREEN + "✓ Full menu validation complete!")
+                    
+                    # Detect deck name first
+                    deck_name = detector.extract_text("my_deck_name")
+                    if deck_name:
+                        # Clean up the deck name (remove extra whitespace, etc.)
+                        deck_name = " ".join(deck_name.split())
+                        print(Fore.GREEN + f"✓ Deck detected: {deck_name}")
+                        # Save deck name to a file for AIParseBattleLog to use
+                        deck_file = os.path.join(BASE_DIR, ".last_deck")
+                        with open(deck_file, "w") as f:
+                            f.write(deck_name)
+                    else:
+                        print(Fore.YELLOW + "⚠ Could not detect deck name")
+                        deck_name = None
+                    
+                    # Detect rank
+                    rank = detector.extract_rank_safe(validate_screen=True, debug=False)
+                    if rank:
+                        print(Fore.GREEN + f"✓ Rank detected: {rank}")
+                        # Save rank to a file for AIParseBattleLog to use
+                        rank_file = os.path.join(BASE_DIR, ".last_rank")
+                        with open(rank_file, "w") as f:
+                            f.write(str(rank))
+                        
+                        # Update database so overlay refreshes immediately
+                        try:
+                            db = BattleDatabase()
+                            db.add_rank_update(rank, deck_name)
+                            print(Fore.CYAN + f"   Database updated with rank: {rank}")
+                        except Exception as e:
+                            print(Fore.YELLOW + f"   Warning: Could not update database: {e}")
+                    else:
+                        print(Fore.YELLOW + "⚠ Could not detect rank number")
+                    
+                    print(Fore.GREEN + "\n✓ OCR detection complete!")
+                    print(Fore.YELLOW + "="*50 + "\n")
+                    break
+            
+            # Not on menu yet, wait and try again
+            time.sleep(2)
+            attempt += 1
+            
+            # Show progress every 10 attempts (20 seconds)
+            if attempt % 10 == 0:
+                print(Fore.CYAN + f"   Still waiting... ({attempt * 2}s elapsed)")
+        
+        if attempt >= max_attempts:
+            print(Fore.RED + "\n✗ Timeout: Did not detect main menu within 2 minutes")
+            print(Fore.YELLOW + "   Continuing without OCR data...")
+            print(Fore.YELLOW + "="*50 + "\n")
+    
+    except Exception as e:
+        print(Fore.RED + f"\n✗ Error during OCR detection: {e}")
+        print(Fore.YELLOW + "   Continuing without OCR data...")
+        print(Fore.YELLOW + "="*50 + "\n")
+        import traceback
+        traceback.print_exc()
+
+def start_overlay():
+    """Start the overlay UI in a separate process"""
+    try:
+        overlay_script = os.path.join(BASE_DIR, "OverlayUI.py")
+        if os.path.exists(overlay_script):
+            print(Fore.CYAN + "🎮 Starting overlay UI...")
+            # Run overlay in separate process so it doesn't block
+            subprocess.Popen(["python", overlay_script], 
+                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            time.sleep(1)  # Give it a moment to start
+            print(Fore.GREEN + "✓ Overlay UI started!\n")
+        else:
+            print(Fore.YELLOW + "⚠ Overlay UI not found, skipping...\n")
+    except Exception as e:
+        print(Fore.RED + f"✗ Could not start overlay: {e}\n")
+
+def detect_initial_stats():
+    """Detect rank and deck on startup"""
+    print(Fore.YELLOW + "\n" + "="*50)
+    print(Fore.CYAN + "📊 Detecting initial rank and deck...")
+    print(Fore.YELLOW + "   Make sure you're on the main menu!")
+    print(Fore.YELLOW + "="*50)
+    
+    try:
+        from RankDetector import RankDetector
+        detector = RankDetector()
+        
+        # Wait up to 1 minute for main menu (30 attempts x 2 seconds)
+        max_attempts = 30
+        attempt = 0
+        
+        while attempt < max_attempts:
+            if detector.is_on_main_menu(validation_method="auto", debug=False):
+                print(Fore.GREEN + "\n✓ Main menu detected!")
+                
+                # Detect deck first
+                deck_name = detector.extract_text("my_deck_name")
+                if deck_name:
+                    deck_name = " ".join(deck_name.split())
+                    print(Fore.GREEN + f"✓ Initial Deck: {deck_name}")
+                    deck_file = os.path.join(BASE_DIR, ".last_deck")
+                    with open(deck_file, "w") as f:
+                        f.write(deck_name)
+                else:
+                    print(Fore.YELLOW + "⚠ Could not detect deck")
+                    deck_name = None
+                
+                # Detect rank
+                rank = detector.extract_rank_safe(validate_screen=True, debug=False)
+                if rank:
+                    print(Fore.GREEN + f"✓ Initial Rank: {rank}")
+                    rank_file = os.path.join(BASE_DIR, ".last_rank")
+                    with open(rank_file, "w") as f:
+                        f.write(str(rank))
+                    
+                    # Update database so overlay shows correct rank immediately
+                    try:
+                        db = BattleDatabase()
+                        db.add_rank_update(rank, deck_name)
+                        print(Fore.CYAN + f"   Database updated with rank: {rank}")
+                    except Exception as e:
+                        print(Fore.YELLOW + f"   Warning: Could not update database: {e}")
+                else:
+                    print(Fore.YELLOW + "⚠ Could not detect rank")
+                
+                print(Fore.GREEN + "\n✓ Initial detection complete!")
+                print(Fore.YELLOW + "="*50 + "\n")
+                return
+            
+            # Not on menu yet, wait and try again
+            time.sleep(2)
+            attempt += 1
+            
+            # Show progress every 10 attempts (20 seconds)
+            if attempt % 10 == 0:
+                print(Fore.CYAN + f"   Still waiting for main menu... ({attempt * 2}s elapsed)")
+        
+        # Timeout reached
+        print(Fore.YELLOW + "\n⚠ Timeout: Main menu not detected within 1 minute")
+        print(Fore.CYAN + "   (You may be in a battle or logging in)")
+        print(Fore.CYAN + "   Stats will update after first battle")
+        print(Fore.YELLOW + "="*50 + "\n")
+    
+    except Exception as e:
+        print(Fore.RED + f"\n✗ Error during initial detection: {e}")
+        print(Fore.YELLOW + "   Stats will update after first battle")
+        print(Fore.YELLOW + "="*50 + "\n")
 
 if __name__ == "__main__":
+    # Start the overlay UI
+    start_overlay()
+    
+    # Wait for game to be running
     wait_for_game_startup()
+    
+    # Detect initial rank and deck
+    detect_initial_stats()
+    
+    # Start main monitoring loop
     monitor_clipboard()

@@ -1,0 +1,38 @@
+{
+    "rank": {
+        "relative": true,
+        "offset_x": 971,
+        "offset_y": 399,
+        "width": 91,
+        "height": 30,
+        "percent_x": 0.7026,
+        "percent_y": 0.4944,
+        "percent_width": 0.0658,
+        "percent_height": 0.0372,
+        "comment": "Calibrated at 1382x807"
+    },
+    "menu_text": {
+        "relative": true,
+        "offset_x": 12,
+        "offset_y": 34,
+        "width": 175,
+        "height": 64,
+        "percent_x": 0.0087,
+        "percent_y": 0.0421,
+        "percent_width": 0.1266,
+        "percent_height": 0.0793,
+        "comment": "Calibrated at 1382x807"
+    },
+    "my_deck_name": {
+        "relative": true,
+        "offset_x": 1072,
+        "offset_y": 809,
+        "width": 181,
+        "height": 20,
+        "percent_x": 0.6634,
+        "percent_y": 0.8616,
+        "percent_width": 0.112,
+        "percent_height": 0.0213,
+        "comment": "Calibrated at 1616x939"
+    }
+}
