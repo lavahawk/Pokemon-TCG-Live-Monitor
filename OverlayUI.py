@@ -1,9 +1,9 @@
 """
-Minimal Game Overlay for Pokemon TCG Live Monitor v2.0
+Minimal Game Overlay for Pokemon TCG Live Monitor v2.1
 Ultra-compact, professional overlay that follows the game and allows click-through
 """
 
-VERSION = "2.0"
+VERSION = "2.1"
 
 import sys
 import os
@@ -14,7 +14,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPixmap, QPainter, QColor
 from BattleDatabase import BattleDatabase
 
@@ -106,6 +106,7 @@ class MinimalOverlay(QWidget):
         self.losses = 0
         self.parent_monitor_running = True
         self.db = BattleDatabase()  # Initialize database connection
+        self.stats_window = None  # Stats dashboard window
         
         self.init_ui()
         self.load_stats()
@@ -192,15 +193,15 @@ class MinimalOverlay(QWidget):
     
     def init_ui(self):
         """Initialize minimal UI"""
-        # Window properties - CLICK-THROUGH and always on top
+        # Window properties - clickable but stays on top
         self.setWindowTitle("TCG Monitor")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | 
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool |
-            Qt.WindowType.WindowTransparentForInput  # Click-through!
+            Qt.WindowType.Tool
+            # Removed WindowTransparentForInput so arrow can be clicked
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         # Container
         self.container = QFrame()
@@ -231,13 +232,20 @@ class MinimalOverlay(QWidget):
         self.stats_label.setObjectName("stats")
         stats_layout.addWidget(self.stats_label)
         
+        # Small arrow indicator (clickable)
+        self.arrow_label = QLabel("▲")
+        self.arrow_label.setObjectName("arrow")
+        self.arrow_label.setFixedSize(10, 12)
+        self.arrow_label.mousePressEvent = lambda e: self.toggle_stats_dashboard()
+        stats_layout.addWidget(self.arrow_label)
+        
         layout.addLayout(stats_layout)
         
         # Apply minimal styling
         self.apply_style()
         
-        # Very small initial size (slightly wider for icon)
-        self.setFixedSize(156, 24)
+        # Slightly wider for arrow
+        self.setFixedSize(170, 24)
     
     def apply_style(self):
         """Apply minimal, professional styling"""
@@ -252,6 +260,14 @@ class MinimalOverlay(QWidget):
                 font-family: 'Segoe UI', Arial;
                 font-size: 11px;
                 font-weight: 500;
+            }
+            QLabel#arrow {
+                color: rgba(255, 255, 255, 200);
+                font-family: 'Segoe UI', Arial;
+                font-size: 9px;
+            }
+            QLabel#arrow:hover {
+                color: rgba(255, 255, 255, 255);
             }
         """)
     
@@ -282,6 +298,7 @@ class MinimalOverlay(QWidget):
             
             # Get W/L from database (much faster!)
             self.wins, self.losses = self.db.get_today_stats()
+            print(f"[Overlay] Loaded stats - Rank: {self.current_rank}, Max: {self.max_rank}, W-L: {self.wins}-{self.losses}")
             
             # Update display
             self.update_display()
@@ -291,12 +308,61 @@ class MinimalOverlay(QWidget):
             import traceback
             traceback.print_exc()
     
+    def toggle_stats_dashboard(self):
+        """Toggle stats dashboard open/close with smooth arrow animation"""
+        if self.stats_window is None or not self.stats_window.isVisible():
+            # Opening - animate arrow flip down
+            self.animate_arrow("▼")
+            self.open_stats_dashboard()
+        else:
+            # Closing - animate arrow flip up
+            self.animate_arrow("▲")
+            self.stats_window.close()
+            self.stats_window = None
+    
+    def animate_arrow(self, new_text):
+        """Smoothly animate arrow flip"""
+        # Simple style update for smooth transition
+        QTimer.singleShot(0, lambda: self.arrow_label.setText(new_text))
+    
+    def open_stats_dashboard(self):
+        """Open or focus the stats dashboard window"""
+        if self.stats_window is None or not self.stats_window.isVisible():
+            try:
+                from StatsUI import StatsWindow
+                self.stats_window = StatsWindow(parent_overlay=self)
+                
+                # Position dashboard near the overlay
+                if self.game_hwnd:
+                    try:
+                        import win32gui
+                        rect = win32gui.GetWindowRect(self.game_hwnd)
+                        game_x, game_y, game_right, game_bottom = rect
+                        
+                        # Center on game window
+                        center_x = game_x + (game_right - game_x - self.stats_window.width()) // 2
+                        center_y = game_y + (game_bottom - game_y - self.stats_window.height()) // 2
+                        
+                        self.stats_window.move(center_x, center_y)
+                    except:
+                        pass
+                
+                self.stats_window.show()
+            except Exception as e:
+                print(f"Error opening stats dashboard: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            # Window exists, just raise it
+            self.stats_window.raise_()
+            self.stats_window.activateWindow()
+    
     def update_display(self):
         """Update the stats label and pokeball icon"""
         # Update text
-        self.stats_label.setText(
-            f"Elo:{self.current_rank} | Max:{self.max_rank} | {self.wins}-{self.losses}"
-        )
+        new_text = f"Elo:{self.current_rank} | Max:{self.max_rank} | {self.wins}-{self.losses}"
+        self.stats_label.setText(new_text)
+        print(f"[Overlay Display] {new_text}")
         
         # Update pokeball icon based on current Elo
         league = get_league_from_elo(self.current_rank)

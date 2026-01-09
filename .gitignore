@@ -7,6 +7,9 @@
 .last_rank
 .last_deck
 .max_rank
+.monitor_pid
+.console_pref
+.env
 
 # Database files (contains personal battle history)
 *.db
@@ -67,3 +70,4 @@ Testing New Stuff/
 
 # Archive folders
 _Archive/
+Docs_Archive/

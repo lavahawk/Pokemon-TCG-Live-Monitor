@@ -1,10 +1,10 @@
-# Pokemon TCG Live Monitor v2.0 - Installers
+# Pokemon TCG Live Monitor v2.1 - Installers
 
-This folder contains all installation and launcher scripts for v2.0.
+This folder contains all installation and launcher scripts for v2.1.
 
 ## 📦 Installation Files
 
-### INSTALL_COMPLETE_v2.0.bat (Main Installer)
+### INSTALL_COMPLETE_v2.1.bat (Main Installer)
 **Right-click → Run as Administrator**
 
 Complete automated installation:
@@ -12,9 +12,9 @@ Complete automated installation:
 - ✅ Checks/installs Tesseract OCR
 - ✅ Creates virtual environment
 - ✅ Installs all dependencies (50+ packages)
-- ✅ Prompts for OpenAI API key (saved to `.env`)
+- ✅ Optional OpenAI API key setup
 - ✅ Adds to Windows Task Scheduler for auto-start
-- ✅ Configures GUI mode (no console window)
+- ✅ Configures headless mode (no console window)
 
 **Note:** This is the ONLY file users need to run for first-time setup!
 
@@ -22,14 +22,14 @@ Complete automated installation:
 
 ## 🚀 Launcher Files
 
-### Start_GUI_Mode_v2.0.bat
+### Start_GUI_Mode_v2.1.bat
 **Double-click to run**
 
-Starts the monitor manually in GUI mode:
+Starts the monitor manually in headless mode:
 - Uses `pythonw.exe` (no console window)
 - Shows only the minimal overlay UI
 - Runs in background
-- Auto-closes this command window after 3 seconds
+- Auto-closes this command window after 5 seconds
 
 Use this when auto-start is disabled or for testing.
 
@@ -37,17 +37,17 @@ Use this when auto-start is disabled or for testing.
 
 ## 🛑 Utility Files
 
-### Remove_AutoStart_v2.0.bat
+### Remove_AutoStart_v2.1.bat
 **Right-click → Run as Administrator**
 
 Removes the auto-start task from Windows Task Scheduler:
-- Deletes "PokemonTCGLiveMonitor_v2" scheduled task
+- Deletes "PokemonTCGLiveMonitor_v2.1" scheduled task
 - Monitor will no longer start on login
-- Can still run manually with Start_GUI_Mode_v2.0.bat
+- Can still run manually with Start_GUI_Mode_v2.1.bat
 
 ---
 
-## 🆚 Version 2.0 Changes
+## 🆚 Version 2.1 Changes
 
 All installer files are now versioned and organized:
 

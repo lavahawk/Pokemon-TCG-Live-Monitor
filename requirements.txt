@@ -18,6 +18,9 @@ pydantic==2.6.1
 
 # OCR and Screen Capture (NEW - for rank detection)
 opencv-python==4.9.0.80
+
+# Data visualization for Stats Dashboard
+matplotlib==3.8.2
 pytesseract==0.3.10
 mss==9.0.1
 Pillow==10.2.0

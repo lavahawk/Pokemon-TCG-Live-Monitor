@@ -181,6 +181,13 @@ class RankDetector:
         if not abs_region:
             return None
         
+        # Validate region bounds
+        if abs_region["width"] <= 0 or abs_region["height"] <= 0:
+            return None
+        
+        if abs_region["left"] < 0 or abs_region["top"] < 0:
+            return None
+        
         # Capture the screen region
         monitor = {
             "top": abs_region["top"],
@@ -194,7 +201,6 @@ class RankDetector:
             img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
             return img
         except Exception as e:
-            print(f"Error capturing region: {e}")
             return None
     
     def check_pixel_colors(self, region_name, expected_colors):
@@ -254,12 +260,21 @@ class RankDetector:
         if not img:
             return False
         
-        # Convert to OpenCV format
-        img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        try:
+            # Convert to OpenCV format
+            img_array = np.array(img)
+            if img_array.size == 0:
+                return False
+            
+            img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            return False
         
         # Load template
         template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+        if template is None:
+            return False
         
         # Template matching
         result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
@@ -374,11 +389,19 @@ class RankDetector:
         Returns:
             Preprocessed PIL Image
         """
-        # Convert to OpenCV format
-        img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        
-        # Convert to grayscale
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        try:
+            # Convert to OpenCV format
+            img_array = np.array(image)
+            if img_array.size == 0:
+                return image
+            
+            img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            
+            # Convert to grayscale
+            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            # If preprocessing fails, return original image
+            return image
         
         # Apply thresholding to get black text on white background
         _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)

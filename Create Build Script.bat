@@ -1,1 +1,0 @@
-pyinstaller --onefile --add-data "ding.mp3;." --icon=icon.ico TCGLiveMonitor.py

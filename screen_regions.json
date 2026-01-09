@@ -34,5 +34,41 @@
         "percent_width": 0.112,
         "percent_height": 0.0213,
         "comment": "Calibrated at 1616x939"
+    },
+    "Battle Log Button": {
+        "relative": true,
+        "offset_x": 862,
+        "offset_y": 876,
+        "width": 210,
+        "height": 56,
+        "percent_x": 0.4452,
+        "percent_y": 0.7828,
+        "percent_width": 0.1085,
+        "percent_height": 0.05,
+        "comment": "Calibrated at 1936x1119"
+    },
+    "Battle Log Export": {
+        "relative": true,
+        "offset_x": 1523,
+        "offset_y": 39,
+        "width": 354,
+        "height": 53,
+        "percent_x": 0.7867,
+        "percent_y": 0.0349,
+        "percent_width": 0.1829,
+        "percent_height": 0.0474,
+        "comment": "Calibrated at 1936x1119"
+    },
+    "Battle Log Export button ": {
+        "relative": true,
+        "offset_x": 1821,
+        "offset_y": 38,
+        "width": 62,
+        "height": 54,
+        "percent_x": 0.9406,
+        "percent_y": 0.034,
+        "percent_width": 0.032,
+        "percent_height": 0.0483,
+        "comment": "Calibrated at 1936x1119"
     }
 }

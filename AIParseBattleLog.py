@@ -10,11 +10,15 @@ from pydantic import BaseModel
 import xlwings as xw
 import json
 import time
+from BattleDatabase import BattleDatabase
 
 # Get the script's directory (where the script is running)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 file_path = os.path.join(BASE_DIR, "TCGExampleSheet.xlsx")
 deck_sheet = "Limitless Meta"
+
+# Initialize database
+db = BattleDatabase()
 
 # Define API key storage file
 API_KEY_FILE = os.path.join(BASE_DIR, ".openai_key")
@@ -104,7 +108,7 @@ prompt = f"""
 Here is a list of the most popular Pokemon TCG deck names pick from these primarily: {possibledecks}. The main attacker of each deck is usually the deck name but not always. Sometimes a deck is named for its engine rather than attacker.
 Below is a battle log. Determine the winner and the decks used by each player based on the cards used and held. If no battlelog was provided return blank. Please include a confidence value that you got the each deck correctly 0-100. Please be accurate with your confidence value considering you should need to see a lot of cards played out of the 60 total in each deck to have an understanding of what each player is fully playing and also your lack of knowledge of current deck name meanings.
 My username is {username}. Report if I won or lost the battle. 
-Export the data Saying Win or Loss, and then the deck the opponent of {username} played.
+Export the data as JSON with these fields: My_deck, OpponentsDeck, Win_or_Loss, Confidence
 Battlelog:
 "{battlelog}"
 """
@@ -116,13 +120,13 @@ class BattleLogOutput(BaseModel):
     Win_or_Loss: str
     Confidence: int
  
-completion = client.beta.chat.completions.parse(
-        model="gpt-4o",
-             messages=[
-            {"role": "system", "content": "You are an assistant that parses Pokemon TCG battle logs and predicting the content of meta pokemon decks."},
+completion = client.chat.completions.create(
+        model="gpt-5",
+        messages=[
+            {"role": "system", "content": "You are an assistant that parses Pokemon TCG battle logs and outputs JSON format data."},
             {"role": "user", "content": prompt}
         ],
-    response_format=BattleLogOutput,
+        response_format={"type": "json_object"}
     )
 
 # print(completion.choices[0].message.content) # For Debugging
@@ -178,4 +182,40 @@ sheet.cell(row=next_row, column=2).value = opponents_deck
 
 workbook.save(file_path)
 print("Saved Succesfully!^v^")
+
+# Save to database
+try:
+    # Get current rank from file if it exists
+    rank_file = os.path.join(BASE_DIR, ".last_rank")
+    current_rank = None
+    if os.path.exists(rank_file):
+        with open(rank_file, "r") as f:
+            try:
+                current_rank = int(f.read().strip())
+            except:
+                pass
+    
+    # Get the most recent log file
+    log_dir = os.path.join(BASE_DIR, "Logs")
+    log_files = [f for f in os.listdir(log_dir) if f.startswith("battle_log_") and f.endswith(".txt")]
+    if log_files:
+        log_files.sort(reverse=True)
+        latest_log = os.path.join(log_dir, log_files[0])
+    else:
+        latest_log = None
+    
+    # Save battle to database
+    db.add_battle(
+        my_deck=my_deck,
+        opponent_deck=opponents_deck,
+        result=win_or_loss,
+        my_rank=current_rank,
+        confidence=confidence,
+        deck_source="AI",
+        log_file=latest_log
+    )
+    print(f"✓ Battle saved to database (Rank: {current_rank if current_rank else 'N/A'})")
+except Exception as e:
+    print(f"Warning: Could not save to database: {e}")
+
 time.sleep(5)

@@ -67,6 +67,7 @@ class BattleDatabase:
     def add_battle(self, my_deck, opponent_deck, result, my_rank=None, confidence=None, 
                    deck_source="AI", log_file=None):
         """Add a new battle record"""
+        print(f"[DB] add_battle called: {my_deck} vs {opponent_deck} = {result}, Rank: {my_rank}")
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -109,6 +110,7 @@ class BattleDatabase:
         
         if row:
             # Update existing
+            old_wins, old_losses = row[2], row[3]
             wins = row[2] + (1 if result.upper() == "WIN" else 0)
             losses = row[3] + (1 if result.upper() == "LOSS" else 0)
             max_rank = row[4]
@@ -126,15 +128,16 @@ class BattleDatabase:
                 SET wins = ?, losses = ?, max_rank = ?, min_rank = ?
                 WHERE date = ?
             """, (wins, losses, max_rank, min_rank, today))
+            print(f"✓ Session stats updated: {old_wins}-{old_losses} → {wins}-{losses}")
         else:
             # Create new
+            wins = 1 if result.upper() == "WIN" else 0
+            losses = 1 if result.upper() == "LOSS" else 0
             cursor.execute("""
                 INSERT INTO session_stats (date, wins, losses, max_rank, min_rank)
                 VALUES (?, ?, ?, ?, ?)
-            """, (today, 
-                  1 if result.upper() == "WIN" else 0,
-                  1 if result.upper() == "LOSS" else 0,
-                  rank, rank))
+            """, (today, wins, losses, rank, rank))
+            print(f"✓ Session stats created: {wins}-{losses}")
         
         conn.commit()
         conn.close()
@@ -181,7 +184,7 @@ class BattleDatabase:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT timestamp, my_deck, opponent_deck, result, my_rank
+            SELECT timestamp, my_deck, opponent_deck, result, my_rank, log_file
             FROM battles
             ORDER BY timestamp DESC
             LIMIT ?
@@ -228,9 +231,83 @@ class BattleDatabase:
         """)
         
         row = cursor.fetchone()
+        
+        # Also check rank_history for max rank (in case it's higher)
+        cursor.execute("SELECT MAX(rank) FROM rank_history")
+        max_from_history = cursor.fetchone()[0]
+        
         conn.close()
         
-        return row if row else (0, 0, 0, None, None)
+        # Use the higher of the two max ranks
+        if row:
+            total, wins, losses, best_rank, worst_rank = row
+            if max_from_history and (not best_rank or max_from_history > best_rank):
+                best_rank = max_from_history
+            return (total, wins, losses, best_rank, worst_rank)
+        
+        return (0, 0, 0, None, None)
+    
+    def get_elo_history(self, limit=50):
+        """Get Elo progression over time"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT timestamp, rank
+            FROM rank_history
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (limit,))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        # Return in chronological order (oldest first)
+        return list(reversed(rows)) if rows else []
+    
+    def get_win_rate_over_time(self, days=30):
+        """Get daily win rates for the past N days"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                DATE(timestamp) as date,
+                SUM(CASE WHEN result = 'Win' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN result = 'Loss' THEN 1 ELSE 0 END) as losses,
+                COUNT(*) as total
+            FROM battles
+            WHERE timestamp >= date('now', '-' || ? || ' days')
+            GROUP BY DATE(timestamp)
+            ORDER BY date ASC
+        """, (days,))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return rows if rows else []
+    
+    def get_deck_usage_stats(self):
+        """Get deck usage statistics (all decks played)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                my_deck,
+                COUNT(*) as games_played,
+                SUM(CASE WHEN result = 'Win' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN result = 'Loss' THEN 1 ELSE 0 END) as losses
+            FROM battles
+            GROUP BY my_deck
+            ORDER BY games_played DESC
+            LIMIT 10
+        """)
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return rows if rows else []
 
 
 if __name__ == "__main__":

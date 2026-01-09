@@ -7,6 +7,7 @@ import sys
 import os
 import subprocess
 import pyfiglet
+import argparse
 from datetime import datetime
 from colorama import init, Fore, Back, Style
 import os
@@ -18,7 +19,7 @@ from multiprocessing import Process
 from BattleDatabase import BattleDatabase
 
 
-###Version=2.0
+###Version=2.1
 # Get the script's directory (where the script is located)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -26,6 +27,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "Logs")  # Directory to save battle log files
 SOUND_FILE = os.path.join(BASE_DIR, "ding.mp3")  # Path to the sound file
 SCRIPT_TO_RUN = os.path.join(BASE_DIR, "AIParseBattleLog.py")  # Path to AIParseBattleLog.py
+PID_FILE = os.path.join(BASE_DIR, ".monitor_pid")  # PID file for process management
 
 # Ensure the log directory exists
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -265,7 +267,21 @@ def wait_for_main_menu_and_detect():
                         try:
                             db = BattleDatabase()
                             db.add_rank_update(rank, deck_name)
+                            
+                            # ALSO update the most recent battle with this rank
+                            import sqlite3
+                            conn = sqlite3.connect(db.db_path)
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                UPDATE battles 
+                                SET my_rank = ? 
+                                WHERE id = (SELECT MAX(id) FROM battles)
+                            """, (rank,))
+                            conn.commit()
+                            conn.close()
+                            
                             print(Fore.CYAN + f"   Database updated with rank: {rank}")
+                            print(Fore.GREEN + f"   ✓ Most recent battle updated with rank: {rank}")
                         except Exception as e:
                             print(Fore.YELLOW + f"   Warning: Could not update database: {e}")
                     else:
@@ -384,14 +400,41 @@ def detect_initial_stats():
         print(Fore.YELLOW + "="*50 + "\n")
 
 if __name__ == "__main__":
-    # Start the overlay UI
-    start_overlay()
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Pokemon TCG Live Monitor')
+    parser.add_argument('--headless', action='store_true', help='Run without console window')
+    parser.add_argument('--no-overlay', action='store_true', help='Run without overlay UI')
+    args = parser.parse_args()
     
-    # Wait for game to be running
-    wait_for_game_startup()
+    # Write PID file for process management
+    try:
+        with open(PID_FILE, 'w') as f:
+            f.write(str(os.getpid()))
+        if not args.headless:
+            print(Fore.CYAN + f"Process ID: {os.getpid()} (saved to {PID_FILE})")
+    except Exception as e:
+        if not args.headless:
+            print(Fore.YELLOW + f"Warning: Could not write PID file: {e}")
     
-    # Detect initial rank and deck
-    detect_initial_stats()
-    
-    # Start main monitoring loop
-    monitor_clipboard()
+    try:
+        # Start the overlay UI (unless disabled)
+        if not args.no_overlay:
+            start_overlay()
+        
+        # Wait for game to be running
+        wait_for_game_startup()
+        
+        # Detect initial rank and deck
+        detect_initial_stats()
+        
+        # Start main monitoring loop
+        monitor_clipboard()
+    finally:
+        # Clean up PID file on exit
+        try:
+            if os.path.exists(PID_FILE):
+                os.remove(PID_FILE)
+                if not args.headless:
+                    print(Fore.CYAN + "Cleaned up PID file")
+        except:
+            pass
