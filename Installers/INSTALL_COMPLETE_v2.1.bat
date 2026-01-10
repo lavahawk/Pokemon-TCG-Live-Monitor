@@ -82,28 +82,50 @@ echo [3/9] Checking Tesseract OCR installation...
 if not exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
     echo       [!] Tesseract OCR not detected
     echo.
-    echo     Opening Tesseract download page...
-    echo     Please download and install Tesseract OCR
+    echo     Downloading Tesseract OCR installer...
     echo.
-    echo     Use default installation path:
-    echo     C:\Program Files\Tesseract-OCR
-    echo.
-    start https://github.com/UB-Mannheim/tesseract/wiki
-    echo.
-    echo     Press any key after Tesseract installation completes...
-    pause >nul
     
-    if not exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
+    REM Download Tesseract installer to temp directory
+    set "TESSERACT_INSTALLER=%TEMP%\tesseract-ocr-setup.exe"
+    powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-5.3.3.20231005.exe' -OutFile '%TESSERACT_INSTALLER%' -UseBasicParsing}"
+    
+    if exist "%TESSERACT_INSTALLER%" (
+        echo       [OK] Download complete
+        echo.
+        echo     Installing Tesseract OCR...
+        echo     (This will open the installer - please follow the prompts)
+        echo.
+        
+        REM Run installer silently with default settings
+        start /wait "" "%TESSERACT_INSTALLER%" /S /D=C:\Program Files\Tesseract-OCR
+        
+        REM Clean up installer
+        del "%TESSERACT_INSTALLER%" >nul 2>&1
+        
+        REM Verify installation
+        timeout /t 2 /nobreak >nul
+        if not exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
+            color 0C
+            echo.
+            echo     [ERROR] Tesseract OCR installation failed
+            echo     Please install manually from: https://github.com/UB-Mannheim/tesseract/wiki
+            echo.
+            pause
+            exit /b 1
+        )
+        echo       [OK] Tesseract OCR installed successfully
+    ) else (
         color 0C
         echo.
-        echo     [ERROR] Tesseract OCR still not detected
-        echo     Please install Tesseract to the default location
+        echo     [ERROR] Failed to download Tesseract installer
+        echo     Please install manually from: https://github.com/UB-Mannheim/tesseract/wiki
         echo.
         pause
         exit /b 1
     )
+) else (
+    echo       [OK] Tesseract OCR already installed
 )
-echo       [OK] Tesseract OCR detected
 timeout /t 1 /nobreak >nul
 
 REM ===================================================================
@@ -282,14 +304,7 @@ echo     ================================================================
 echo                         Quick Start Guide
 echo     ================================================================
 echo.
-echo     STEP 1: Configure Screen Regions
-echo       - Run: Run_SetupRegions.bat
-echo       - Open Pokemon TCG Live to main menu
-echo       - Click "Detect Game Window"
-echo       - Select rank display area
-echo       - Save configuration
-echo.
-echo     STEP 2: Start Monitoring
+echo     STEP 1: Start Monitoring
 echo       Option A: Auto-Start (Default)
 echo         - Monitor starts automatically on login
 echo         - Runs in background (headless mode)
@@ -298,18 +313,21 @@ echo       Option B: Manual Start
 echo         - Headless: Run_Headless.bat
 echo         - With Console: Run_TCGLiveMonitor_Command_Prompt.bat
 echo.
-echo     STEP 3: Access Stats
+echo     STEP 2: Access Stats
 echo       - Click the small overlay arrow (▲) in-game
-echo       - Or run: python StatsUI.py
+echo       - Or double-click: Installers\Start_GUI_Mode_v2.1.bat
+echo.
+echo     NOTE: OCR screen regions are pre-configured for standard
+echo           1920x1080 displays. The overlay will automatically
+echo           adjust to your screen resolution.
 echo.
 echo     ================================================================
 echo                         Useful Commands
 echo     ================================================================
 echo.
+echo     Open Stats Dashboard:  Installers\Start_GUI_Mode_v2.1.bat
 echo     Remove from Startup:   Installers\Remove_AutoStart_v2.1.bat
-echo     Add to Startup:        python AutoRun_Add.py
-echo     Open Stats Dashboard:  python StatsUI.py
-echo     Setup Screen Regions:  Run_SetupRegions.bat
+echo     Add to Startup:        Installers\Start_GUI_Mode_v2.1.bat
 echo.
 echo     ================================================================
 echo                         Getting Help
@@ -326,7 +344,7 @@ echo.
 echo     ================================================================
 echo.
 echo     The monitor will start automatically next time you log in.
-echo     Run "Run_SetupRegions.bat" now to configure screen detection.
+echo     The overlay will appear when Pokemon TCG Live is detected.
 echo.
 echo     ================================================================
 echo.
