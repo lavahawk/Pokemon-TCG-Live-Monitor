@@ -3,6 +3,11 @@ setlocal enabledelayedexpansion
 color 0B
 title Pokemon TCG Live Monitor v2.1 - Professional Installation
 
+REM ===================================================================
+REM Change to parent directory (where the main files are)
+REM ===================================================================
+cd /d "%~dp0\.."
+
 cls
 echo.
 echo     ================================================================
