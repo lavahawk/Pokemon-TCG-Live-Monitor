@@ -92,23 +92,23 @@ if not exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
     
     REM Download Tesseract installer to temp directory
     set "TESSERACT_INSTALLER=%TEMP%\tesseract-ocr-setup.exe"
-    powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe' -OutFile '%TESSERACT_INSTALLER%' -UseBasicParsing}"
+    echo     Downloading from GitHub (this may take a minute)...
+    powershell -Command "$ProgressPreference = 'SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe' -OutFile $env:TEMP'\tesseract-ocr-setup.exe' -UseBasicParsing"
     
     if exist "%TESSERACT_INSTALLER%" (
         echo       [OK] Download complete
         echo.
-        echo     Installing Tesseract OCR...
-        echo     (This will open the installer - please follow the prompts)
+        echo     Installing Tesseract OCR (silent mode)...
         echo.
         
         REM Run installer silently with default settings
-        start /wait "" "%TESSERACT_INSTALLER%" /S /D=C:\Program Files\Tesseract-OCR
+        "%TESSERACT_INSTALLER%" /S /D=C:\Program Files\Tesseract-OCR
+        
+        REM Wait for installation to complete
+        timeout /t 5 /nobreak >nul
         
         REM Clean up installer
         del "%TESSERACT_INSTALLER%" >nul 2>&1
-        
-        REM Verify installation
-        timeout /t 2 /nobreak >nul
         if not exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
             color 0C
             echo.
