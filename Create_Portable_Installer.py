@@ -18,94 +18,200 @@ import subprocess
 from pathlib import Path
 import base64
 import io
+import tkinter as tk
+from tkinter import messagebox, filedialog
 
 # Embedded ZIP data (base64 encoded)
 PACKAGE_DATA = """
 {package_data}
 """
 
-def main():
-    print("=" * 70)
-    print("    Pokemon TCG Live Monitor v2.1.0 - Installation")
-    print("=" * 70)
-    print()
-    print("This will install Pokemon TCG Live Monitor to your computer.")
-    print()
+def select_installation_path():
+    """Show GUI dialog to select installation path"""
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
     
-    # Ask for installation directory
     default_path = os.path.join(os.environ.get("USERPROFILE", "C:\\\\"), "PokemonTCGLiveMonitor")
-    print(f"Default installation path: {{default_path}}")
-    print()
-    install_path = input("Press ENTER to use default, or enter custom path: ").strip()
+    
+    # Show message box with installation info
+    result = messagebox.askokcancel(
+        "Pokemon TCG Live Monitor v2.1.0",
+        f"Welcome to Pokemon TCG Live Monitor v2.1.0 Installation!\\n\\n"
+        f"Default installation path:\\n{{default_path}}\\n\\n"
+        f"Click OK to use default path, or Cancel to choose a custom location."
+    )
+    
+    if result:
+        # User clicked OK - use default
+        install_path = default_path
+    else:
+        # User clicked Cancel - show folder browser
+        install_path = filedialog.askdirectory(
+            title="Choose Installation Directory",
+            initialdir=os.path.dirname(default_path)
+        )
+        
+        if not install_path:
+            # User cancelled folder selection
+            messagebox.showinfo("Installation Cancelled", "Installation has been cancelled.")
+            root.destroy()
+            return None
+    
+    root.destroy()
+    return install_path
+
+def show_progress(title, message):
+    """Show a simple progress window"""
+    root = tk.Tk()
+    root.title(title)
+    root.geometry("500x150")
+    root.resizable(False, False)
+    
+    # Center the window
+    root.update_idletasks()
+    x = (root.winfo_screenwidth() // 2) - (500 // 2)
+    y = (root.winfo_screenheight() // 2) - (150 // 2)
+    root.geometry(f"+{{x}}+{{y}}")
+    
+    label = tk.Label(root, text=message, font=("Arial", 10), wraplength=450, justify="left")
+    label.pack(pady=20, padx=20)
+    
+    return root
+
+def main():
+    # Select installation path
+    install_path = select_installation_path()
     
     if not install_path:
-        install_path = default_path
+        sys.exit(0)  # User cancelled
     
     # Create installation directory
     install_path = Path(install_path)
-    install_path.mkdir(parents=True, exist_ok=True)
+    try:
+        install_path.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Installation Error",
+            f"Failed to create installation directory:\\n{{install_path}}\\n\\nError: {{e}}"
+        )
+        root.destroy()
+        sys.exit(1)
     
-    print()
-    print("[1/3] Extracting files...")
+    # Show progress window
+    progress_window = show_progress(
+        "Installing Pokemon TCG Live Monitor",
+        "Extracting files...\\nThis may take a moment."
+    )
+    progress_window.update()
     
     # Decode and extract ZIP
     try:
         package_bytes = base64.b64decode(PACKAGE_DATA)
         with zipfile.ZipFile(io.BytesIO(package_bytes), 'r') as zip_ref:
             zip_ref.extractall(install_path)
-        print("      [OK] Files extracted successfully")
     except Exception as e:
-        print(f"      [ERROR] Failed to extract files: {{e}}")
-        input("Press ENTER to exit...")
+        progress_window.destroy()
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Extraction Error",
+            f"Failed to extract files:\\n\\n{{e}}"
+        )
+        root.destroy()
         sys.exit(1)
     
-    print()
-    print("[2/3] Locating installer...")
+    progress_window.destroy()
     
     # Find and run the installer
     installer_path = install_path / "Installers" / "INSTALL_COMPLETE_v2.1.bat"
     
     if not installer_path.exists():
-        print(f"      [ERROR] Installer not found at {{installer_path}}")
-        input("Press ENTER to exit...")
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Installer Not Found",
+            f"Installer not found at:\\n{{installer_path}}"
+        )
+        root.destroy()
         sys.exit(1)
     
-    print(f"      [OK] Installer found")
-    print()
-    print("[3/3] Running installer...")
-    print()
-    print("=" * 70)
-    print()
+    # Ask if user wants to run installer now
+    root = tk.Tk()
+    root.withdraw()
+    run_now = messagebox.askyesno(
+        "Files Extracted Successfully",
+        f"Files extracted to:\\n{{install_path}}\\n\\n"
+        f"Run the installer now?\\n\\n"
+        f"The installer will:\\n"
+        f"  • Check for Python 3.10+\\n"
+        f"  • Auto-install Tesseract OCR\\n"
+        f"  • Install dependencies\\n"
+        f"  • Configure auto-start\\n\\n"
+        f"Click Yes to run installer, or No to exit."
+    )
+    root.destroy()
     
-    # Change to installation directory and run installer
-    os.chdir(install_path)
-    
-    # Run the installer as administrator
-    try:
-        import ctypes
-        if ctypes.windll.shell32.IsUserAnAdmin():
-            # Already admin, run directly
-            subprocess.run([str(installer_path)], shell=True)
-        else:
-            # Request admin elevation
-            ctypes.windll.shell32.ShellExecuteW(
-                None, "runas", str(installer_path), "", str(install_path), 1
+    if run_now:
+        # Change to installation directory and run installer
+        os.chdir(install_path)
+        
+        # Run the installer as administrator
+        try:
+            import ctypes
+            if ctypes.windll.shell32.IsUserAnAdmin():
+                # Already admin, run directly
+                subprocess.Popen([str(installer_path)], shell=True)
+            else:
+                # Request admin elevation
+                ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", str(installer_path), "", str(install_path), 1
+                )
+        except Exception as e:
+            root = tk.Tk()
+            root.withdraw()
+            result = messagebox.askyesno(
+                "Administrator Rights Required",
+                f"Could not run installer with administrator rights.\\n\\n"
+                f"Error: {{e}}\\n\\n"
+                f"Open the installation folder to run manually?"
             )
-    except Exception as e:
-        print(f"Failed to run installer with elevation: {{e}}")
-        print("Running without elevation...")
-        subprocess.run([str(installer_path)], shell=True)
-    
-    print()
-    print("=" * 70)
-    print()
-    print("Installation complete!")
-    print(f"Files installed to: {{install_path}}")
-    print()
-    input("Press ENTER to exit...")
+            root.destroy()
+            
+            if result:
+                os.startfile(install_path)
+    else:
+        # User chose not to run installer - ask if they want to open folder
+        root = tk.Tk()
+        root.withdraw()
+        open_folder = messagebox.askyesno(
+            "Installation Complete",
+            f"Files extracted successfully!\\n\\n"
+            f"To complete installation later, navigate to:\\n"
+            f"{{install_path}}\\\\Installers\\n\\n"
+            f"Right-click INSTALL_COMPLETE_v2.1.bat and\\n"
+            f"select \\"Run as Administrator\\"\\n\\n"
+            f"Open installation folder now?"
+        )
+        root.destroy()
+        
+        if open_folder:
+            os.startfile(install_path)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Unexpected Error",
+            f"An unexpected error occurred:\\n\\n{{e}}\\n\\n"
+            f"Please report this issue on GitHub."
+        )
+        root.destroy()
+        sys.exit(1)
 '''
 
 def create_portable_installer():
@@ -188,7 +294,8 @@ def create_portable_installer():
         '--workpath=Installers/Build/build_temp',
         '--specpath=Installers/Build',
         '--clean',
-        '--noconfirm'
+        '--noconfirm',
+        '--hidden-import=tkinter'
     ]
     
     if icon_path.exists():
