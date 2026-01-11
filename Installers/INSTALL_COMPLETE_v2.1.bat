@@ -92,7 +92,7 @@ if not exist "C:\Program Files\Tesseract-OCR\tesseract.exe" (
     
     REM Download Tesseract installer to temp directory
     set "TESSERACT_INSTALLER=%TEMP%\tesseract-ocr-setup.exe"
-    powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-5.3.3.20231005.exe' -OutFile '%TESSERACT_INSTALLER%' -UseBasicParsing}"
+    powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe' -OutFile '%TESSERACT_INSTALLER%' -UseBasicParsing}"
     
     if exist "%TESSERACT_INSTALLER%" (
         echo       [OK] Download complete
