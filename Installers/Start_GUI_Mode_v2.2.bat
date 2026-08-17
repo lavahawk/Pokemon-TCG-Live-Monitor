@@ -1,8 +1,8 @@
 @echo off
-title Pokemon TCG Live Monitor v2.1 - GUI Mode
+title Pokemon TCG Live Monitor v2.2 - GUI Mode
 
 echo ================================================================
-echo            Pokemon TCG Live Monitor v2.1
+echo            Pokemon TCG Live Monitor v2.2
 echo                     GUI Mode
 echo ================================================================
 echo.
@@ -18,6 +18,7 @@ start "Pokemon TCG Live Monitor" .venv\Scripts\python.exe TCGLiveMonitor.py
 echo.
 echo [OK] Monitor started in GUI mode
 echo The overlay will appear when you open Pokemon TCG Live.
+echo Click the arrow (^) on the overlay to open Stats Dashboard.
 echo.
 timeout /t 5
 exit

@@ -1,13 +1,12 @@
 @echo off
 title Pokemon TCG Live Monitor v2.0 - GUI Mode
 
-REM Navigate to parent directory
 cd /d "%~dp0.."
 
-REM Start the monitor with pythonw.exe (no console window)
-start "" ".venv\Scripts\pythonw.exe" "TCGLiveMonitor.py"
+REM Use python.exe (visible console) without --headless
+start "Pokemon TCG Live Monitor" .venv\Scripts\python.exe TCGLiveMonitor.py
 
-echo Pokemon TCG Live Monitor v2.0 started in background!
-echo Close this window - the overlay will appear over the game.
+echo Pokemon TCG Live Monitor v2.0 started in GUI mode!
+echo The overlay will appear when you open Pokemon TCG Live.
 timeout /t 3
 exit

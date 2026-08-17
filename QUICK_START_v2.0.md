@@ -1,11 +1,11 @@
-# 🚀 QUICK START - Pokemon TCG Live Monitor v2.0
+# 🚀 QUICK START - Pokemon TCG Live Monitor v2.3
 
 ## First Time Setup (5 minutes)
 
-1. **Right-click** `Installers\INSTALL_COMPLETE_v2.0.bat`
+1. **Right-click** `Installers\INSTALL_COMPLETE_v2.3.bat`
 2. Select **"Run as Administrator"**
 3. Follow the installer prompts
-4. Enter your OpenAI API key when asked
+4. Enter your OpenAI API key when asked (or choose Local-Only mode)
 5. **Done!**
 
 The monitor will now start automatically when you log in to Windows.

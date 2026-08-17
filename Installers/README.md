@@ -1,10 +1,10 @@
-# Pokemon TCG Live Monitor v2.1 - Installers
+# Pokemon TCG Live Monitor v2.3 - Installers
 
-This folder contains all installation and launcher scripts for v2.1.
+This folder contains all installation and launcher scripts for v2.3.
 
 ## 📦 Installation Files
 
-### INSTALL_COMPLETE_v2.1.bat (Main Installer)
+### INSTALL_COMPLETE_v2.3.bat (Main Installer)
 **Right-click → Run as Administrator**
 
 Complete automated installation:
@@ -12,7 +12,7 @@ Complete automated installation:
 - ✅ Checks/installs Tesseract OCR
 - ✅ Creates virtual environment
 - ✅ Installs all dependencies (50+ packages)
-- ✅ Optional OpenAI API key setup
+- ✅ Optional OpenAI API key setup (or Local-Only mode)
 - ✅ Adds to Windows Task Scheduler for auto-start
 - ✅ Configures headless mode (no console window)
 
@@ -22,13 +22,12 @@ Complete automated installation:
 
 ## 🚀 Launcher Files
 
-### Start_GUI_Mode_v2.1.bat
+### Start_GUI_Mode_v2.3.bat
 **Double-click to run**
 
-Starts the monitor manually in headless mode:
-- Uses `pythonw.exe` (no console window)
-- Shows only the minimal overlay UI
-- Runs in background
+Starts the monitor manually with a visible console:
+- Uses `python.exe` (shows console output)
+- Shows the minimal overlay UI
 - Auto-closes this command window after 5 seconds
 
 Use this when auto-start is disabled or for testing.
@@ -37,31 +36,13 @@ Use this when auto-start is disabled or for testing.
 
 ## 🛑 Utility Files
 
-### Remove_AutoStart_v2.1.bat
+### Remove_AutoStart_v2.3.bat
 **Right-click → Run as Administrator**
 
 Removes the auto-start task from Windows Task Scheduler:
-- Deletes "PokemonTCGLiveMonitor_v2.1" scheduled task
+- Deletes "PokemonTCGLiveMonitor_v2.3" scheduled task (and older versions)
 - Monitor will no longer start on login
-- Can still run manually with Start_GUI_Mode_v2.1.bat
-
----
-
-## 🆚 Version 2.1 Changes
-
-All installer files are now versioned and organized:
-
-**v1.x Files (Old):**
-- `Install_Dependencies.bat` - Basic dependency installer
-- `AutoRun_Add.py` - Python-based auto-start
-- `AutoRun_Remove.py` - Python-based removal
-- `Run_TCGLiveMonitor_Command_Prompt.bat` - Console mode
-
-**v2.0 Files (New):**
-- `INSTALL_COMPLETE_v2.0.bat` - Complete installer with prompts
-- `Start_GUI_Mode_v2.0.bat` - GUI mode launcher
-- `Remove_AutoStart_v2.0.bat` - Task scheduler removal
-- All stored in `Installers/` folder for organization
+- Can still run manually with Start_GUI_Mode_v2.3.bat
 
 ---
 
@@ -74,70 +55,77 @@ All installer files are now versioned and organized:
 
 ### Python Packages (Auto-installed)
 ```
-# Core (8 packages)
+# Core
 psutil==5.9.8
 pyperclip==1.8.2
 pygame==2.5.2
 pyfiglet==1.0.2
 colorama==0.4.6
 
-# Data Processing (4 packages)
+# Data Processing
 pandas==2.2.0
 pyarrow==22.0.0
 openpyxl==3.1.2
 xlwings==0.30.13
 
-# AI (2 packages)
+# AI
 openai==1.12.0
 pydantic==2.6.1
 
-# OCR (5 packages)
+# OCR
+numpy==1.26.4
 opencv-python==4.9.0.80
 pytesseract==0.3.10
 mss==9.0.1
 Pillow==10.2.0
 pywin32==306
 
-# UI (1 package)
+# UI
 PySide6==6.10.1
+matplotlib==3.8.2
+
+# Meta Analysis
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+requests>=2.31.0
 ```
 
-**Total: 20 packages + dependencies**
+**Total: 20+ packages + dependencies**
 
 ---
 
-## 🔐 API Key Management (v2.0)
+## 🔐 API Key Management
 
-### New Method (.env file)
-The installer prompts for your OpenAI API key and saves it to `.env`:
-```
-OPENAI_API_KEY=sk-your-key-here
-```
+### AI Analysis (Optional)
+The installer prompts for your OpenAI API key and saves it to `.openai_key`:
+- Enables AI-powered deck identification from battle logs
+- Approximate cost: $0.01 per battle analyzed
+- Get a key at: https://platform.openai.com/api-keys
 
-### Backwards Compatibility
-The script still checks for old `.openai_key` file and environment variables.
+### Local-Only Mode (No API Key)
+If you skip the API key, the app runs in **Local-Only mode**:
+- ✅ Full battle tracking, OCR rank/deck detection, overlay, and stats database
+- ✅ You manually enter the opponent's deck name after each battle
+- ✅ No API key or internet required for core functionality
 
-**Priority order:**
-1. `.env` file (v2.0 preferred)
-2. `.openai_key` file (v1.x compatibility)
-3. System environment variable `OPENAI_API_KEY`
+You can add an API key later at any time by creating a `.openai_key` file in the app folder.
 
 ---
 
 ## 🎯 Quick Start
 
 **For new users:**
-1. Right-click `INSTALL_COMPLETE_v2.0.bat` → Run as Administrator
+1. Right-click `INSTALL_COMPLETE_v2.3.bat` → Run as Administrator
 2. Follow prompts (install Python + Tesseract if needed)
-3. Enter OpenAI API key when prompted
+3. Enter OpenAI API key when prompted (or choose Local-Only mode)
 4. Wait for installation to complete
-5. Log out and back in (or run `Start_GUI_Mode_v2.0.bat`)
+5. Log out and back in (or run `Start_GUI_Mode_v2.3.bat`)
 6. Done! Overlay appears when you play Pokemon TCG Live
 
-**For existing v1.x users:**
-1. Run `INSTALL_COMPLETE_v2.0.bat` to upgrade
-2. Your old API key will be migrated automatically
-3. Old task "PokemonTCGLiveMonitor" is replaced with "PokemonTCGLiveMonitor_v2"
+**For existing v2.x users:**
+1. Run `INSTALL_COMPLETE_v2.3.bat` to upgrade
+2. Your old API key and database will be preserved
+3. Old tasks are replaced with "PokemonTCGLiveMonitor_v2.3"
 
 ---
 
@@ -145,17 +133,16 @@ The script still checks for old `.openai_key` file and environment variables.
 
 After installation:
 ```
-BattleLogImport/
+PokemonTCGLiveMonitor/
 ├── Installers/
-│   ├── INSTALL_COMPLETE_v2.0.bat       ← Main installer
-│   ├── Start_GUI_Mode_v2.0.bat         ← Manual launcher
-│   ├── Remove_AutoStart_v2.0.bat       ← Disable auto-start
+│   ├── INSTALL_COMPLETE_v2.3.bat       ← Main installer
+│   ├── Start_GUI_Mode_v2.3.bat         ← Manual launcher
+│   ├── Remove_AutoStart_v2.3.bat       ← Disable auto-start
 │   └── README.md                        ← This file
 ├── .venv/                               ← Virtual environment
 │   └── Scripts/
 │       └── pythonw.exe                  ← GUI mode Python
-├── .env                                 ← OpenAI API key (v2.0)
-├── .openai_key                          ← Old API key (v1.x)
+├── .openai_key                          ← OpenAI API key (optional)
 ├── TCGLiveMonitor.py                   ← Main script
 ├── OverlayUI.py                        ← Overlay window
 ├── AIParseBattleLog.py                 ← AI analysis
@@ -180,19 +167,20 @@ BattleLogImport/
 - Don't change the installation directory
 
 **"OpenAI API Error"**
-- Check `.env` file has correct format: `OPENAI_API_KEY=sk-...`
+- Check `.openai_key` file has the correct key
 - Verify API key at https://platform.openai.com/api-keys
 - Make sure account has credits
+- Or switch to Local-Only mode (delete the `.openai_key` file)
 
 **Overlay not showing**
 - Start Pokemon TCG Live first
-- Then run `Start_GUI_Mode_v2.0.bat`
+- Then run `Start_GUI_Mode_v2.3.bat`
 - Check Task Manager for "pythonw.exe" process
 - Make sure game window is titled "Pokémon TCG Live"
 
 **Task Scheduler not working**
 - Must run installer as Administrator
-- Check Task Scheduler app → "PokemonTCGLiveMonitor_v2"
+- Check Task Scheduler app → "PokemonTCGLiveMonitor_v2.3"
 - Verify task points to correct `.venv\Scripts\pythonw.exe`
 
 ---

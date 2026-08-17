@@ -17,6 +17,10 @@ openai==1.12.0
 pydantic==2.6.1
 
 # OCR and Screen Capture (NEW - for rank detection)
+# numpy is pinned to 1.26.x because opencv-python 4.9.0.80 is compiled
+# against numpy 1.x; installing numpy 2.x causes a binary incompatibility
+# error ("numpy.dtype size changed") at runtime.
+numpy==1.26.4
 opencv-python==4.9.0.80
 
 # Data visualization for Stats Dashboard
@@ -27,4 +31,9 @@ Pillow==10.2.0
 pywin32==306  # For window detection and positioning
 
 # UI/Overlay (NEW - for minimal overlay display)
-PySide6==6.10.1  # Qt6 framework for overlay UI
+PySide6==6.10.1  # Qt6 framework for overlay UI (includes WebEngine)
+
+# Meta analysis scraping (NEW - for Limitless/TrainerHill meta tabs)
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+requests>=2.31.0  # HTTP client for meta scraping

@@ -84,6 +84,107 @@ class BattleDatabase:
         self.update_session_stats(result, my_rank)
         
         return battle_id
+
+    def rebuild_session_stats(self):
+        """Recalculate session stats from the battles table."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM session_stats")
+        cursor.execute("""
+            SELECT
+                DATE(timestamp) as battle_date,
+                SUM(CASE WHEN upper(result) = 'WIN' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN upper(result) = 'LOSS' THEN 1 ELSE 0 END) as losses,
+                MAX(my_rank) as max_rank,
+                MIN(my_rank) as min_rank
+            FROM battles
+            GROUP BY DATE(timestamp)
+            ORDER BY battle_date ASC
+        """)
+        rows = cursor.fetchall()
+
+        for battle_date, wins, losses, max_rank, min_rank in rows:
+            cursor.execute("""
+                INSERT INTO session_stats (date, wins, losses, max_rank, min_rank)
+                VALUES (?, ?, ?, ?, ?)
+            """, (battle_date, wins or 0, losses or 0, max_rank, min_rank))
+
+        conn.commit()
+        conn.close()
+
+    def get_recent_battles_with_ids(self, limit=20):
+        """Get recent battle records including identifiers and editable metadata."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, timestamp, my_deck, opponent_deck, result, my_rank, confidence, deck_source, log_file
+            FROM battles
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (limit,))
+
+        rows = cursor.fetchall()
+        conn.close()
+        return rows if rows else []
+
+    def update_battle_record(
+        self,
+        battle_id,
+        *,
+        updates=None,
+        my_deck=None,
+        opponent_deck=None,
+        result=None,
+        my_rank=None,
+        confidence=None,
+        deck_source=None,
+    ):
+        """Update editable fields for a battle and rebuild session stats."""
+        update_fields = dict(updates or {})
+        if my_deck is not None:
+            update_fields["my_deck"] = my_deck
+        if opponent_deck is not None:
+            update_fields["opponent_deck"] = opponent_deck
+        if result is not None:
+            update_fields["result"] = result
+        if "my_rank" not in update_fields and my_rank is not None:
+            update_fields["my_rank"] = my_rank
+        if "confidence" not in update_fields and confidence is not None:
+            update_fields["confidence"] = confidence
+        if deck_source is not None:
+            update_fields["deck_source"] = deck_source
+
+        if not update_fields:
+            return False
+
+        assignments = ", ".join(f"{column} = ?" for column in update_fields.keys())
+        values = list(update_fields.values()) + [battle_id]
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE battles SET {assignments} WHERE id = ?", values)
+        changed = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if changed:
+            self.rebuild_session_stats()
+        return changed
+
+    def delete_battle(self, battle_id):
+        """Delete a battle and rebuild session stats."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM battles WHERE id = ?", (battle_id,))
+        changed = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if changed:
+            self.rebuild_session_stats()
+        return changed
     
     def add_rank_update(self, rank, deck_name=None):
         """Record a rank change"""
@@ -247,17 +348,22 @@ class BattleDatabase:
         
         return (0, 0, 0, None, None)
     
-    def get_elo_history(self, limit=50):
+    def get_elo_history(self, limit=None):
         """Get Elo progression over time"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        cursor.execute("""
+
+        query = """
             SELECT timestamp, rank
             FROM rank_history
             ORDER BY timestamp DESC
-            LIMIT ?
-        """, (limit,))
+        """
+        params = ()
+        if limit is not None:
+            query += "\nLIMIT ?"
+            params = (limit,)
+
+        cursor.execute(query, params)
         
         rows = cursor.fetchall()
         conn.close()
@@ -287,26 +393,90 @@ class BattleDatabase:
         
         return rows if rows else []
     
-    def get_deck_usage_stats(self):
-        """Get deck usage statistics (all decks played)"""
+    def get_deck_usage_stats(self, limit=10):
+        """Get deck usage statistics for decks you have played."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        cursor.execute("""
+
+        query = """
             SELECT 
                 my_deck,
                 COUNT(*) as games_played,
                 SUM(CASE WHEN result = 'Win' THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN result = 'Loss' THEN 1 ELSE 0 END) as losses
+                SUM(CASE WHEN result = 'Loss' THEN 1 ELSE 0 END) as losses,
+                SUM(CASE WHEN lower(result) IN ('tie', 'draw') THEN 1 ELSE 0 END) as ties
             FROM battles
             GROUP BY my_deck
             ORDER BY games_played DESC
-            LIMIT 10
-        """)
-        
+        """
+        params = ()
+        if limit is not None:
+            query += "\nLIMIT ?"
+            params = (limit,)
+
+        cursor.execute(query, params)
+
         rows = cursor.fetchall()
         conn.close()
-        
+
+        return rows if rows else []
+
+    def get_deck_matchups(self, deck_name):
+        """Get opponent matchup stats for one of your decks."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                opponent_deck,
+                COUNT(*) as games_played,
+                SUM(CASE WHEN result = 'Win' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN result = 'Loss' THEN 1 ELSE 0 END) as losses,
+                SUM(CASE WHEN lower(result) IN ('tie', 'draw') THEN 1 ELSE 0 END) as ties
+            FROM battles
+            WHERE my_deck = ?
+            GROUP BY opponent_deck
+            ORDER BY games_played DESC, wins DESC, opponent_deck ASC
+        """, (deck_name,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return rows if rows else []
+
+    def get_deck_recent_battles(self, deck_name, limit=8):
+        """Get recent battles played with a specific deck."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT timestamp, my_deck, opponent_deck, result, my_rank, log_file
+            FROM battles
+            WHERE my_deck = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (deck_name, limit))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return rows if rows else []
+
+    def get_deck_battle_history(self, deck_name):
+        """Get full chronological battle history for a specific deck."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT timestamp, result
+            FROM battles
+            WHERE my_deck = ?
+            ORDER BY timestamp ASC
+        """, (deck_name,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
         return rows if rows else []
 
 

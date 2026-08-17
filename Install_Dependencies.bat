@@ -22,8 +22,11 @@ echo.
 echo Download from: https://github.com/UB-Mannheim/tesseract/wiki
 echo Install to: C:\Program Files\Tesseract-OCR
 echo.
-echo After installing Tesseract, you can:
-echo 1. Run SetupRegions.py to define screen regions
-echo 2. Test rank detection with RankDetector.py
+echo After installing Tesseract, you can run the monitor:
+echo   - Run_TCGLiveMonitor_Command_Prompt.bat  (with console)
+echo   - Run_Headless.bat                       (background)
+echo.
+echo NOTE: Screen regions are pre-configured for standard
+echo 1920x1080 displays and auto-adjust to your resolution.
 echo.
 pause

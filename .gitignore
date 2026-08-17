@@ -2,6 +2,11 @@
 .openai_key
 .user_config
 *.key
+.env
+
+# Browser profile / session data (may contain login cookies & tokens)
+.limitless_web_profile/
+.ptcgl_replay_profile/
 
 # User-specific runtime data
 .last_rank
@@ -9,7 +14,19 @@
 .max_rank
 .monitor_pid
 .console_pref
-.env
+
+# Meta / icon caches and user preferences
+.meta_icon_cache/
+.meta_cache_*.json
+.deck_icon_overrides.json
+.limitless_dashboard_state.json
+.stats_window_geometry.json
+
+# Compiled build artifacts
+SetupStartup.exe
+
+# Test/sample battle logs (may contain personal usernames)
+TestBattle.txt
 
 # Database files (contains personal battle history)
 *.db
@@ -44,6 +61,18 @@ Archived_BattleLogs/
 # OCR debug images
 debug_*.png
 debug_*.jpg
+
+# Build and release artifacts
+Installers/Build/
+*.spec
+portable_installer_script.py
+build_temp/
+
+# Archive and documentation
+_Archive/
+Docs_Archive/
+BackgroundRun/
+Testing New Stuff/
 
 # IDE and Editor
 .vscode/

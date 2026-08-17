@@ -1,16 +1,16 @@
 @echo off
-REM Launch TCG Live Monitor in Headless Mode (No Console)
-echo Starting TCG Live Monitor (Headless Mode)...
+setlocal
+cd /d "%~dp0"
 
-REM Check if virtual environment exists
-if exist ".venv\Scripts\activate.bat" (
-    call .venv\Scripts\activate.bat
-    .venv\Scripts\pythonw.exe Run_Headless.py
-) else (
-    echo WARNING: Virtual environment not found
-    echo Please run Installers\INSTALL_COMPLETE_v2.1.bat first
-    pause
-    exit /b 1
+if /I not "%~1"=="__hidden__" (
+    powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -WindowStyle Hidden -FilePath $env:ComSpec -ArgumentList '/c','""%~f0"" __hidden__' | Out-Null"
+    exit /b
 )
 
-timeout /t 3
+if exist ".venv\Scripts\pythonw.exe" (
+    start "" /b ".venv\Scripts\pythonw.exe" "Run_Headless.py"
+    exit /b 0
+)
+
+powershell -NoProfile -Command "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('Could not find .venv\\Scripts\\pythonw.exe. Please run the installer first.','Pokemon TCG Live Monitor') | Out-Null"
+exit /b 1

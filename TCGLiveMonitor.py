@@ -17,9 +17,10 @@ from tkinter import simpledialog
 import threading
 from multiprocessing import Process
 from BattleDatabase import BattleDatabase
+from app_settings import load_username, save_username, load_api_key, is_local_only_mode
 
 
-###Version=2.1
+###Version=2.3
 # Get the script's directory (where the script is located)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -35,8 +36,8 @@ os.makedirs(LOG_DIR, exist_ok=True)
 # Initialize colorama
 init(autoreset=True)
 
-# Set a custom terminal window title
-print("\033]0;TCG Live Monitor\007")
+# Set a custom terminal window title that never resembles the game window
+print("\033]0;PTCGL Monitor Console\007")
 
 # Function to clear the terminal window
 def clear_terminal():
@@ -90,9 +91,6 @@ print(Fore.BLUE + Style.BRIGHT + "========================================")
 # ALL FUNCTIONAL STUFF BELOW THIS POINT
 ###################################################
 
-USER_CONFIG_FILE = os.path.join(BASE_DIR, ".user_config")  #  Username storage file directory
-API_KEY_FILE = os.path.join(BASE_DIR, ".openai_key")  #  API key storage file directory
-
 # Detect if script is running in a terminal
 IS_TERMINAL = sys.stdin.isatty()
 
@@ -106,47 +104,76 @@ def get_input(prompt):
         root.withdraw()  # Hide the root window
         return simpledialog.askstring("Input Required", prompt)
 
-# Function to load stored data
-def load_from_file(file_path):
-    if os.path.exists(file_path):
-        with open(file_path, "r") as file:
-            return file.read().strip()
-    return None
-
-# Function to save data to a file
-def save_to_file(file_path, data):
-    with open(file_path, "w") as file:
-        file.write(data)
-
 # Load or prompt for username
-username = load_from_file(USER_CONFIG_FILE)
+username = load_username()
 if not username:
     username = get_input("First time setup \n----------------\nEnter your TCG Live username: ")
     while not username:
         print("Username cannot be empty. Please enter a valid username.")
         username = get_input("Enter your username: ")
-    save_to_file(USER_CONFIG_FILE, username)
+    save_username(username)
 
-# Load or prompt for API key
-API_KEY = load_from_file(API_KEY_FILE)
-if not API_KEY:
-    API_KEY = get_input(
-        "Enter your OpenAI API Key:\n(Find or create one at https://platform.openai.com/signup)\n"
-    )
-    while not API_KEY:
-        print("API key cannot be empty. Please enter a valid API key.")
-        API_KEY = get_input("Enter your OpenAI API Key:")
-    save_to_file(API_KEY_FILE, API_KEY)
+if is_local_only_mode():
+    print(Fore.CYAN + "[Monitor] Local-only mode is enabled. AI parsing will use manual opponent deck entry.")
+elif not load_api_key():
+    print(Fore.YELLOW + "[Monitor] No OpenAI API key found. The parser will fall back to local-only mode.")
 
 def is_pokemon_tcg_live_running():
     for proc in psutil.process_iter(['name']):
-        if proc.info['name'] == "Pokemon TCG Live.exe":
-            return True
+        try:
+            if proc.info['name'] and 'pokemon tcg live' in proc.info['name'].lower():
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
     return False
 
 def is_battle_log(clipboard_content):
-    pattern = r"Turn # \d+ - .+'s Turn"
-    return bool(re.search(pattern, clipboard_content))
+    if not clipboard_content:
+        return False
+
+    normalized = clipboard_content.replace("\r\n", "\n").strip()
+    if len(normalized) < 120:
+        return False
+
+    old_format_turn = re.search(r"Turn #\s*\d+\s*-\s*.+?'s Turn", normalized, flags=re.IGNORECASE)
+    new_format_turn = re.search(r"(?m)^[^\n]{1,40}'s Turn\s*$", normalized)
+    has_setup = normalized.startswith("Setup") or "\nSetup\n" in f"\n{normalized}\n"
+    has_result = re.search(
+        r"(?im)(all prize cards taken\..+? wins\.|opponent conceded\..+? wins\.|^.+? wins\.$)",
+        normalized,
+    )
+    action_hits = len(
+        re.findall(r"\b(played|drew|attached|used|retreated|evolved|was Knocked Out|took a Prize card)\b", normalized)
+    )
+
+    if old_format_turn and has_result:
+        return True
+    if has_setup and new_format_turn and has_result and action_hits >= 3:
+        return True
+    return False
+
+
+def read_stable_clipboard(max_reads=4, delay=0.25):
+    """Read clipboard a few times and keep the most complete stable snapshot."""
+    best_value = ""
+    previous_value = None
+
+    for _ in range(max_reads):
+        try:
+            current_value = pyperclip.paste() or ""
+        except Exception:
+            current_value = ""
+
+        if len(current_value) > len(best_value):
+            best_value = current_value
+
+        if current_value and current_value == previous_value:
+            return current_value
+
+        previous_value = current_value
+        time.sleep(delay)
+
+    return best_value
 
 def get_new_filename():
     # Generate a filename with a timestamp
@@ -162,6 +189,7 @@ def save_battle_log(log):
     with open(filename, "w") as file:
         file.write(log + "\n\n")
     print(f"Log saved: {filename}")
+    return filename
 
 def play_sound():
     pygame.mixer.init()
@@ -179,29 +207,43 @@ def wait_for_game_startup():
 
 def monitor_clipboard():
     previous_clipboard = ""
+    tick = 0
     while True:
         if is_pokemon_tcg_live_running():
-            clipboard_content = pyperclip.paste()
-            time.sleep(2)
+            clipboard_content = read_stable_clipboard()
+            time.sleep(1.25)
+            tick += 1
+            # Print status every 15 ticks (~30s)
+            if tick % 15 == 0:
+                clip_preview = clipboard_content[:60].replace('\n', ' ') if clipboard_content else '(empty)'
+                print(Fore.CYAN + f"[Monitor] Watching clipboard... (tick {tick}) | clip: {clip_preview}")
             if clipboard_content != previous_clipboard and is_battle_log(clipboard_content):
-                save_battle_log(clipboard_content)
+                print(Fore.GREEN + "[Monitor] Battle log detected! Saving...")
+                log_path = save_battle_log(clipboard_content)
                 play_sound()
-                run_other_script()
+                run_other_script(log_path)
+                previous_clipboard = clipboard_content
+            elif clipboard_content != previous_clipboard and clipboard_content:
+                clip_preview = clipboard_content[:60].replace('\n', ' ')
+                print(Fore.YELLOW + f"[Monitor] Clipboard changed (not a battle log): {clip_preview}")
                 previous_clipboard = clipboard_content
         else:
             # If the game is not running, wait for it to start again
-            print("Game closed. Waiting for Pokémon TCG Live to start...")
+            print(Fore.RED + "[Monitor] Game closed. Waiting for Pokémon TCG Live to start...")
             wait_for_game_startup()
-            print("Pokémon TCG Live is running. Monitoring clipboard...")
+            print(Fore.GREEN + "[Monitor] Pokémon TCG Live is running. Monitoring clipboard...")
             previous_clipboard = ""  # Reset previous_clipboard if the game is restarted
 
-def run_other_script():
+def run_other_script(log_file_path=None):
     # Construct the absolute path to the other script
     script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), SCRIPT_TO_RUN))
     
-    # Run the script using Python
+    # Run the script using the same Python interpreter (ensures venv packages are available)
     print(f"Running {script_path}...")
-    subprocess.run(["python", script_path])
+    command = [sys.executable, script_path]
+    if log_file_path:
+        command.append(os.path.abspath(log_file_path))
+    subprocess.run(command)
     
     # After AI parsing, wait for user to return to main menu
     wait_for_main_menu_and_detect()
@@ -268,15 +310,23 @@ def wait_for_main_menu_and_detect():
                             db = BattleDatabase()
                             db.add_rank_update(rank, deck_name)
                             
-                            # ALSO update the most recent battle with this rank
+                            # ALSO update the most recent battle with this rank and OCR deck name
                             import sqlite3
                             conn = sqlite3.connect(db.db_path)
                             cursor = conn.cursor()
-                            cursor.execute("""
-                                UPDATE battles 
-                                SET my_rank = ? 
-                                WHERE id = (SELECT MAX(id) FROM battles)
-                            """, (rank,))
+                            if deck_name:
+                                cursor.execute("""
+                                    UPDATE battles 
+                                    SET my_rank = ?, my_deck = ?
+                                    WHERE id = (SELECT MAX(id) FROM battles)
+                                """, (rank, deck_name))
+                                print(Fore.CYAN + f"   ✓ Most recent battle deck overridden with OCR: {deck_name}")
+                            else:
+                                cursor.execute("""
+                                    UPDATE battles 
+                                    SET my_rank = ? 
+                                    WHERE id = (SELECT MAX(id) FROM battles)
+                                """, (rank,))
                             conn.commit()
                             conn.close()
                             
@@ -317,9 +367,14 @@ def start_overlay():
         overlay_script = os.path.join(BASE_DIR, "OverlayUI.py")
         if os.path.exists(overlay_script):
             print(Fore.CYAN + "🎮 Starting overlay UI...")
-            # Run overlay in separate process so it doesn't block
-            subprocess.Popen(["python", overlay_script], 
-                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            # Use sys.executable to get current Python (venv-aware)
+            # Use pythonw to run GUI without console window
+            python_exe = sys.executable
+            if os.name == 'nt' and python_exe.endswith('python.exe'):
+                pythonw_exe = python_exe.replace('python.exe', 'pythonw.exe')
+                if os.path.exists(pythonw_exe):
+                    python_exe = pythonw_exe
+            subprocess.Popen([python_exe, overlay_script])
             time.sleep(1)  # Give it a moment to start
             print(Fore.GREEN + "✓ Overlay UI started!\n")
         else:
@@ -361,18 +416,42 @@ def detect_initial_stats():
                 # Detect rank
                 rank = detector.extract_rank_safe(validate_screen=True, debug=False)
                 if rank:
-                    print(Fore.GREEN + f"✓ Initial Rank: {rank}")
+                    # Check if we have a previous rank to compare against
+                    previous_rank = None
                     rank_file = os.path.join(BASE_DIR, ".last_rank")
-                    with open(rank_file, "w") as f:
-                        f.write(str(rank))
+                    if os.path.exists(rank_file):
+                        try:
+                            with open(rank_file, "r") as f:
+                                previous_rank = int(f.read().strip())
+                        except:
+                            pass
                     
-                    # Update database so overlay shows correct rank immediately
-                    try:
-                        db = BattleDatabase()
-                        db.add_rank_update(rank, deck_name)
-                        print(Fore.CYAN + f"   Database updated with rank: {rank}")
-                    except Exception as e:
-                        print(Fore.YELLOW + f"   Warning: Could not update database: {e}")
+                    # Validate: if previous rank exists, validate based on game rules
+                    # Can lose infinite rank, but can only gain max 30 points
+                    # Or if no previous rank, accept any value (first time setup)
+                    is_valid = False
+                    if previous_rank:
+                        rank_change = rank - previous_rank
+                        if rank_change <= 30:  # Allow any loss, but only +30 gain
+                            is_valid = True
+                        else:
+                            print(Fore.YELLOW + f"⚠ Detected rank {rank} is +{rank_change} from previous {previous_rank} (max gain is +30, OCR error, ignoring)")
+                    else:
+                        # No previous rank - accept any value (first time setup)
+                        is_valid = True
+                    
+                    if is_valid:
+                        print(Fore.GREEN + f"✓ Initial Rank: {rank}")
+                        with open(rank_file, "w") as f:
+                            f.write(str(rank))
+                        
+                        # Update database so overlay shows correct rank immediately
+                        try:
+                            db = BattleDatabase()
+                            db.add_rank_update(rank, deck_name)
+                            print(Fore.CYAN + f"   Database updated with rank: {rank}")
+                        except Exception as e:
+                            print(Fore.YELLOW + f"   Warning: Could not update database: {e}")
                 else:
                     print(Fore.YELLOW + "⚠ Could not detect rank")
                 

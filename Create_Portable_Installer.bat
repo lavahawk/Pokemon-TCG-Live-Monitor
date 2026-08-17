@@ -1,8 +1,8 @@
 @echo off
-title Create Portable Installer - Pokemon TCG Live Monitor v2.1.0
+title Create Portable Installer - Pokemon TCG Live Monitor v2.3.0
 
 echo ================================================================
-echo     Pokemon TCG Live Monitor v2.1.0
+echo     Pokemon TCG Live Monitor v2.3.0
 echo         Portable Installer Creator
 echo ================================================================
 echo.
