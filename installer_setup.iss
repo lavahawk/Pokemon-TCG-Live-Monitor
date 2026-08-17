@@ -134,6 +134,9 @@ var
   SettingsFile: String;
   apiKey: String;
   localOnly: String;
+  RunKey: String;
+  RunValue: String;
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -152,12 +155,44 @@ begin
       localOnly := '{"local_only_mode": true}';
       SaveStringToFile(SettingsFile, localOnly, False);
     end;
+
+    // Set up auto-start via the registry Run key (primary method).
+    if WizardIsTaskSelected('autostart') then
+    begin
+      RunKey := 'Software\Microsoft\Windows\CurrentVersion\Run';
+      // Launch the monitor headless at login using the venv pythonw.
+      RunValue := '"' + ExpandConstant('{app}\.venv\Scripts\pythonw.exe') + '" "' +
+                  ExpandConstant('{app}\TCGLiveMonitor.py') + '" --headless';
+      RegWriteStringValue(HKEY_CURRENT_USER, RunKey, 'PokemonTCGLiveMonitor', RunValue);
+    end;
+
+    // Remove old/legacy scheduled tasks so they don't cause duplicate
+    // monitor instances. (Registry Run key is the primary startup method.)
+    Exec('schtasks.exe', '/delete /tn "PokemonTCGLiveMonitor_v2" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('schtasks.exe', '/delete /tn "PokemonTCGLiveMonitor_v2.1" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('schtasks.exe', '/delete /tn "PokemonTCGLiveMonitor_v2.2" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('schtasks.exe', '/delete /tn "PokemonTCGLiveMonitor_v2.3" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('schtasks.exe', '/delete /tn "StartTCGLiveMonitor" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('schtasks.exe', '/delete /tn "PokemonLiveHelper" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
 end;
 
 [UninstallRun]
+; Remove the scheduled task (backup startup method).
 Filename: "schtasks"; Parameters: "/delete /tn ""PokemonTCGLiveMonitor_v2.3"" /f"; Flags: runhidden
 Filename: "{sys}\cmd.exe"; Parameters: "/c rmdir /s /q ""{app}\.venv"""; Flags: runhidden
+
+[Code]
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  // Remove the registry Run key (primary startup method) on uninstall.
+  if CurUninstallStep = usUninstall then
+  begin
+    RegDeleteValue(HKEY_CURRENT_USER,
+      'Software\Microsoft\Windows\CurrentVersion\Run',
+      'PokemonTCGLiveMonitor');
+  end;
+end;
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.venv"

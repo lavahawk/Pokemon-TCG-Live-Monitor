@@ -33,8 +33,109 @@ PID_FILE = os.path.join(BASE_DIR, ".monitor_pid")  # PID file for process manage
 # Ensure the log directory exists
 os.makedirs(LOG_DIR, exist_ok=True)
 
+
+def _pid_is_running(pid):
+    """Return True if a process with the given PID is alive and is a monitor."""
+    if not pid:
+        return False
+    try:
+        proc = psutil.Process(pid)
+        if not proc.is_running():
+            return False
+        # Confirm it's actually a TCGLiveMonitor process (not a recycled PID).
+        cmdline = " ".join(proc.cmdline() or [])
+        return "TCGLiveMonitor.py" in cmdline
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+
+
+# A separate lock file used for atomic single-instance mutual exclusion.
+# Using an OS file lock (msvcrt.locking) avoids the race where two instances
+# launched at the same time both read the PID file before either writes it.
+LOCK_FILE = os.path.join(BASE_DIR, ".monitor_lock")
+
+# Kept open for the lifetime of the process so the lock is held.
+_global_lock_handle = None
+
+
+def _acquire_single_instance():
+    """Ensure only one monitor instance runs at a time (race-free).
+
+    Uses an OS-level file lock so that even if two instances start at the
+    exact same moment, only one can acquire the lock. The loser exits
+    immediately instead of creating a duplicate monitor + overlay.
+    Returns True if this instance should continue.
+    """
+    global _global_lock_handle
+
+    if os.name == "nt":
+        try:
+            import msvcrt
+
+            handle = open(LOCK_FILE, "a+")
+            try:
+                # Try to lock the first byte. If another process holds it,
+                # this raises immediately (LK_NBLCK = non-blocking).
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                handle.close()
+                # Another instance holds the lock — read its PID for the message.
+                existing_pid = None
+                try:
+                    if os.path.exists(PID_FILE):
+                        with open(PID_FILE, "r") as fh:
+                            existing_pid = int(fh.read().strip() or 0)
+                except Exception:
+                    existing_pid = None
+                print(Fore.YELLOW + f"[Monitor] Another instance is already running (PID {existing_pid or 'unknown'}).")
+                print(Fore.YELLOW + "[Monitor] Exiting to avoid duplicate monitors/overlays.")
+                return False
+
+            # We hold the lock. Write our PID and keep the handle open.
+            handle.seek(0)
+            handle.truncate()
+            handle.write(str(os.getpid()))
+            handle.flush()
+            _global_lock_handle = handle
+            return True
+        except Exception:
+            # Fall back to the PID-file check if locking is unavailable.
+            pass
+
+    # Non-Windows or lock unavailable: fall back to PID-file check.
+    existing_pid = None
+    try:
+        if os.path.exists(PID_FILE):
+            with open(PID_FILE, "r") as handle:
+                existing_pid = int(handle.read().strip() or 0)
+    except Exception:
+        existing_pid = None
+
+    if existing_pid and existing_pid != os.getpid() and _pid_is_running(existing_pid):
+        print(Fore.YELLOW + f"[Monitor] Another instance is already running (PID {existing_pid}).")
+        print(Fore.YELLOW + "[Monitor] Exiting to avoid duplicate monitors/overlays.")
+        return False
+
+    try:
+        with open(PID_FILE, "w") as handle:
+            handle.write(str(os.getpid()))
+    except Exception:
+        pass
+    return True
+
+
 # Initialize colorama
 init(autoreset=True)
+
+# Reconfigure stdout/stderr to UTF-8 so emoji (🎮, ✗, ✓, 🏆) don't crash the
+# console with a UnicodeEncodeError on Windows (cp1252 default).
+try:
+    if sys.stdout is not None:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.stderr is not None:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 # Set a custom terminal window title that never resembles the game window
 print("\033]0;PTCGL Monitor Console\007")
@@ -484,7 +585,12 @@ if __name__ == "__main__":
     parser.add_argument('--headless', action='store_true', help='Run without console window')
     parser.add_argument('--no-overlay', action='store_true', help='Run without overlay UI')
     args = parser.parse_args()
-    
+
+    # Single-instance guard: if a monitor is already running, exit now so we
+    # don't create a duplicate monitor + duplicate overlay.
+    if not _acquire_single_instance():
+        sys.exit(0)
+
     # Write PID file for process management
     try:
         with open(PID_FILE, 'w') as f:
@@ -509,7 +615,27 @@ if __name__ == "__main__":
         # Start main monitoring loop
         monitor_clipboard()
     finally:
-        # Clean up PID file on exit
+        # Release the single-instance lock and clean up PID file on exit.
+        try:
+            if _global_lock_handle is not None:
+                try:
+                    import msvcrt
+                    _global_lock_handle.seek(0)
+                    msvcrt.locking(_global_lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
+                except Exception:
+                    pass
+                try:
+                    _global_lock_handle.close()
+                except Exception:
+                    pass
+                _global_lock_handle = None
+        except Exception:
+            pass
+        try:
+            if os.path.exists(LOCK_FILE):
+                os.remove(LOCK_FILE)
+        except Exception:
+            pass
         try:
             if os.path.exists(PID_FILE):
                 os.remove(PID_FILE)

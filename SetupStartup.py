@@ -162,13 +162,19 @@ class StartupManager(tk.Tk):
         if report["registry_ok"] or report["task_ok"]:
             methods = []
             if report["registry_ok"]:
-                methods.append("Registry Run key")
+                methods.append("Registry Run key (primary)")
             if report["task_ok"]:
-                methods.append("Scheduled Task (elevated)")
-            messagebox.showinfo("Startup Enabled",
+                methods.append("Scheduled Task (backup)")
+            msg = (
                 f"Monitor will start automatically on Windows login.\n\n"
                 f"Methods registered:\n" + "\n".join(f"  + {m}" for m in methods) +
-                f"\n\nInstall path: {report['root']}")
+                f"\n\nInstall path: {report['root']}"
+            )
+            if report.get("removed_tasks"):
+                msg += "\n\nRemoved old scheduled tasks:\n" + "\n".join(
+                    f"  - {task}" for task in report["removed_tasks"]
+                )
+            messagebox.showinfo("Startup Enabled", msg)
         else:
             errors = [msg for msg in (report["registry_error"], report["task_error"]) if msg]
             messagebox.showwarning(

@@ -73,6 +73,53 @@ try:
 except ImportError:
     PYGAME_AVAILABLE = False
 
+
+class PageScrollArea(QScrollArea):
+    """A QScrollArea that keeps the wheel scroll on the page.
+
+    By default, when the cursor is over a child QTableWidget, the table's own
+    scrollbar captures the wheel event and scrolls the table instead of the
+    page — which feels clunky. This subclass intercepts wheel events anywhere
+    inside the page and scrolls the page's vertical scrollbar instead, so the
+    whole page scrolls smoothly like a normal webpage. (Tables are still
+    scrollable via their own scrollbars when the page itself can't scroll.)
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setObjectName("scrollArea")
+        try:
+            self.verticalScrollBar().setSingleStep(24)
+            self.verticalScrollBar().setPageStep(160)
+        except Exception:
+            pass
+
+    def wheelEvent(self, event):
+        # Always scroll the page's vertical scrollbar, regardless of which
+        # child widget the cursor is over. This prevents inner tables from
+        # hijacking the wheel.
+        vbar = self.verticalScrollBar()
+        if vbar is None:
+            super().wheelEvent(event)
+            return
+        delta = event.angleDelta().y()
+        if delta == 0:
+            super().wheelEvent(event)
+            return
+        # If the page can still scroll, consume the event and scroll the page.
+        if vbar.maximum() > 0:
+            vbar.setValue(vbar.value() - delta)
+            event.accept()
+        else:
+            # Page is at top/bottom — let the event propagate (e.g. to a
+            # parent scroll area) so nested pages still feel natural.
+            super().wheelEvent(event)
+
+
 # Japanese deck name → English translation map (City League Season 4)
 JP_DECK_TRANSLATION = {
     "ドラパルト": "Dragapult",
@@ -1251,6 +1298,27 @@ class MplCanvas(FigureCanvasQTAgg):
         self.setStyleSheet("background-color: transparent;")
         self.setMinimumSize(300, 200)
 
+    def wheelEvent(self, event):
+        """Forward wheel events to the enclosing page scroll area.
+
+        Matplotlib canvases normally capture the wheel for zooming, which
+        stops the page from scrolling when the cursor is over a graph. We
+        instead let the wheel scroll the page (like a normal webpage). The
+        graph's own zoom is disabled in favor of smooth page scrolling.
+        """
+        # Find the nearest PageScrollArea ancestor and scroll it.
+        parent = self.parent()
+        while parent is not None:
+            if isinstance(parent, PageScrollArea):
+                vbar = parent.verticalScrollBar()
+                if vbar is not None and vbar.maximum() > 0:
+                    vbar.setValue(vbar.value() - event.angleDelta().y())
+                    event.accept()
+                    return
+            parent = parent.parent()
+        # No page scroll area found — fall back to default behavior.
+        super().wheelEvent(event)
+
 
 class DeckIconPickerDialog(QDialog):
     """Themed icon picker that supports up to three icons per deck."""
@@ -2111,12 +2179,15 @@ class StatsWindow(QWidget):
         self.console_hidden = False  # Track console visibility state
         self.monitor_console_hwnd = None  # Handle to monitor's console window
         
-        # For dragging
+        # For dragging and all-edge resizing
         self.dragging = False
         self.drag_position = None
         self.resizing = False
         self.resize_start_global = None
         self.resize_start_size = None
+        self.resize_start_geometry = None
+        self._resize_edges = (False, False, False, False)
+        self._pre_fullscreen_geometry = None
         self.limitless_row_links = []
         self.trainerhill_row_links = []
         self.deck_tab_lookup = {}
@@ -2260,7 +2331,7 @@ class StatsWindow(QWidget):
                 pass
     
     def create_title_bar(self):
-        """Create modern title bar with minimize/close"""
+        """Create modern title bar with fullscreen/minimize buttons"""
         title_bar = QFrame()
         title_bar.setObjectName("titleBar")
         title_bar.setFixedHeight(32)  # Smaller title bar
@@ -2272,6 +2343,14 @@ class StatsWindow(QWidget):
         # Empty title area - clean minimal design
         layout.addStretch()
         
+        # Fullscreen button
+        self.fullscreen_btn = QPushButton("⛶")
+        self.fullscreen_btn.setObjectName("minBtn")
+        self.fullscreen_btn.setFixedSize(22, 22)
+        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
+        self.fullscreen_btn.setToolTip("Toggle fullscreen")
+        layout.addWidget(self.fullscreen_btn)
+        
         # Minimize button (down arrow) - only button needed
         min_btn = QPushButton("▼")
         min_btn.setObjectName("minBtn")
@@ -2281,6 +2360,35 @@ class StatsWindow(QWidget):
         layout.addWidget(min_btn)
         
         return title_bar
+
+    def toggle_fullscreen(self):
+        """Toggle between fullscreen and the saved window geometry."""
+        if self.isFullScreen():
+            self.showNormal()
+            # Restore the saved geometry after leaving fullscreen.
+            self._restore_saved_geometry()
+        else:
+            self._pre_fullscreen_geometry = (self.x(), self.y(), self.width(), self.height())
+            self.showFullScreen()
+        self.fullscreen_btn.setText("🗗" if self.isFullScreen() else "⛶")
+
+    def _restore_saved_geometry(self):
+        try:
+            if os.path.exists(STATS_WINDOW_STATE_FILE):
+                with open(STATS_WINDOW_STATE_FILE, "r", encoding="utf-8") as handle:
+                    state = json.load(handle)
+                x = int(state.get("x", 100))
+                y = int(state.get("y", 100))
+                w = int(state.get("width", 900))
+                h = int(state.get("height", 600))
+                self.setGeometry(x, y, w, h)
+                return
+        except Exception:
+            pass
+        # Fallback to the geometry captured before entering fullscreen.
+        if getattr(self, "_pre_fullscreen_geometry", None):
+            x, y, w, h = self._pre_fullscreen_geometry
+            self.setGeometry(x, y, w, h)
 
     def create_footer_bar(self):
         """Create a minimal footer that only exposes a resize grip."""
@@ -2313,18 +2421,7 @@ class StatsWindow(QWidget):
         return footer
 
     def _create_standard_scroll_area(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setObjectName("scrollArea")
-        try:
-            scroll.verticalScrollBar().setSingleStep(24)
-            scroll.verticalScrollBar().setPageStep(160)
-        except Exception:
-            pass
-        return scroll
+        return PageScrollArea()
 
     def _restore_scroll_value(self, scroll, value):
         if scroll is None or value is None:
@@ -2393,31 +2490,117 @@ class StatsWindow(QWidget):
         except Exception:
             pass
     
+    def _resize_edge_at(self, pos):
+        """Return which edge(s) the cursor is over for all-edge resizing.
+
+        Returns a tuple of flags: (left, right, top, bottom). Uses a small
+        hit zone (RESIZE_MARGIN px) around each edge.
+        """
+        margin = 6
+        w = self.width()
+        h = self.height()
+        x = pos.x()
+        y = pos.y()
+        left = x <= margin
+        right = x >= w - margin
+        top = y <= margin
+        bottom = y >= h - margin
+        return left, right, top, bottom
+
+    def _resize_cursor_for_edges(self, left, right, top, bottom):
+        if (left and top) or (right and bottom):
+            return Qt.CursorShape.SizeFDiagCursor
+        if (right and top) or (left and bottom):
+            return Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return Qt.CursorShape.SizeHorCursor
+        if top or bottom:
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.ArrowCursor
+
     def mousePressEvent(self, event):
-        """Handle mouse press for dragging"""
+        """Handle mouse press for dragging and all-edge resizing"""
         if event.button() == Qt.MouseButton.LeftButton:
-            # Check if clicking on title bar area (top 32px)
-            if event.position().y() < 32:
+            pos = event.position()
+            left, right, top, bottom = self._resize_edge_at(pos)
+            if left or right or top or bottom:
+                # Start an edge resize.
+                self.resizing = True
+                self._resize_edges = (left, right, top, bottom)
+                self.resize_start_global = event.globalPosition().toPoint()
+                self.resize_start_geometry = self.geometry()
+                event.accept()
+                return
+            # Check if clicking on title bar area (top 32px) to drag.
+            if pos.y() < 32:
                 self.dragging = True
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 event.accept()
     
     def mouseMoveEvent(self, event):
-        """Handle mouse move for dragging"""
+        """Handle mouse move for dragging and all-edge resizing"""
         if self.resizing:
+            self._update_edge_resize(event.globalPosition().toPoint())
             event.accept()
             return
         if self.dragging and event.buttons() == Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self.drag_position)
             event.accept()
+            return
+        # Update the resize cursor when hovering over an edge (no button held).
+        if not event.buttons():
+            left, right, top, bottom = self._resize_edge_at(event.position())
+            if left or right or top or bottom:
+                self.setCursor(self._resize_cursor_for_edges(left, right, top, bottom))
+            else:
+                self.unsetCursor()
     
     def mouseReleaseEvent(self, event):
-        """Handle mouse release to stop dragging"""
+        """Handle mouse release to stop dragging/resizing"""
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragging = False
             self.resizing = False
+            self._resize_edges = (False, False, False, False)
+            self.unsetCursor()
             self.save_window_geometry()
             event.accept()
+
+    def _update_edge_resize(self, global_pos):
+        """Resize the window from any edge based on the drag delta."""
+        if not self.resizing or self.resize_start_global is None or self.resize_start_geometry is None:
+            return
+        left, right, top, bottom = self._resize_edges
+        start_geo = self.resize_start_geometry
+        delta = global_pos - self.resize_start_global
+
+        new_left = start_geo.left()
+        new_top = start_geo.top()
+        new_right = start_geo.right()
+        new_bottom = start_geo.bottom()
+
+        if left:
+            new_left = start_geo.left() + delta.x()
+        if right:
+            new_right = start_geo.right() + delta.x()
+        if top:
+            new_top = start_geo.top() + delta.y()
+        if bottom:
+            new_bottom = start_geo.bottom() + delta.y()
+
+        min_w = self.minimumWidth()
+        min_h = self.minimumHeight()
+        if new_right - new_left < min_w:
+            if left:
+                new_left = new_right - min_w
+            else:
+                new_right = new_left + min_w
+        if new_bottom - new_top < min_h:
+            if top:
+                new_top = new_bottom - min_h
+            else:
+                new_bottom = new_top + min_h
+
+        self.setGeometry(new_left, new_top, new_right - new_left, new_bottom - new_top)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -3419,11 +3602,7 @@ class StatsWindow(QWidget):
         return card
 
     def _create_deck_dashboard_page(self, analysis):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setObjectName("scrollArea")
+        scroll = PageScrollArea()
 
         content = QWidget()
         content.setObjectName("contentWidget")
@@ -4119,7 +4298,7 @@ class StatsWindow(QWidget):
         
         self.battle_mgmt_table = self._make_meta_table(
             ["Time", "My Deck", "Opponent", "Result", "Rank", "Confidence", "Source", "Log", "Tournament", "", ""],
-            [154, 150, 150, 74, 64, 84, 72, 98, 90, 68, 64],
+            [150, 120, 150, 74, 60, 80, 70, 80, 80, 100, 100],
             sortable=False,
             stretch_last=False,
         )
@@ -4131,10 +4310,14 @@ class StatsWindow(QWidget):
         )
         self.battle_mgmt_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         self.battle_mgmt_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.battle_mgmt_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.battle_mgmt_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.battle_mgmt_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.battle_mgmt_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
+        # Use fixed widths for every column so the action buttons (Replay /
+        # Delete) always have enough room and are never squeezed by stretch
+        # columns. Only the "My Deck" and "Opponent" columns stretch to fill
+        # leftover space.
+        header = self.battle_mgmt_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.battle_mgmt_table.verticalHeader().setDefaultSectionSize(36)
         self.battle_mgmt_table.cellClicked.connect(self._handle_battle_mgmt_cell_clicked)
         self.battle_mgmt_table.itemChanged.connect(self._handle_battle_mgmt_item_changed)
@@ -4256,8 +4439,10 @@ class StatsWindow(QWidget):
         table.setShowGrid(False)
         table.setAlternatingRowColors(False)
         table.horizontalHeader().setStretchLastSection(stretch_last)
-        table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        # Center the column headings for a cleaner look.
+        table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        # Default: fit every column to its content so names are never cut off.
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         table.setWordWrap(False)
         table.setSortingEnabled(sortable)
@@ -4400,6 +4585,9 @@ class StatsWindow(QWidget):
 
         title = QLabel(deck_name)
         title.setStyleSheet("color: rgba(242,247,255,0.96); font-size: 11px; font-weight: 600; background: transparent;")
+        # Ensure the label reports its full text width so the column is wide
+        # enough to show the whole deck name (never cut off).
+        title.setMinimumWidth(title.fontMetrics().horizontalAdvance(deck_name) + 4)
         text_col.addWidget(title)
 
         if subtitle:
@@ -4904,6 +5092,8 @@ class StatsWindow(QWidget):
             webview = QWebEngineView()
             webview.setMinimumHeight(400)
             webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            # Zoom out so the dashboard fits better (was too zoomed in).
+            webview.setZoomFactor(0.70)
             webview.load(QUrl(JAPAN_URL))
             vlayout.addWidget(webview, stretch=1)
         else:
@@ -4993,6 +5183,8 @@ class StatsWindow(QWidget):
             self._pokedata_webview = QWebEngineView()
             self._pokedata_webview.setMinimumHeight(450)
             self._pokedata_webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            # Zoom out so the tools fit better (was too zoomed in).
+            self._pokedata_webview.setZoomFactor(0.50)
             self._pokedata_webview.load(QUrl(POKEDATA_PAGES[0][1]))
 
             for label, url in POKEDATA_PAGES:
@@ -6410,14 +6602,39 @@ class StatsWindow(QWidget):
         self.battle_mgmt_status_label.setText(message)
 
     def _handle_battle_mgmt_cell_clicked(self, row, column):
-        if column not in (1, 2, 3, 4, 5, 6):
-            return
         table = getattr(self, "battle_mgmt_table", None)
         if table is None:
+            return
+        # Clicking the Log column opens the battle log file on the PC.
+        if column == 7:
+            item = table.item(row, column)
+            if item is None:
+                return
+            log_name = item.data(Qt.ItemDataRole.UserRole + 1)
+            if log_name:
+                self.open_log_file_on_pc(log_name)
+            return
+        if column not in (1, 2, 3, 4, 5, 6):
             return
         item = table.item(row, column)
         if item and (item.flags() & Qt.ItemFlag.ItemIsEditable):
             table.editItem(item)
+
+    def open_log_file_on_pc(self, log_file_path):
+        """Open a battle log .txt file with the default text editor."""
+        try:
+            resolved_path = self._resolve_log_file_path(log_file_path)
+            if not resolved_path or not os.path.exists(resolved_path):
+                self._set_battle_mgmt_status(f"Log file not found: {log_file_path}", error=True)
+                return
+            if os.name == "nt":
+                os.startfile(resolved_path)  # type: ignore[attr-defined]
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", resolved_path])
+            self._set_battle_mgmt_status(f"Opened log: {os.path.basename(resolved_path)}")
+        except Exception as exc:
+            self._set_battle_mgmt_status(f"Could not open log: {exc}", error=True)
 
     def _normalize_battle_mgmt_field(self, column, raw_value):
         text = (raw_value or "").strip()
@@ -6470,9 +6687,20 @@ class StatsWindow(QWidget):
         button = QPushButton(label)
         button.setObjectName(object_name)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setFixedHeight(24)
+        button.setFixedHeight(28)
+        # Give the button a comfortable minimum width so it's always readable.
+        button.setMinimumWidth(84)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         button.clicked.connect(callback)
-        self.battle_mgmt_table.setCellWidget(row, column, button)
+        # Wrap in a container with small margins so the button fills the cell
+        # width and has breathing room.
+        wrapper = QWidget()
+        wrapper.setStyleSheet("background: transparent;")
+        wrap_layout = QHBoxLayout(wrapper)
+        wrap_layout.setContentsMargins(4, 3, 4, 3)
+        wrap_layout.setSpacing(0)
+        wrap_layout.addWidget(button)
+        self.battle_mgmt_table.setCellWidget(row, column, wrapper)
 
     def _handle_battle_mgmt_item_changed(self, item):
         if not item or getattr(self, "_battle_mgmt_populating", False):
@@ -7012,31 +7240,31 @@ class StatsWindow(QWidget):
             }
 
             QPushButton#battleMgmtReplayBtn {
-                background: rgba(74,159,216,0.18);
-                border: 1px solid rgba(74,159,216,0.28);
-                border-radius: 5px;
-                color: rgba(238,246,255,0.92);
-                font-size: 10px;
-                font-weight: 600;
-                padding: 2px 8px;
+                background: rgba(74,159,216,0.22);
+                border: 1px solid rgba(74,159,216,0.40);
+                border-radius: 6px;
+                color: rgba(238,246,255,0.96);
+                font-size: 11px;
+                font-weight: 700;
+                padding: 4px 10px;
             }
             QPushButton#battleMgmtReplayBtn:hover {
-                background: rgba(74,159,216,0.28);
-                border-color: rgba(74,159,216,0.42);
+                background: rgba(74,159,216,0.34);
+                border-color: rgba(74,159,216,0.55);
             }
 
             QPushButton#battleMgmtDeleteBtn {
-                background: rgba(239, 83, 80, 0.16);
-                border: 1px solid rgba(239, 83, 80, 0.24);
-                border-radius: 5px;
-                color: rgba(255, 204, 204, 0.92);
-                font-size: 10px;
-                font-weight: 600;
-                padding: 2px 8px;
+                background: rgba(239, 83, 80, 0.20);
+                border: 1px solid rgba(239, 83, 80, 0.36);
+                border-radius: 6px;
+                color: rgba(255, 204, 204, 0.96);
+                font-size: 11px;
+                font-weight: 700;
+                padding: 4px 10px;
             }
             QPushButton#battleMgmtDeleteBtn:hover {
-                background: rgba(239, 83, 80, 0.26);
-                border-color: rgba(239, 83, 80, 0.40);
+                background: rgba(239, 83, 80, 0.32);
+                border-color: rgba(239, 83, 80, 0.52);
             }
 
             QLineEdit#metaSearch {

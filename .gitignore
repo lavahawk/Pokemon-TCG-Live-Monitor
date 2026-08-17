@@ -13,6 +13,7 @@
 .last_deck
 .max_rank
 .monitor_pid
+.monitor_lock
 .console_pref
 .in_tournament
 

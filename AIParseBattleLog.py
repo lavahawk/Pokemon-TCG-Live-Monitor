@@ -452,6 +452,13 @@ def main():
     win_or_loss = (response_dict.get("Win_or_Loss") or "Loss").title()
     confidence = int(response_dict.get("Confidence") or 0)
 
+    # Prefer the OCR-detected deck name (from the main menu) over the
+    # AI-suggested name. OCR is authoritative for YOUR deck because it reads
+    # the actual deck name on screen, whereas the AI infers it from the log.
+    ocr_deck = load_last_deck()
+    if ocr_deck:
+        my_deck = ocr_deck
+
     print("--------------------------")
     print(
         f"My Deck: {my_deck}  |  Opponent's Deck: {opponents_deck}  |  "

@@ -97,12 +97,13 @@ echo   File:     Pokemon-TCG-Live-Monitor-v2.3.0.zip
 echo.
 echo NEXT STEPS:
 echo.
-echo 1. Build the EXE installer:
-echo    python Create_Portable_Installer.py
+echo 1. Build the EXE installer (Inno Setup):
+echo    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_setup.iss
+echo    (or run Build_Inno_Installer.bat)
 echo.
 echo 2. Upload to GitHub Release:
 echo    - Pokemon-TCG-Live-Monitor-v2.3.0.zip
-echo    - Pokemon-TCG-Live-Monitor-v2.3.0-Installer.exe
+echo    - Pokemon-TCG-Live-Monitor-v2.3.0-Setup.exe
 echo.
 echo 3. Update release notes (GITHUB_RELEASE_NOTES.md)
 echo.
