@@ -112,6 +112,111 @@ JP_DECK_TRANSLATION = {
     "ニンジャスピナー": "Ninja Spinner",
     "ストームエメラルダ": "Storm Emerald",
     "ニンジャスピナー環境": "Ninja Spinner format",
+    # Additional archetypes from recent tournament/tier data
+    "ジュナイパー": "Decidueye",
+    "フシギバナ": "Venusaur",
+    "バシャーモ": "Blaziken",
+    "オリーヴァ": "Arboliva",
+    "バクフーン": "Typhlosion",
+    "ライボルト": "Manectric",
+    "パンプジン": "Pumpkaboo",
+    "イイネイヌ": "Fidough",
+    "マリィのオーロンゲ": "Marnie's Grimmsnarl",
+    "シロナのガブリアス": "Cynthia's Garchomp",
+    "メガゲッコウガ": "Mega Greninja",
+    "メガドリュウズ": "Mega Excadrill",
+    "タケルライコex": "Raging Bolt ex",
+    "メガルカリオex": "Mega Lucario ex",
+    "メガレックウザex": "Mega Rayquaza ex",
+    "カミツオロチex": "Iron Thorns ex",
+    "ドラパルトexデッキ": "Dragapult ex",
+    "ヤドキングデッキ": "Slowking",
+    "バシャーモex＋ドラパルトex": "Blaziken ex Dragapult ex",
+    "ガルーラボックス": "Kangaskhan Box",
+    "タケルライコ": "Raging Bolt",
+    "ドラゴン": "Dragon",
+    "メガニウムex": "Meganium ex",
+    "ドデカバシ": "Dondozo",
+    "ミミッキュ": "Mimikyu",
+    "ドラメシヤ": "Dreepy",
+    "テツノブジンex": "Iron Valiant ex",
+    "エンペルト": "Empoleon",
+    "リザードンex": "Charizard ex",
+    "セグレイブ": "Baxcalibur",
+    "ガラルファイヤー": "Galarian Articuno",
+    "ラティアス": "Latias",
+    "ラティオス": "Latios",
+    "ライコウ": "Raikou",
+    "エンテイ": "Entei",
+    "スイクン": "Suicune",
+    "ドンカラス": "Honchkrow",
+    "ソウブレイズ": "Ceruledge",
+    "メガミミロップ": "Mega Lopunny",
+    "ブリジュラス": "Archaludon",
+    "タイジキングダム": "Tai Kingdom",
+    "スターミー": "Starmie",
+    "ファイアロー": "Talonflame",
+    "メタング": "Metang",
+    "バテレン追放令": "Fan of Waves",
+    "ハンバリー": "Hambly",
+    "ソルロック": "Solrock",
+    "ルナトーン": "Lunatone",
+    "ルガルガン": "Lycanroc",
+    "ゾロアークex": "Zoroark ex",
+    "Nのゾロアークex": "N's Zoroark ex",
+    "エースバーン": "Cinderace",
+    "ダイケンキ": "Samurott",
+    "マッギヨ": "Mabostiff",
+    "ウミトリオ": "Wugtrio",
+    "ドオー": "Clodsire",
+    "イトマル": "Nymble",
+    "ベラカス": "Pawmo",
+    "オリガミ": "Origami",
+    "ユキメノコ": "Froslass",
+    "ミミロップ": "Lopunny",
+    "ブイズバレット": "Eeveelution Bullet",
+    "メガユキノオー": "Mega Abomasnow",
+    "フリーザー": "Articuno",
+    "サンダー": "Zapdos",
+    "ファイヤー": "Moltres",
+    "ゲノセクト": "Genesect",
+    "ミュウex": "Mew ex",
+    "マシマシラ": "Munkidori",
+    "オーリム": "Future Booster",
+    "ヒガナ": "Hibana",
+    "テラパゴス": "Terapagos",
+    "ガラルマタドガス": "Galarian Weezing",
+    "ヨクバリス": "Greedent",
+    "アカツキex": "Akatsuki ex",
+    "グランブル": "Granbull",
+    "シンオウの化石": "Hisuian Fossil",
+    "マリィ": "Marnie",
+    "ネス": "N",
+    "グソクムシャ": "Golisopod",
+    "ミジュ": "Miju",
+    "メガジガルデ": "Mega Zygarde",
+    "シャンデラ": "Chandelure",
+    "マンデー": "Monday",
+    "シャリタツ": "Tatsugiri",
+    "ガチゴラス": "Bangura",
+    "コントロール": "Control",
+    "ホウオウ": "Ho-Oh",
+    "キノノタミ": "Kinanotami",
+    "メガシンヤ": "Mega Shin",
+    "メガヤンマ": "Mega Yanma",
+    "テラスタルバレット": "Terastal Bullet",
+    "しんちょう警備隊": "Shinchou Guard",
+    "ご幸非": "Gokou",
+    "ニンフィア": "Sylveon",
+    "メガシャンデラ": "Mega Chandelure",
+    "メガヤンマ": "Mega Yanma",
+    "シェイミ": "Shaymin",
+    "ガラガラ": "Marowak",
+    "フライゴン": "Flygon",
+    "ガチグマ": "Ursaluna",
+    "ダイオウドウ": "Donphan",
+    "ブーピッグ": "Grumpig",
+    "ウソッキー": "Sudowoodo",
 }
 
 def _load_limitless_deck_names(limit=60):
@@ -178,6 +283,30 @@ def _translation_cache_fresh():
         return False
 
 
+def _clean_deck_name(raw):
+    """Clean a raw deck entry name, stripping tournament noise.
+
+    Removes suffixes like placement notes like 'スクランブルバトル大阪：6-1',
+    sizes like '(9名)', ':優勝', etc. Returns a clean Japanese archetype name.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ""
+
+    # Remove trailing placement/size/tournament info.
+    # e.g. "バシャーモデッキ スクランブルバトル大阪：6-1" -> "バシャーモデッキ"
+    #      "ライボルトデッキ (9名)" -> "ライボルトデッキ"
+    text = re.sub(r"\s*\(\s*\d+\s*名\s*\)", "", text)
+    # "スクランブルバトル大阪：6-1" / ":優勝" / ":6-1"
+    text = re.sub(r"\s*[:：]\s*[\d\-]+[\d]*$", "", text.strip())
+    text = re.sub(r"\s*[:：]\s*(優勝|準優勝|ベスト4|ベスト8|\d+\s*位).*$", "", text.strip())
+    # Remove a standalone trailing "スクランブルバトル 大阪" style tournament tag
+    # only if it appears as a clearly separate segment after the deck name.
+    text = re.sub(r"\s+(?:スクランブルバトル|ジムババトル|バトルフェス|カップ|フェス|杯).*$", "", text, flags=re.IGNORECASE)
+
+    return text.strip()
+
+
 def translate_deck_name(jp_name, ai_enabled=False, api_key=None, force=False):
     """Translate a Japanese deck name to English.
 
@@ -191,23 +320,33 @@ def translate_deck_name(jp_name, ai_enabled=False, api_key=None, force=False):
     if not jp_name:
         return ""
 
-    # 1. Static map (exact)
-    if jp_name in JP_DECK_TRANSLATION:
-        return JP_DECK_TRANSLATION[jp_name]
+    # Strip trailing "デッキ" (deck) so "バシャーモデッキ" matches "バシャーモ".
+    core = re.sub(r"デッキ\s*$", "", jp_name).strip()
+    if not core:
+        core = jp_name
 
-    # 1b. Static map (substring / token match)
+    # Build a combined lookup: exact name and its "デッキ"-stripped form.
+    candidates = [jp_name, core]
+
+    # 1. Static map (exact)
+    for cand in candidates:
+        if cand in JP_DECK_TRANSLATION:
+            return JP_DECK_TRANSLATION[cand]
+
+    # 1b. Static map (substring / token match) on the stripped core first.
     for jp_key, en_val in JP_DECK_TRANSLATION.items():
-        if jp_key and jp_key in jp_name:
+        if jp_key and jp_key in core:
             return en_val
 
     # 2. AI translation cache
     cache = _load_translation_cache()
-    if jp_name in cache:
-        return cache[jp_name]
+    for cand in candidates:
+        if cand in cache:
+            return cache[cand]
 
     # 3. AI live call (only on hard pull)
     if ai_enabled and api_key and force:
-        en = _ai_translate([jp_name], api_key).get(jp_name)
+        en = _ai_translate(candidates, api_key).get(jp_name) or _ai_translate(candidates, api_key).get(core)
         if en:
             cache[jp_name] = en
             _save_translation_cache(cache)
@@ -394,8 +533,12 @@ def _extract_tournament_decks(html):
         text = re.sub(r"<[^>]+>", "", match.group(2)).strip()
         if not text or _is_noise_heading(text):
             continue
+        # Remove trailing tournament/placement info: "スクランブルバトル大阪：6-1", "：優勝", "(9名)"
+        cleaned = _clean_deck_name(text)
+        if not cleaned:
+            continue
         decks.append({
-            "deck_jp": text,
+            "deck_jp": cleaned,
             "count": 1,
             "code": None,
             "image": None,
@@ -485,10 +628,19 @@ def _consolidate_rows(decks, translate_fn):
 
     counts = {}
     for d in decks:
-        en = translate_fn(d.get("deck_jp", ""))
+        raw = d.get("deck_jp", "").strip()
+        if not raw:
+            continue
+        # Normalize the deck name so fragmented entries merge together.
+        cleaned = _clean_deck_name(raw)
+        if not cleaned:
+            continue
+        en = translate_fn(cleaned)
         if not en:
             continue
-        counts[en] = counts.get(en, 0) + int(d.get("count", 1) or 1)
+        # Increment count by the entry's weight (default 1).
+        weight = max(1, int(d.get("count", 1) or 1))
+        counts[en] = counts.get(en, 0) + weight
 
     total = sum(counts.values()) or 1
     rows = []
@@ -514,6 +666,97 @@ def _consolidate_rows(decks, translate_fn):
     return rows
 
 
+def _is_non_deck_text(text):
+    """Return True if a placing text is clearly not a deck archetype name.
+
+    Filters out player names, venue names, generic labels like 不明, and
+    placeholder text that appears in result posts.
+    """
+    t = (text or "").strip()
+    if not t:
+        return True
+    # Player-name markers
+    if re.search(r"選手|さん$|くん$|様$|チーム$", t):
+        return True
+    # Non-archetype labels
+    if t in ("不明", "なし", "—", "-", "--", "？", "??") or not re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]", t):
+        return True
+    # Organization / not a deck
+    if re.search(r"(非営利団体|動物園|株式会社|大学|同好会|コミュニティ|オフ会)", t):
+        return True
+    # Very short fragments unlikely to be decks
+    if len(t) < 2:
+        return True
+    return False
+
+
+def _split_multi_decks(text):
+    """Split a placing like 'ドラパルト、ドラパルト、おまつりおんど' into parts."""
+    return [p.strip() for p in re.split(r"[、,・/+×]", text) if p.strip()]
+
+
+def _is_non_deck(text):
+    """Heuristic: is this text a real deck archetype (has a Pokemon/card name)?"""
+    t = (text or "").strip()
+    if not t or len(t) < 2:
+        return True
+    if _is_non_deck_text(t):
+        return True
+    return False
+
+
+def _is_non_abbrev_deck_text(text):
+    """Fast abuse-name filter used by _is_non_deck_text."""
+    if text in ("不明", "なし", "—", "--", "その他"):
+        return True
+    return False
+
+
+def _datalab_placings_to_decks(datalab_reports):
+    """Convert data lab report placings into weighted deck entries.
+
+    Each placing is weighted by tournament size × placement tier, mirroring
+    the data lab's CSP-style point table. Returns a list of deck entries
+    {deck_jp, count} where count = weight.
+    """
+    weights = {
+        "1st": 4.0,
+        "2nd": 3.0,
+        "top4": 2.0,
+        "top8": 1.0,
+    }
+    decks = []
+    for report in datalab_reports:
+        for tournament in report.get("tournaments", []):
+            size = int(tournament.get("size") or 0) or 32  # default 32 min
+            # Scale weight by tournament size relative to a 32-player baseline.
+            size_factor = size / 32.0
+            for placing in tournament.get("placings", []):
+                place = placing.get("place")
+                base = weights.get(place, 1.0)
+                raw = placing.get("deck_jp", "").strip()
+                if not raw:
+                    continue
+                # Split multi-deck entries (team tournaments list several decks).
+                for part in _split_multi_decks(raw):
+                    if _is_non_deck(part) or _is_noise_heading(part):
+                        continue
+                    part = _clean_deck_name(part)
+                    if not part:
+                        continue
+                    # Weight by placement tier; scale mildly by tournament size
+                    # but cap so total counts stay comparable to the tier list
+                    # (which produce modest counts), not thousands.
+                    size_factor = min(1.5, size / 64.0)
+                    weight = round(base * size_factor, 1)
+                    decks.append({
+                        "deck_jp": part,
+                        "count": weight,
+                        "place": place,
+                    })
+    return decks
+
+
 def _datalab_slugs():
     """Return a list of recent data lab report slugs (taikairesult-*)."""
     # These are the most recent weekly reports for the current environment.
@@ -524,6 +767,18 @@ def _datalab_slugs():
         "taikairesult-m6-1w",
         "taikairesult-m5-10w",
         "taikairesult-m5-9w",
+    ]
+
+
+def _tournament_slugs():
+    """Return a list of recent tournament result page slugs."""
+    # Daily winning-deck pages from the last few days.
+    return [
+        "pokemontaikaiwin20260816",
+        "pokemontaikaiwin20260814",
+        "pokemontaikaiwin20260809",
+        "pokemontaikaiwin20260807",
+        "pokemontaikaiwin20260802",
     ]
 
 
@@ -543,9 +798,9 @@ def fetch_japan_data(ai_enabled=False, api_key=None, force=False, use_cache=True
     tier_html = _fetch_html(TIER_LIST_URL, session)
     tier_decks = _extract_tier_decks(tier_html)
 
-    # Also pull a couple of recent tournament pages for more deck variety.
+    # Also pull recent tournament pages for more deck variety.
     tournament_decks = []
-    for slug in ("pokemontaikaiwin20260816", "pokemontaikaiwin20260814"):
+    for slug in _tournament_slugs():
         html = _fetch_html(POKEKAMESHI_BASE + "/" + slug + "/", session)
         tournament_decks.extend(_extract_tournament_decks(html))
 
@@ -560,7 +815,12 @@ def fetch_japan_data(ai_enabled=False, api_key=None, force=False, use_cache=True
                 "tournaments": report,
             })
 
-    all_decks = tier_decks + tournament_decks
+    all_decks = list(tier_decks) + list(tournament_decks)
+
+    # Include data lab placing decks (weighted) as additional data sources so
+    # the meta reflects independent tournament results too.
+    datalab_decks = _datalab_placings_to_decks(datalab_reports)
+    all_decks.extend(datalab_decks)
 
     # Translation: use static map + cache; only call AI on hard pull.
     def translate_fn(jp):
@@ -569,9 +829,9 @@ def fetch_japan_data(ai_enabled=False, api_key=None, force=False, use_cache=True
     rows = _consolidate_rows(all_decks, translate_fn)
 
     data = {
-        "schema_version": 3,
+        "schema_version": 4,
         "rows": rows,
-        "tournaments_processed": 1,
+        "tournaments_processed": len(datalab_reports) + 1,
         "total_entries": len(all_decks),
         "fetched_at": time.time(),
         "source": "japan",
