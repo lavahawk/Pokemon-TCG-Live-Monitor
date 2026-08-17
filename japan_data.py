@@ -417,7 +417,7 @@ def _extract_datalab_report(html):
     # Tournament headings: <h3>name (NN名)</h3>
     for match in re.finditer(r"<h3[^>]*>(.*?)</h3>", html, flags=re.DOTALL | re.IGNORECASE):
         text = re.sub(r"<[^>]+>", "", match.group(1)).strip()
-        if not text:
+        if not text or _is_noise_heading(text):
             continue
         size_match = re.search(r"\((\d+)名\)", text)
         tournaments.append({
@@ -429,24 +429,48 @@ def _extract_datalab_report(html):
             "tweet_url": None,
             "placings": [],
         })
-    # Placing lines: 優勝：X / 準優勝：X / ベスト4：X / ベスト8：X
+
+    # Extract date/region/format from the 開催日 line following each heading.
+    # Pattern: 開催日：YYYY/MM/DD <region> <format>
+    date_pattern = re.compile(r"開催日[：:]\s*(\d{4})/(\d{1,2})/(\d{1,2})\s*([^\n<]*)")
+    date_matches = list(date_pattern.finditer(html))
+    for t, dm in zip(tournaments, date_matches):
+        year, month, day = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
+        t["date"] = f"{year:04d}-{month:02d}-{day:02d}"
+        rest = dm.group(4).strip()
+        # Region is usually the first token; format contains 個人戦/チーム
+        t["region"] = rest.split()[0] if rest else None
+        if "チーム" in rest:
+            t["format"] = "team"
+        elif "個人戦" in rest:
+            t["format"] = "individual"
+        else:
+            t["format"] = None
+
+    # Associate placing lines with tournaments by HTML position.
+    # Build a list of (position, place, deck) tuples.
     place_map = {"優勝": "1st", "準優勝": "2nd", "ベスト4": "top4", "ベスト8": "top8"}
-    for t in tournaments:
-        # Find the placing block following this tournament heading.
-        pass
-    # Simple approach: scan all placing lines in order and assign to tournaments.
-    placing_lines = re.findall(r"(優勝|準優勝|ベスト4|ベスト8)[：:]\s*([^\n<]+)", html)
-    idx = 0
-    for t in tournaments:
+    placing_entries = []
+    for pm in re.finditer(r"(優勝|準優勝|ベスト4|ベスト8)[：:]\s*([^\n<]+)", html):
+        placing_entries.append((pm.start(), place_map.get(pm.group(1), pm.group(1)), pm.group(2).strip()))
+
+    # For each tournament, collect placing entries that fall between this
+    # tournament's heading and the next one.
+    heading_positions = []
+    for match in re.finditer(r"<h3[^>]*>(.*?)</h3>", html, flags=re.DOTALL | re.IGNORECASE):
+        text = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+        if text and not _is_noise_heading(text):
+            heading_positions.append(match.start())
+
+    for i, t in enumerate(tournaments):
+        start = heading_positions[i] if i < len(heading_positions) else 0
+        end = heading_positions[i + 1] if i + 1 < len(heading_positions) else len(html)
         block = []
-        while idx < len(placing_lines):
-            place_jp, deck_jp = placing_lines[idx]
-            block.append({"place": place_map.get(place_jp, place_jp), "deck_jp": deck_jp.strip()})
-            idx += 1
-            # Stop after a reasonable number of placings per tournament (top 8 max)
-            if len(block) >= 8:
-                break
+        for pos, place, deck_jp in placing_entries:
+            if start <= pos < end:
+                block.append({"place": place, "deck_jp": deck_jp})
         t["placings"] = block
+
     return tournaments
 
 
@@ -490,12 +514,25 @@ def _consolidate_rows(decks, translate_fn):
     return rows
 
 
+def _datalab_slugs():
+    """Return a list of recent data lab report slugs (taikairesult-*)."""
+    # These are the most recent weekly reports for the current environment.
+    # In a future version this is discovered from the sitemap automatically.
+    return [
+        "taikairesult-m6-3w",
+        "taikairesult-m6-2w",
+        "taikairesult-m6-1w",
+        "taikairesult-m5-10w",
+        "taikairesult-m5-9w",
+    ]
+
+
 def fetch_japan_data(ai_enabled=False, api_key=None, force=False, use_cache=True):
     """Fetch and consolidate Japan meta data.
 
     Returns a dict in the same shape as the Limitless meta cache:
     {schema_version, rows, tournaments_processed, total_entries, fetched_at,
-     source, timeframe}
+     source, timeframe, datalab_reports}
     """
     if use_cache and _cache_fresh():
         cached = _load_cache()
@@ -512,6 +549,17 @@ def fetch_japan_data(ai_enabled=False, api_key=None, force=False, use_cache=True
         html = _fetch_html(POKEKAMESHI_BASE + "/" + slug + "/", session)
         tournament_decks.extend(_extract_tournament_decks(html))
 
+    # Pull data lab weekly reports for point-weighted meta data.
+    datalab_reports = []
+    for slug in _datalab_slugs():
+        html = _fetch_html(POKEKAMESHI_BASE + "/" + slug + "/", session)
+        report = _extract_datalab_report(html)
+        if report:
+            datalab_reports.append({
+                "slug": slug,
+                "tournaments": report,
+            })
+
     all_decks = tier_decks + tournament_decks
 
     # Translation: use static map + cache; only call AI on hard pull.
@@ -521,16 +569,34 @@ def fetch_japan_data(ai_enabled=False, api_key=None, force=False, use_cache=True
     rows = _consolidate_rows(all_decks, translate_fn)
 
     data = {
-        "schema_version": 2,
+        "schema_version": 3,
         "rows": rows,
         "tournaments_processed": 1,
         "total_entries": len(all_decks),
         "fetched_at": time.time(),
         "source": "japan",
         "timeframe": "recent",
+        "datalab_reports": datalab_reports,
     }
     _save_cache(data)
     return data
+
+
+def filter_by_timeframe(data, timeframe):
+    """Filter Japan data rows by timeframe.
+
+    timeframe: 'recent', '1w', '1m', '3m', 'all'
+    Currently the tier list is a snapshot of the current environment, so all
+    rows are treated as 'recent'. This is a placeholder for future set-list
+    filtering once per-set data is available.
+    """
+    if not data:
+        return []
+    rows = data.get("rows", [])
+    if timeframe in ("recent", "all"):
+        return rows
+    # Future: filter by per-row date/set. For now return all rows.
+    return rows
 
 
 def hard_refresh_translations(api_key):

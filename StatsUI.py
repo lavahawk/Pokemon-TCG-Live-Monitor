@@ -5197,12 +5197,16 @@ class StatsWindow(QWidget):
              "Methodology + weekly independent-tournament aggregation"),
             ("Pokemon Card Official (JP)", "https://www.pokemon-card.com/",
              "Official deck-code viewer, card search, rules"),
-            ("Limitless TCG", "https://play.limitlesstcg.com/",
-             "US/international meta for comparison"),
-            ("TrainerHill", "https://trainerhill.com/",
-             "International meta breakdown"),
-            ("PokeData.ovh", "https://www.pokedata.ovh/",
-             "Events, standings, championship points, hand simulator"),
+            ("ポケカデータラボ", "https://pokekameshi.com/taikairesult-m6-3w/",
+             "Weekly independent-tournament data aggregation"),
+            ("ポケカ情報局", "https://pokecabook.com/",
+             "Japanese deck recipes, tier lists, tournament results"),
+            ("ポケカ速報", "https://pokeka-sokuhou.com/",
+             "Japanese Pokemon card news and meta updates"),
+            ("ポケカデッキ研究所", "https://pokeca-deck.com/",
+             "Japanese deck analysis and meta reports"),
+            ("ポケモンカード公式 デッキ検索", "https://www.pokemon-card.com/deck/",
+             "Official deck-code search and deck building"),
         ]
         sites_grid = QGridLayout()
         sites_grid.setSpacing(6)
@@ -5301,9 +5305,17 @@ class StatsWindow(QWidget):
         rows = []
         if hasattr(self, "japan_table"):
             rows = list(getattr(self, "_japan_rows", []) or [])
-        # Timeframe filter: for now, all rows are 'recent'; future set-list
-        # filtering will narrow by date. We keep the combo for future use.
-        tf = self.japan_timeframe_combo.currentText() if hasattr(self, "japan_timeframe_combo") else "Recent"
+        # Map the combo label to a timeframe key for filtering.
+        tf_label = self.japan_timeframe_combo.currentText() if hasattr(self, "japan_timeframe_combo") else "Recent"
+        tf_map = {
+            "Recent": "recent",
+            "1 Week": "1w",
+            "1 Month": "1m",
+            "3 Months": "3m",
+            "All Time": "all",
+        }
+        tf = tf_map.get(tf_label, "recent")
+        rows = japan_data.filter_by_timeframe({"rows": rows}, tf)
 
         sorting_enabled = self.japan_table.isSortingEnabled()
         if sorting_enabled:
