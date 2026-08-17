@@ -20,8 +20,37 @@ from PIL import Image
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REGIONS_CONFIG = os.path.join(BASE_DIR, "screen_regions.json")
 
-# Configure Tesseract path
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+def _find_tesseract():
+    """Locate the Tesseract OCR executable.
+
+    Checks (in order):
+      1. A portable Tesseract bundled in the app folder (e.g. ``tesseract/``
+         or ``.tesseract/``) — used by the portable/no-admin build.
+      2. The standard system install path.
+      3. Any ``tesseract.exe`` on PATH.
+    Returns the path string, or the default system path as a last resort.
+    """
+    candidates = [
+        os.path.join(BASE_DIR, "tesseract", "tesseract.exe"),
+        os.path.join(BASE_DIR, ".tesseract", "tesseract.exe"),
+        os.path.join(BASE_DIR, "Tesseract-OCR", "tesseract.exe"),
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    # Fall back to PATH lookup.
+    import shutil
+    on_path = shutil.which("tesseract")
+    if on_path:
+        return on_path
+    return r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+
+# Configure Tesseract path (portable-first, then system).
+pytesseract.pytesseract.tesseract_cmd = _find_tesseract()
 
 
 class RankDetector:
