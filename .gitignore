@@ -20,6 +20,7 @@
 # Meta / icon caches and user preferences
 .meta_icon_cache/
 .meta_cache_*.json
+.japan_translation_cache.json
 .deck_icon_overrides.json
 .limitless_dashboard_state.json
 .stats_window_geometry.json

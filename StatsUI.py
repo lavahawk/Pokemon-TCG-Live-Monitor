@@ -31,6 +31,7 @@ from deck_analytics import (
     rank_weighted_winrate,
     wilson_interval,
 )
+import japan_data
 from app_settings import (
     clear_api_key,
     load_api_key,
@@ -196,6 +197,11 @@ SPRITE_NAME_ALIASES = {
 
 def _normalize_sprite_name(sprite_name):
     return (sprite_name or "").strip().lower().replace(" ", "-")
+
+
+def _looks_japanese(text):
+    """Return True if the text contains Japanese characters (untranslated)."""
+    return bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", text or ""))
 
 
 def _sprite_cache_path(sprite_name):
@@ -2167,6 +2173,30 @@ class MetaFetcher(QThread):
         }
 
 
+class JapanFetcher(QThread):
+    """Background thread for fetching Japan meta data from pokekameshi.com."""
+    data_ready = Signal(str, object)  # (source_name, data)
+    error = Signal(str, str)          # (source_name, error_message)
+
+    def __init__(self, ai_enabled=False, api_key=None, force=False, parent=None):
+        super().__init__(parent)
+        self.ai_enabled = ai_enabled
+        self.api_key = api_key
+        self.force = force
+
+    def run(self):
+        try:
+            data = japan_data.fetch_japan_data(
+                ai_enabled=self.ai_enabled,
+                api_key=self.api_key,
+                force=self.force,
+                use_cache=not self.force,
+            )
+            self.data_ready.emit("japan", data)
+        except Exception as e:
+            self.error.emit("japan", str(e))
+
+
 class StatsWindow(QWidget):
     """Modern sleek stats dashboard - minimizes to mini overlay"""
     
@@ -2194,6 +2224,7 @@ class StatsWindow(QWidget):
         self.deck_analyses = []
         self.deck_icon_overrides = self._load_deck_icon_overrides()
         self.limitless_standard_meta = self._load_meta_cache("limitless_standard")
+        self._japan_rows = []
         # In-memory pixmap cache keyed by (sprite_name, size) to avoid re-reading
         # and re-scaling sprite PNGs from disk on every UI refresh.
         self._sprite_pixmap_cache = {}
@@ -2284,7 +2315,7 @@ class StatsWindow(QWidget):
         
         # Japan City League Tab
         japan_tab = self.create_japan_tab()
-        self.tab_widget.addTab(japan_tab, "Japan CL")
+        self.tab_widget.addTab(japan_tab, "Japan Data")
         
         # PokeData Tab
         pokedata_tab = self.create_pokedata_tab()
@@ -4668,6 +4699,8 @@ class StatsWindow(QWidget):
                 self.limitless_manager.ensure_visible_dashboard_loaded()
         elif tab_name == "TrainerHill" and self.trainerhill_table.rowCount() == 0 and self.trainerhill_refresh_btn.isEnabled():
             self._fetch_trainerhill_data()
+        elif tab_name == "Japan Data" and self.japan_table.rowCount() == 0 and self.japan_refresh_btn.isEnabled():
+            self._fetch_japan_data()
 
     def _meta_header_bar(self, title_text, last_updated_label, refresh_btn, browser_url=None, browser_label="Open in Browser"):
         """Build the top bar used by all meta tabs: title | last updated | refresh | browser btn."""
@@ -5057,85 +5090,260 @@ class StatsWindow(QWidget):
         self.trainerhill_status.setText(f"Error: {msg}")
 
     def create_japan_tab(self):
-        """Japanese City League data via embedded Google Looker Studio dashboard."""
-        JAPAN_URL = "https://datastudio.google.com/u/0/reporting/3e762bd3-c6e7-4f4e-9408-c9ec85a0d535/page/CFRCC?s=oiwyj4cIk-g"
+        """Japan Data: consolidated, translated, sortable-by-timeframe meta.
+
+        Pulls from pokekameshi.com, translates deck names to English (aligned
+        with Limitless names via optional AI), and renders in a format
+        comparable to the US/Limitless meta table. Includes a timeframe filter,
+        an AI-translation toggle, a hard-refresh button, and an important-sites
+        showcase.
+        """
         outer = QWidget()
         outer.setObjectName("contentWidget")
         vlayout = QVBoxLayout(outer)
         vlayout.setContentsMargins(12, 10, 12, 12)
         vlayout.setSpacing(8)
 
-        # Header
+        # --- Header row: title + timeframe filter + AI toggle + refresh ---
         header_row = QHBoxLayout()
         header_row.setSpacing(10)
-        title = QLabel("JAPAN CITY LEAGUE META")
+        title = QLabel("JAPAN DATA")
         title.setObjectName("sectionHeader")
         header_row.addWidget(title)
         header_row.addStretch()
 
-        open_btn = QPushButton("Open in Browser ↗")
+        # Timeframe filter (sortable by timeframe)
+        tf_label = QLabel("Timeframe:")
+        tf_label.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 11px;")
+        header_row.addWidget(tf_label)
+        self.japan_timeframe_combo = QComboBox()
+        self.japan_timeframe_combo.addItems(["Recent", "1 Week", "1 Month", "3 Months", "All Time"])
+        self.japan_timeframe_combo.setObjectName("metaCombo")
+        self.japan_timeframe_combo.setFixedWidth(120)
+        self.japan_timeframe_combo.setFixedHeight(28)
+        self.japan_timeframe_combo.currentIndexChanged.connect(self._on_japan_timeframe_changed)
+        header_row.addWidget(self.japan_timeframe_combo)
+
+        # AI translation toggle (recommended)
+        self.japan_ai_toggle = QCheckBox("AI Translate")
+        self.japan_ai_toggle.setObjectName("metaCombo")
+        self.japan_ai_toggle.setToolTip(
+            "Use the OpenAI API key to translate Japanese deck names, aligned "
+            "with the top Limitless deck names. Runs once and caches permanently."
+        )
+        self.japan_ai_toggle.setChecked(True)
+        header_row.addWidget(self.japan_ai_toggle)
+
+        # Hard refresh button (re-runs AI translation)
+        self.japan_hard_refresh_btn = QPushButton("↻ Hard Refresh")
+        self.japan_hard_refresh_btn.setObjectName("metaRefreshBtn")
+        self.japan_hard_refresh_btn.setFixedHeight(28)
+        self.japan_hard_refresh_btn.setToolTip(
+            "Force a full re-fetch AND re-run the AI translation of deck names. "
+            "This uses API tokens, so only use it when you want fresh translations."
+        )
+        self.japan_hard_refresh_btn.clicked.connect(self._japan_hard_refresh)
+        header_row.addWidget(self.japan_hard_refresh_btn)
+
+        # Normal refresh button
+        self.japan_refresh_btn = QPushButton("↻ Load")
+        self.japan_refresh_btn.setObjectName("metaRefreshBtn")
+        self.japan_refresh_btn.setFixedHeight(28)
+        self.japan_refresh_btn.setFixedWidth(70)
+        self.japan_refresh_btn.clicked.connect(self._fetch_japan_data)
+        header_row.addWidget(self.japan_refresh_btn)
+
+        open_btn = QPushButton("pokekameshi ↗")
         open_btn.setObjectName("limitlessBtn")
         open_btn.setFixedHeight(28)
-        open_btn.clicked.connect(lambda: webbrowser.open(JAPAN_URL))
+        open_btn.clicked.connect(lambda: webbrowser.open(japan_data.TIER_LIST_URL))
         header_row.addWidget(open_btn)
         vlayout.addLayout(header_row)
 
-        note = QLabel(
-            "Japanese City League Season 4 • ~6,172 players across 450+ events "
-            "• Includes JP-exclusive formats not yet released in the West"
+        # --- Status label ---
+        self.japan_status = QLabel(
+            "Click ↻ Load to fetch consolidated Japanese meta from pokekameshi.com. "
+            "Deck names are translated to English and aligned with Limitless names."
         )
-        note.setStyleSheet("color: rgba(255,255,255,0.45); font-size: 10px;")
-        note.setWordWrap(True)
-        vlayout.addWidget(note)
+        self.japan_status.setStyleSheet("color: rgba(255,255,255,0.4); font-size: 10px; font-style: italic;")
+        self.japan_status.setWordWrap(True)
+        vlayout.addWidget(self.japan_status)
 
-        if WEBENGINE_AVAILABLE:
-            webview = QWebEngineView()
-            webview.setMinimumHeight(400)
-            webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            # Zoom out so the dashboard fits better (was too zoomed in).
-            webview.setZoomFactor(0.70)
-            webview.load(QUrl(JAPAN_URL))
-            vlayout.addWidget(webview, stretch=1)
-        else:
-            # Fallback: link + translation table
-            fallback = QLabel("WebEngine not available. Use 'Open in Browser ↗' to view the live dashboard.")
-            fallback.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 11px; font-style: italic;")
-            fallback.setWordWrap(True)
-            vlayout.addWidget(fallback)
+        # --- Metrics bar ---
+        metrics_bar, self.japan_metric_labels = self._create_meta_stats_bar((
+            ("decks", "Decks"),
+            ("entries", "Entries"),
+            ("translated", "Translated"),
+        ))
+        vlayout.addWidget(metrics_bar)
 
-        # JP → EN translation reference
-        legend_label = QLabel("JP → EN Deck Name Reference (Season 4 top decks)")
-        legend_label.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 10px; font-weight: 700; letter-spacing: 1px; margin-top: 8px;")
-        vlayout.addWidget(legend_label)
+        # --- Comparable meta table ---
+        cols = ["#", "Deck", "Finishes", "Share", "Wins", "Losses", "Raw WR", "Bayes WR", "95% CI", "P>50"]
+        widths = [34, None, 68, 64, 58, 62, 72, 78, 98, 56]
+        self.japan_table = self._make_meta_table(cols, widths, sortable=True, stretch_last=False)
+        self.japan_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        vlayout.addWidget(self.japan_table)
 
-        # Scrollable legend table
-        legend_scroll = QScrollArea()
-        legend_scroll.setWidgetResizable(True)
-        legend_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        legend_scroll.setFixedHeight(160)
-        legend_scroll.setObjectName("scrollArea")
+        # --- Important sites showcase ---
+        sites_label = QLabel("IMPORTANT JAPANESE SITES")
+        sites_label.setObjectName("sectionHeader")
+        sites_label.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 10px; font-weight: 700; letter-spacing: 1px; margin-top: 8px;")
+        vlayout.addWidget(sites_label)
 
-        legend_content = QWidget()
-        legend_content.setObjectName("contentWidget")
-        legend_grid = QGridLayout(legend_content)
-        legend_grid.setSpacing(4)
-        legend_grid.setContentsMargins(4, 4, 4, 4)
+        sites = [
+            ("Pokeka Meshi (ポケカ飯)", japan_data.POKEKAMESHI_BASE,
+             "Tier list, deck recipes, data lab reports, tournament results"),
+            ("Pokeka Data Lab", "https://pokekameshi.com/datalab-voluntarycompetition/",
+             "Methodology + weekly independent-tournament aggregation"),
+            ("Pokemon Card Official (JP)", "https://www.pokemon-card.com/",
+             "Official deck-code viewer, card search, rules"),
+            ("Limitless TCG", "https://play.limitlesstcg.com/",
+             "US/international meta for comparison"),
+            ("TrainerHill", "https://trainerhill.com/",
+             "International meta breakdown"),
+            ("PokeData.ovh", "https://www.pokedata.ovh/",
+             "Events, standings, championship points, hand simulator"),
+        ]
+        sites_grid = QGridLayout()
+        sites_grid.setSpacing(6)
+        for i, (name, url, desc) in enumerate(sites):
+            row = i // 2
+            col = (i % 2) * 2
+            btn = QPushButton(name)
+            btn.setObjectName("limitlessBtn")
+            btn.setFixedHeight(30)
+            btn.clicked.connect(lambda checked=False, u=url: webbrowser.open(u))
+            sites_grid.addWidget(btn, row, col)
+            desc_lbl = QLabel(desc)
+            desc_lbl.setStyleSheet("color: rgba(255,255,255,0.4); font-size: 9px;")
+            desc_lbl.setWordWrap(True)
+            sites_grid.addWidget(desc_lbl, row, col + 1)
+        vlayout.addLayout(sites_grid)
 
-        items = list(JP_DECK_TRANSLATION.items())
-        for i, (jp, en) in enumerate(items):
-            row_idx = i // 2
-            col_base = (i % 2) * 2
-            jp_lbl = QLabel(jp)
-            jp_lbl.setStyleSheet("color: rgba(255,255,255,0.75); font-size: 10px;")
-            en_lbl = QLabel(f"→  {en}")
-            en_lbl.setStyleSheet("color: rgba(156,195,68,0.9); font-size: 10px;")
-            legend_grid.addWidget(jp_lbl, row_idx, col_base)
-            legend_grid.addWidget(en_lbl, row_idx, col_base + 1)
-
-        legend_scroll.setWidget(legend_content)
-        vlayout.addWidget(legend_scroll)
+        # --- Info note ---
+        info = QLabel(
+            "Japan data is consolidated from pokekameshi.com and translated to English "
+            "aligned with Limitless deck names, so it can be compared directly with the "
+            "US meta and eventually merged by set list. Click column headers to sort. "
+            "Enable 'AI Translate' and use 'Hard Refresh' to re-run the AI translation "
+            "(uses API tokens, cached permanently)."
+        )
+        info.setStyleSheet("color: rgba(255,255,255,0.25); font-size: 9px;")
+        info.setWordWrap(True)
+        vlayout.addWidget(info)
 
         return outer
+
+    def _on_japan_timeframe_changed(self, idx):
+        """Re-render the Japan table when the timeframe filter changes."""
+        self._render_japan_table()
+
+    def _fetch_japan_data(self):
+        """Fetch Japan data in the background (uses cache unless hard refresh)."""
+        if not REQUESTS_AVAILABLE:
+            self.japan_status.setText("Error: requests support is not installed.")
+            return
+        api_key = load_api_key()
+        ai_enabled = self.japan_ai_toggle.isChecked() and bool(api_key)
+        self.japan_status.setText("Fetching Japan data from pokekameshi.com…")
+        self.japan_refresh_btn.setEnabled(False)
+        self.japan_hard_refresh_btn.setEnabled(False)
+        self._japan_fetcher = JapanFetcher(ai_enabled=ai_enabled, api_key=api_key, force=False)
+        self._japan_fetcher.data_ready.connect(self._on_japan_data)
+        self._japan_fetcher.error.connect(self._on_japan_error)
+        self._japan_fetcher.start()
+
+    def _japan_hard_refresh(self):
+        """Force a full re-fetch AND re-run the AI translation."""
+        if not REQUESTS_AVAILABLE:
+            self.japan_status.setText("Error: requests support is not installed.")
+            return
+        api_key = load_api_key()
+        if not api_key:
+            self.japan_status.setText(
+                "Hard Refresh needs an OpenAI API key to re-run AI translation. "
+                "Add a key in Advanced, or use ↻ Load for cached translations."
+            )
+            return
+        ai_enabled = self.japan_ai_toggle.isChecked()
+        self.japan_status.setText("Hard refresh: re-fetching and re-translating deck names (uses API tokens)…")
+        self.japan_refresh_btn.setEnabled(False)
+        self.japan_hard_refresh_btn.setEnabled(False)
+        self._japan_fetcher = JapanFetcher(ai_enabled=ai_enabled, api_key=api_key, force=True)
+        self._japan_fetcher.data_ready.connect(self._on_japan_data)
+        self._japan_fetcher.error.connect(self._on_japan_error)
+        self._japan_fetcher.start()
+
+    def _on_japan_data(self, source, data):
+        self.japan_refresh_btn.setEnabled(True)
+        self.japan_hard_refresh_btn.setEnabled(True)
+        rows = data.get("rows", [])
+        self._japan_rows = rows
+        fetched = data.get("fetched_at", 0)
+        ft = datetime.fromtimestamp(fetched).strftime('%H:%M:%S') if fetched else 'unknown'
+        self.japan_status.setText(
+            f"Loaded {len(rows)} archetypes from pokekameshi.com (last: {ft}). "
+            f"Deck names translated to English and aligned with Limitless."
+        )
+        self.japan_metric_labels["decks"].setText(str(len(rows)))
+        self.japan_metric_labels["entries"].setText(str(data.get("total_entries", 0)))
+        translated = sum(1 for r in rows if r.get("deck") and not _looks_japanese(r.get("deck", "")))
+        self.japan_metric_labels["translated"].setText(str(translated))
+        self._render_japan_table()
+
+    def _on_japan_error(self, source, msg):
+        self.japan_refresh_btn.setEnabled(True)
+        self.japan_hard_refresh_btn.setEnabled(True)
+        self.japan_status.setText(f"Error: {msg}")
+
+    def _render_japan_table(self):
+        """Render the Japan meta table, applying the timeframe filter."""
+        rows = []
+        if hasattr(self, "japan_table"):
+            rows = list(getattr(self, "_japan_rows", []) or [])
+        # Timeframe filter: for now, all rows are 'recent'; future set-list
+        # filtering will narrow by date. We keep the combo for future use.
+        tf = self.japan_timeframe_combo.currentText() if hasattr(self, "japan_timeframe_combo") else "Recent"
+
+        sorting_enabled = self.japan_table.isSortingEnabled()
+        if sorting_enabled:
+            self.japan_table.setSortingEnabled(False)
+        self.japan_table.setRowCount(0)
+        for i, row in enumerate(rows[:50]):
+            summary = self._summarize_meta_record(row)
+            wins = float(row.get("wins", 0) or 0)
+            losses = float(row.get("losses", 0) or 0)
+            ties = float(row.get("ties", 0) or 0)
+            raw_pct = summary.get("observed", 0.0) * 100.0
+            bayes_pct = summary.get("bayes_mean", 0.0) * 100.0
+            ci_low = summary.get("ci_low", 0.0) * 100.0
+            ci_high = summary.get("ci_high", 0.0) * 100.0
+            prob_even = summary.get("probability_above_even", 0.0) * 100.0
+            self.japan_table.insertRow(i)
+            self.japan_table.setRowHeight(i, 46)
+            self._set_meta_item(self.japan_table, i, 0, str(i + 1), sort_value=i + 1)
+            self._set_meta_deck_cell(
+                self.japan_table,
+                i,
+                1,
+                row.get("deck", ""),
+                row.get("icons", []),
+                subtitle=f"{int(row.get('count', 0) or 0)} finishes • {summary.get('confidence_label', 'n/a')}",
+                sort_value=(row.get("deck", "") or "").lower(),
+            )
+            self._set_meta_item(self.japan_table, i, 2, str(row.get('count', 0)), sort_value=int(row.get('count', 0) or 0))
+            self._set_meta_item(self.japan_table, i, 3, f"{row.get('share', 0):.1f}%", sort_value=float(row.get('share', 0) or 0))
+            self._set_meta_item(self.japan_table, i, 4, str(int(wins)), accent="#66BB6A", sort_value=wins)
+            self._set_meta_item(self.japan_table, i, 5, str(int(losses)), accent="#EF5350", sort_value=losses)
+            pct_color = "#66BB6A" if raw_pct >= 55 else "#EF5350" if raw_pct < 45 else "#F9A825"
+            self._set_meta_item(self.japan_table, i, 6, f"{raw_pct:.1f}%", accent=pct_color, sort_value=raw_pct)
+            bayes_color = "#66BB6A" if bayes_pct >= 55 else "#EF5350" if bayes_pct < 45 else "#F9A825"
+            self._set_meta_item(self.japan_table, i, 7, f"{bayes_pct:.1f}%", accent=bayes_color, sort_value=bayes_pct)
+            self._set_meta_item(self.japan_table, i, 8, f"{ci_low:.0f}% - {ci_high:.0f}%", sort_value=(ci_high - ci_low))
+            prob_color = "#66BB6A" if prob_even >= 65 else "#EF5350" if prob_even < 45 else "#F9A825"
+            self._set_meta_item(self.japan_table, i, 9, f"{prob_even:.0f}%", accent=prob_color, sort_value=prob_even)
+        if sorting_enabled:
+            self.japan_table.setSortingEnabled(True)
 
     def create_pokedata_tab(self):
         """PokeData.ovh – embedded interactive tool with nav buttons."""
