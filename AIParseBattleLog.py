@@ -27,8 +27,88 @@ LIMITLESS_STANDARD_CACHE_FILE = os.path.join(BASE_DIR, ".meta_cache_limitless_st
 LAST_DECK_FILE = os.path.join(BASE_DIR, ".last_deck")
 LAST_RANK_FILE = os.path.join(BASE_DIR, ".last_rank")
 LOG_DIR = os.path.join(BASE_DIR, "Logs")
+# Shared flag file written by the Limitless dashboard manager (StatsUI) when
+# the player is actively in a tournament match. Contains JSON:
+#   {"in_tournament": true, "opponent": "<opponent username>"}
+TOURNAMENT_FLAG_FILE = os.path.join(BASE_DIR, ".in_tournament")
 
 db = BattleDatabase()
+
+
+def load_tournament_state():
+    """Read the shared tournament flag file written by the Limitless manager.
+
+    Returns a dict {"in_tournament": bool, "opponent": str} or an empty dict
+    if no tournament match is currently active.
+    """
+    if not os.path.exists(TOURNAMENT_FLAG_FILE):
+        return {}
+    try:
+        with open(TOURNAMENT_FLAG_FILE, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if isinstance(payload, dict) and payload.get("in_tournament"):
+            return {
+                "in_tournament": True,
+                "opponent": str(payload.get("opponent") or "").strip(),
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def parse_opponent_from_log(battlelog, username):
+    """Extract the opponent's username from a battle log.
+
+    The battle log contains both players' usernames (e.g. "PlayerA chose
+    tails...", "PlayerB won the coin toss."). The opponent is the username
+    that is NOT the player's own username.
+    """
+    if not battlelog or not username:
+        return None
+    own = normalize_name(username)
+    # Collect all usernames that appear as actors in the log.
+    candidates = set()
+    # "X chose heads/tails for the opening coin flip."
+    for match in re.findall(r"([A-Za-z0-9_\- ]+?)\s+chose\s+(?:heads|tails)\s+for the opening coin flip", battlelog, flags=re.IGNORECASE):
+        candidates.add(match.strip())
+    # "X won the coin toss."
+    for match in re.findall(r"([A-Za-z0-9_\- ]+?)\s+won the coin toss", battlelog, flags=re.IGNORECASE):
+        candidates.add(match.strip())
+    # "X decided to go first/second."
+    for match in re.findall(r"([A-Za-z0-9_\- ]+?)\s+decided to go (?:first|second)", battlelog, flags=re.IGNORECASE):
+        candidates.add(match.strip())
+    # "X's Turn"
+    for match in re.findall(r"([A-Za-z0-9_\- ]+?)'s\s+Turn", battlelog, flags=re.IGNORECASE):
+        candidates.add(match.strip())
+    # "X wins."
+    for match in re.findall(r"([A-Za-z0-9_\- ]+?)\s+wins\.", battlelog, flags=re.IGNORECASE):
+        candidates.add(match.strip())
+
+    for candidate in candidates:
+        if candidate and normalize_name(candidate) != own:
+            return candidate
+    return None
+
+
+def is_tournament_battle(battlelog, username):
+    """Determine whether a battle is a Limitless tournament game.
+
+    A battle is only tagged as a tournament game if the player is actively in
+    a tournament match (per the shared flag file) AND the battle-log opponent
+    matches the tournament opponent. This prevents false positives from simply
+    being enrolled in a tournament days in advance.
+    """
+    state = load_tournament_state()
+    if not state.get("in_tournament"):
+        return False
+    tournament_opponent = state.get("opponent")
+    if not tournament_opponent:
+        # No opponent known — be conservative and don't tag.
+        return False
+    log_opponent = parse_opponent_from_log(battlelog, username)
+    if not log_opponent:
+        return False
+    return normalize_name(log_opponent) == normalize_name(tournament_opponent)
 
 
 def prompt_string(title, prompt, *, secret=False):
@@ -181,7 +261,7 @@ def save_to_excel(my_deck, opponents_deck, win_or_loss):
     workbook.save(EXCEL_FILE)
 
 
-def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_path=None):
+def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_path=None, is_tournament=False):
     db.add_battle(
         my_deck=my_deck,
         opponent_deck=opponents_deck,
@@ -190,6 +270,7 @@ def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_
         confidence=confidence,
         deck_source="AI" if not is_local_only_mode() and load_api_key() else "Local",
         log_file=os.path.abspath(log_file_path) if log_file_path else latest_log_file(),
+        is_tournament=is_tournament,
     )
 
 

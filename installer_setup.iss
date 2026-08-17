@@ -38,7 +38,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "autostart"; Description: "Start automatically with Windows (Recommended)"; GroupDescription: "Auto-Start:"; Flags: checked
+Name: "autostart"; Description: "Start automatically with Windows (Recommended)"; GroupDescription: "Auto-Start:"
 
 [Files]
 ; Core Python Files

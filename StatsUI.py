@@ -25,7 +25,12 @@ from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QLinearGradient, QFon
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QSizePolicy
 from PySide6.QtTest import QTest
 from BattleDatabase import BattleDatabase
-from deck_analytics import bayesian_binomial_summary, match_meta_row, wilson_interval
+from deck_analytics import (
+    bayesian_binomial_summary,
+    match_meta_row,
+    rank_weighted_winrate,
+    wilson_interval,
+)
 from app_settings import (
     clear_api_key,
     load_api_key,
@@ -121,6 +126,10 @@ LIMITLESS_DASHBOARD_URL = "https://play.limitlesstcg.com/dashboard"
 LIMITLESS_LOGIN_URL = "https://play.limitlesstcg.com/login"
 LIMITLESS_PROFILE_DIR = os.path.join(BASE_DIR, ".limitless_web_profile")
 LIMITLESS_DASHBOARD_STATE_FILE = os.path.join(BASE_DIR, ".limitless_dashboard_state.json")
+# Shared flag file written by the Limitless dashboard manager and read by
+# AIParseBattleLog.py so battles played while enrolled in a tournament get
+# tagged and weighted as tournament games.
+LIMITLESS_TOURNAMENT_FLAG_FILE = os.path.join(BASE_DIR, ".in_tournament")
 LIMITLESS_SOUND_FILE = os.path.join(BASE_DIR, "ding.mp3")
 LIMITLESS_CHECK_INTERVAL_MS = 60000
 LIMITLESS_CHECK_DELAY_MS = 12000
@@ -604,6 +613,7 @@ class LimitlessDashboardManager(QObject):
         self.background_enabled = True
         self.auto_checkin_enabled = True
         self.authenticated = False
+        self.in_tournament = False
         self.last_status = "Limitless dashboard idle."
         self.last_checkin = None
         self.last_chat_state = {}
@@ -655,6 +665,30 @@ class LimitlessDashboardManager(QObject):
                     },
                     handle,
                 )
+        except Exception:
+            pass
+
+    def _update_tournament_flag(self, in_tournament, opponent=None):
+        """Persist the current tournament-match state to a shared flag file.
+
+        AIParseBattleLog.py reads this file so battles played while the player
+        is actively in a Limitless tournament match get tagged and weighted as
+        tournament games.
+
+        The flag stores the opponent's username (when known) so a battle is
+        only tagged as a tournament game if the battle-log opponent matches
+        the opponent in the tournament chat. This avoids false positives from
+        simply being enrolled in a tournament days in advance.
+        """
+        self.in_tournament = bool(in_tournament)
+        try:
+            if self.in_tournament:
+                payload = {"in_tournament": True, "opponent": (opponent or "").strip()}
+                with open(LIMITLESS_TOURNAMENT_FLAG_FILE, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle)
+            else:
+                if os.path.exists(LIMITLESS_TOURNAMENT_FLAG_FILE):
+                    os.remove(LIMITLESS_TOURNAMENT_FLAG_FILE)
         except Exception:
             pass
 
@@ -838,10 +872,20 @@ class LimitlessDashboardManager(QObject):
                         url: window.location.href
                     });
                 });
+
+                // Detect whether the player is enrolled in / checked into a
+                // Limitless tournament. We look for tournament cards on the
+                // dashboard that mention check-in, "enrolled", "registered",
+                // "round", or a tournament/event heading.
+                const bodyText = (document.body ? document.body.innerText : '').replace(/\\s+/g, ' ').trim();
+                const tournamentHints = /check[\\s-]?in|enrolled|registered|tournament|round \\d+|\\brounds?\\b|\\bstandings\\b|\\bdecklist\\b/i;
+                const inTournament = tournamentHints.test(bodyText) && !/\\/login(?:[?#]|$)/i.test(window.location.pathname + window.location.search);
+
                 return JSON.stringify({
                     url: window.location.href,
                     title: document.title || '',
                     loggedIn: !/\\/login(?:[?#]|$)/i.test(window.location.pathname + window.location.search) && !loginForm && !/\\blog\\s*in\\b|\\bsign\\s*in\\b/i.test(authText),
+                    inTournament,
                     candidates
                 });
             })();
@@ -866,6 +910,8 @@ class LimitlessDashboardManager(QObject):
             return
         self.authenticated = bool(result.get("loggedIn"))
         self.auth_state_changed.emit(self.authenticated)
+        # Persist tournament-enrollment state for AIParseBattleLog to read.
+        self._update_tournament_flag(bool(result.get("inTournament")))
         if not self.authenticated:
             self.last_checkin = None
             self.last_status = "Limitless dashboard is waiting for login."
@@ -958,6 +1004,7 @@ class LimitlessDashboardManager(QObject):
                 let messages = [];
                 let header = '';
                 let subtitle = '';
+                let opponent = '';
 
                 if (best) {
                     const headerNode = best.node.closest('main, article, section, div')?.querySelector('h1, h2, h3');
@@ -973,6 +1020,12 @@ class LimitlessDashboardManager(QObject):
                         if (line.length < 2) continue;
                         if (/^round\b/i.test(line) || /\bvs\b/i.test(line) || /\btable\b/i.test(line)) {
                             if (!subtitle) subtitle = line;
+                            // Extract the opponent username from "Round 1 vs OpponentName"
+                            // or "vs OpponentName" patterns.
+                            const vsMatch = line.match(/\bvs\.?\s+([A-Za-z0-9_\- ]+)/i);
+                            if (vsMatch && vsMatch[1]) {
+                                opponent = clean(vsMatch[1]);
+                            }
                             continue;
                         }
                         filtered.push(line);
@@ -986,6 +1039,7 @@ class LimitlessDashboardManager(QObject):
                     hasChat,
                     header,
                     subtitle,
+                    opponent,
                     messages,
                     pageTextSnippet: pageText.slice(0, 400)
                 });
@@ -1071,6 +1125,7 @@ class LimitlessDashboardManager(QObject):
             "title": state.get("title") or "",
             "header": state.get("header") or "Limitless Match",
             "subtitle": state.get("subtitle") or "",
+            "opponent": str(state.get("opponent") or "").strip(),
             "messages": normalized_messages[-8:],
             "visible": bool(normalized_messages),
         }
@@ -1078,6 +1133,13 @@ class LimitlessDashboardManager(QObject):
             return
         self.last_chat_state = normalized
         self.chat_state_changed.emit(normalized)
+        # If we have a tournament match with a known opponent, persist it so
+        # AIParseBattleLog can match the battle-log opponent against it.
+        # If the match chat is gone (no opponent), clear the tournament flag.
+        if normalized.get("opponent"):
+            self._update_tournament_flag(True, opponent=normalized["opponent"])
+        elif self.in_tournament:
+            self._update_tournament_flag(False)
 
     def handle_checkin_requested(self):
         overlay = self.get_overlay()
@@ -2771,6 +2833,7 @@ class StatsWindow(QWidget):
 
     def _create_deck_visual_metrics(self, analysis):
         summary = analysis.get("summary", {})
+        rank_summary = analysis.get("rank_summary", {})
         bayes_pct = summary.get("bayes_mean", 0) * 100.0
         prob_even = summary.get("probability_above_even", 0) * 100.0
         ci_low = summary.get("ci_low", 0) * 100.0
@@ -2779,6 +2842,22 @@ class StatsWindow(QWidget):
         confidence_label = summary.get("confidence_label", "Low")
         confidence_note = summary.get("confidence_note", "")
 
+        # Rank-weighted Elo win rate metrics.
+        rw_pct = rank_summary.get("weighted_winrate", 0.0) * 100.0
+        rw_low = rank_summary.get("ci_low", 0.0) * 100.0
+        rw_high = rank_summary.get("ci_high", 0.0) * 100.0
+        rw_eff_n = rank_summary.get("effective_n", 0.0)
+        rw_avg_rank = rank_summary.get("avg_rank")
+        rw_conf = rank_summary.get("confidence_label", "Low")
+        rw_note = rank_summary.get("confidence_note", "")
+        rw_tourney_games = rank_summary.get("tournament_games", 0)
+        if rw_avg_rank is not None:
+            rw_note = f"Avg Elo {rw_avg_rank:.0f} • {rw_note}"
+        else:
+            rw_note = f"No rank data recorded • {rw_note}"
+        if rw_tourney_games:
+            rw_note = f"🏆 {rw_tourney_games} tournament game(s) • {rw_note}"
+
         container = QWidget()
         grid = QGridLayout(container)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -2786,6 +2865,21 @@ class StatsWindow(QWidget):
         grid.setVerticalSpacing(8)
 
         cards = [
+            self._create_scale_metric_card(
+                "Rank-Weighted Win Rate",
+                f"{rw_pct:.1f}%",
+                rw_pct / 100.0,
+                self._percent_accent(rw_pct),
+                f"Elo-adjusted (eff. n={rw_eff_n:.1f}). {rw_note}",
+            ),
+            self._create_interval_metric_card(
+                "Rank-Weighted 95% CI",
+                rw_low,
+                rw_pct,
+                rw_high,
+                "#6BB6E8",
+                "Confidence interval on the Elo-weighted win rate.",
+            ),
             self._create_scale_metric_card(
                 "Bayesian Win Rate",
                 f"{bayes_pct:.1f}%",
@@ -3116,6 +3210,11 @@ class StatsWindow(QWidget):
 
     def _build_deck_analysis(self, deck_name, games, wins, losses, ties=0):
         summary = bayesian_binomial_summary(wins, losses, ties)
+        # Rank-weighted Elo win rate: weights each battle by the rank it was
+        # played at, so high-rank results count more and sub-Masterball games
+        # are heavily discounted.
+        rank_battles = self.db.get_deck_battles_with_rank(deck_name)
+        rank_summary = rank_weighted_winrate(rank_battles)
         matched_meta = self._match_limitless_row(deck_name)
         opponent_rows = self.db.get_deck_matchups(deck_name)
         matchup_entries = []
@@ -3157,6 +3256,7 @@ class StatsWindow(QWidget):
             "ties": ties,
             "record": self._format_record_text(wins, losses, ties),
             "summary": summary,
+            "rank_summary": rank_summary,
             "matchups": matchup_entries,
             "matched_meta": matched_meta,
             "deck_icons": deck_icons,
@@ -3267,7 +3367,7 @@ class StatsWindow(QWidget):
             layout.addWidget(empty)
             return card
 
-        for timestamp, my_deck, opp_deck, result, my_rank, log_file in recent:
+        for timestamp, my_deck, opp_deck, result, my_rank, log_file, is_tournament in recent:
             row = ClickableFrame() if log_file else QFrame()
             row.setObjectName("deckRecentBattleRow")
             if log_file:
@@ -3299,6 +3399,20 @@ class StatsWindow(QWidget):
             info.addWidget(stamp)
 
             row_layout.addLayout(info)
+            if is_tournament:
+                tourney_tag = QLabel("🏆 Limitless Tournament")
+                tourney_tag.setStyleSheet("""
+                    QLabel {
+                        color: #FFD54F;
+                        background-color: rgba(255, 213, 79, 0.12);
+                        border: 1px solid rgba(255, 213, 79, 0.45);
+                        border-radius: 3px;
+                        font-size: 8px;
+                        font-weight: 600;
+                        padding: 1px 5px;
+                    }
+                """)
+                row_layout.addWidget(tourney_tag)
             row_layout.addStretch()
             layout.addWidget(row)
 
@@ -4004,8 +4118,8 @@ class StatsWindow(QWidget):
         battle_mgmt_layout.addWidget(battles_label)
         
         self.battle_mgmt_table = self._make_meta_table(
-            ["Time", "My Deck", "Opponent", "Result", "Rank", "Confidence", "Source", "Log", "", ""],
-            [154, 150, 150, 74, 64, 84, 72, 98, 68, 64],
+            ["Time", "My Deck", "Opponent", "Result", "Rank", "Confidence", "Source", "Log", "Tournament", "", ""],
+            [154, 150, 150, 74, 64, 84, 72, 98, 90, 68, 64],
             sortable=False,
             stretch_last=False,
         )
@@ -5984,7 +6098,7 @@ class StatsWindow(QWidget):
                 return
             
             for battle in battles:
-                timestamp, my_deck, opp_deck, result, my_rank, log_file = battle
+                timestamp, my_deck, opp_deck, result, my_rank, log_file, is_tournament = battle
                 
                 battle_row = QPushButton()  # Changed to QPushButton for clickability
                 battle_row.setFixedHeight(32)
@@ -6033,6 +6147,22 @@ class StatsWindow(QWidget):
                 decks_label = QLabel(decks_text)
                 decks_label.setStyleSheet("color: rgba(255, 255, 255, 0.8); font-size: 10px;")
                 layout.addWidget(decks_label)
+
+                # Yellow "Limitless Tournament" tag for tournament games
+                if is_tournament:
+                    tourney_tag = QLabel("🏆 Limitless Tournament")
+                    tourney_tag.setStyleSheet("""
+                        QLabel {
+                            color: #FFD54F;
+                            background-color: rgba(255, 213, 79, 0.12);
+                            border: 1px solid rgba(255, 213, 79, 0.45);
+                            border-radius: 3px;
+                            font-size: 8px;
+                            font-weight: 600;
+                            padding: 1px 5px;
+                        }
+                    """)
+                    layout.addWidget(tourney_tag)
                 
                 layout.addStretch()
                 
@@ -6424,7 +6554,7 @@ class StatsWindow(QWidget):
 
             for row, battle in enumerate(battles):
                 table.insertRow(row)
-                battle_id, timestamp, my_deck, opp_deck, result, my_rank, confidence, deck_source, log_file = battle
+                battle_id, timestamp, my_deck, opp_deck, result, my_rank, confidence, deck_source, log_file, is_tournament = battle
 
                 try:
                     time_obj = datetime.fromisoformat(timestamp)
@@ -6441,6 +6571,7 @@ class StatsWindow(QWidget):
                     self._make_battle_mgmt_item(battle_id, confidence, editable=True),
                     self._make_battle_mgmt_item(battle_id, deck_source, editable=True),
                     self._make_battle_mgmt_item(battle_id, os.path.basename(log_file) if log_file else "", editable=False),
+                    self._make_battle_mgmt_item(battle_id, "🏆" if is_tournament else "", editable=False),
                 ]
                 for column, item in enumerate(items):
                     table.setItem(row, column, item)
@@ -6448,17 +6579,17 @@ class StatsWindow(QWidget):
                 if log_file:
                     self._populate_battle_mgmt_action_cell(
                         row,
-                        8,
+                        9,
                         "Replay",
                         lambda checked=False, lf=log_file: self.open_battle_replay(lf),
                         "battleMgmtReplayBtn",
                     )
                 else:
-                    table.setItem(row, 8, self._make_battle_mgmt_item(battle_id, "", editable=False))
+                    table.setItem(row, 9, self._make_battle_mgmt_item(battle_id, "", editable=False))
 
                 self._populate_battle_mgmt_action_cell(
                     row,
-                    9,
+                    10,
                     "Delete",
                     lambda checked=False, bid=battle_id: self.delete_battle(bid),
                     "battleMgmtDeleteBtn",

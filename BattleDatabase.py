@@ -34,9 +34,19 @@ class BattleDatabase:
                 my_rank INTEGER,
                 confidence INTEGER,
                 deck_source TEXT,
-                log_file TEXT
+                log_file TEXT,
+                is_tournament INTEGER DEFAULT 0
             )
         """)
+
+        # Add is_tournament column to existing databases (migration).
+        try:
+            cursor.execute("PRAGMA table_info(battles)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "is_tournament" not in columns:
+                cursor.execute("ALTER TABLE battles ADD COLUMN is_tournament INTEGER DEFAULT 0")
+        except Exception:
+            pass
         
         # Rank history table - tracks rank changes over time
         cursor.execute("""
@@ -65,16 +75,16 @@ class BattleDatabase:
         print(f"✓ Database initialized at {self.db_path}")
     
     def add_battle(self, my_deck, opponent_deck, result, my_rank=None, confidence=None, 
-                   deck_source="AI", log_file=None):
+                   deck_source="AI", log_file=None, is_tournament=False):
         """Add a new battle record"""
-        print(f"[DB] add_battle called: {my_deck} vs {opponent_deck} = {result}, Rank: {my_rank}")
+        print(f"[DB] add_battle called: {my_deck} vs {opponent_deck} = {result}, Rank: {my_rank}, Tournament: {is_tournament}")
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute("""
-            INSERT INTO battles (my_deck, opponent_deck, result, my_rank, confidence, deck_source, log_file)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (my_deck, opponent_deck, result, my_rank, confidence, deck_source, log_file))
+            INSERT INTO battles (my_deck, opponent_deck, result, my_rank, confidence, deck_source, log_file, is_tournament)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (my_deck, opponent_deck, result, my_rank, confidence, deck_source, log_file, 1 if is_tournament else 0))
         
         battle_id = cursor.lastrowid
         conn.commit()
@@ -119,7 +129,7 @@ class BattleDatabase:
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT id, timestamp, my_deck, opponent_deck, result, my_rank, confidence, deck_source, log_file
+            SELECT id, timestamp, my_deck, opponent_deck, result, my_rank, confidence, deck_source, log_file, is_tournament
             FROM battles
             ORDER BY timestamp DESC
             LIMIT ?
@@ -285,7 +295,7 @@ class BattleDatabase:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT timestamp, my_deck, opponent_deck, result, my_rank, log_file
+            SELECT timestamp, my_deck, opponent_deck, result, my_rank, log_file, is_tournament
             FROM battles
             ORDER BY timestamp DESC
             LIMIT ?
@@ -450,7 +460,7 @@ class BattleDatabase:
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT timestamp, my_deck, opponent_deck, result, my_rank, log_file
+            SELECT timestamp, my_deck, opponent_deck, result, my_rank, log_file, is_tournament
             FROM battles
             WHERE my_deck = ?
             ORDER BY timestamp DESC
@@ -478,6 +488,63 @@ class BattleDatabase:
         conn.close()
 
         return rows if rows else []
+
+    def get_deck_battles_with_rank(self, deck_name):
+        """Get per-battle results WITH their recorded rank (Elo) for a deck.
+
+        Returns a list of dicts: {result, my_rank, is_tournament}. Battles
+        without a recorded rank are included with my_rank=None so callers can
+        decide how to treat them (e.g. fall back to a neutral weight).
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT result, my_rank, is_tournament
+            FROM battles
+            WHERE my_deck = ?
+            ORDER BY timestamp ASC
+        """, (deck_name,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {
+                "result": str(result or "").strip(),
+                "my_rank": my_rank,
+                "is_tournament": bool(is_tournament),
+            }
+            for result, my_rank, is_tournament in rows
+        ]
+
+    def get_all_battles_with_rank(self):
+        """Get every battle's result and rank across all decks.
+
+        Returns a list of dicts: {my_deck, result, my_rank, is_tournament}.
+        Used for the overall rank-weighted win rate.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT my_deck, result, my_rank, is_tournament
+            FROM battles
+            ORDER BY timestamp ASC
+        """)
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            {
+                "my_deck": str(my_deck or "").strip(),
+                "result": str(result or "").strip(),
+                "my_rank": my_rank,
+                "is_tournament": bool(is_tournament),
+            }
+            for my_deck, result, my_rank, is_tournament in rows
+        ]
 
 
 if __name__ == "__main__":

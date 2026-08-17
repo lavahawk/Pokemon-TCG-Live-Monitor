@@ -14,6 +14,7 @@
 .max_rank
 .monitor_pid
 .console_pref
+.in_tournament
 
 # Meta / icon caches and user preferences
 .meta_icon_cache/
