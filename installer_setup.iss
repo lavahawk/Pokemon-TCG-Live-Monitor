@@ -59,6 +59,9 @@ Source: "Run_Headless.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "AutoClicker.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "SetupStartup.py"; DestDir: "{app}"; Flags: ignoreversion
 
+; One-shot setup script run by the installer (no separate .bat needed)
+Source: "setup_install.py"; DestDir: "{app}"; Flags: ignoreversion
+
 ; Batch Files
 Source: "Run_Headless.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Run_TCGLiveMonitor_Command_Prompt.bat"; DestDir: "{app}"; Flags: ignoreversion
@@ -91,8 +94,9 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\Run_Headless.bat"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
-; Run post-installation setup (installs Python deps, Tesseract, configures startup)
-Filename: "{app}\Installers\INSTALL_COMPLETE_v2.3.bat"; Description: "Complete Installation (Install Python, Tesseract, Dependencies)"; Flags: postinstall shellexec skipifsilent
+; Run the one-shot setup script directly (installs deps, downloads Tesseract,
+; configures startup). No separate .bat file is needed.
+Filename: "{sys}\python.exe"; Parameters: """{app}\setup_install.py"""; Description: "Complete Setup (Install Dependencies + Tesseract)"; Flags: postinstall shellexec skipifsilent waituntilterminated
 Filename: "{app}\README.md"; Description: "View Documentation"; Flags: postinstall shellexec skipifsilent unchecked
 
 [Code]

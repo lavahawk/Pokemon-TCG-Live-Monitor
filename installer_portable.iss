@@ -63,13 +63,15 @@ Source: "Run_Headless.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "AutoClicker.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "SetupStartup.py"; DestDir: "{app}"; Flags: ignoreversion
 
+; One-shot setup script run by the installer (no separate .bat needed)
+Source: "setup_install.py"; DestDir: "{app}"; Flags: ignoreversion
+
 ; Batch Files
 Source: "Run_Headless.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Run_TCGLiveMonitor_Command_Prompt.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Install_Dependencies.bat"; DestDir: "{app}"; Flags: ignoreversion
 
-; Portable setup script (downloads Tesseract + deps with fallbacks)
-Source: "Installers\INSTALL_PORTABLE_v2.3.bat"; DestDir: "{app}\Installers"; Flags: ignoreversion
+; Installers
 Source: "Installers\README.md"; DestDir: "{app}\Installers"; Flags: ignoreversion
 
 ; Configuration
@@ -91,8 +93,9 @@ Name: "{app}\tesseract"; Permissions: users-modify
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\Run_Headless.bat"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
-; Run the portable setup script (downloads Tesseract + deps with fallbacks).
-Filename: "{app}\Installers\INSTALL_PORTABLE_v2.3.bat"; Description: "Complete Portable Setup (Download Tesseract + Dependencies)"; Flags: postinstall shellexec skipifsilent
+; Run the one-shot setup script directly (installs deps, downloads Tesseract,
+; configures startup). No separate .bat file is needed.
+Filename: "{sys}\python.exe"; Parameters: """{app}\setup_install.py"""; Description: "Complete Setup (Install Dependencies + Tesseract)"; Flags: postinstall shellexec skipifsilent waituntilterminated
 Filename: "{app}\README.md"; Description: "View Documentation"; Flags: postinstall shellexec skipifsilent unchecked
 
 [Code]

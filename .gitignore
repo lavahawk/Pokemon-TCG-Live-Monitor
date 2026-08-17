@@ -64,6 +64,9 @@ Archived_BattleLogs/
 debug_*.png
 debug_*.jpg
 
+# Tesseract OCR (downloaded by setup_install.py at install time)
+tesseract/
+
 # Build and release artifacts
 Installers/Build/
 *.spec
