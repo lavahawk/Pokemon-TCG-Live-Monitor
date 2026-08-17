@@ -274,7 +274,9 @@ class MinimalOverlay(QWidget):
             dpr = self.devicePixelRatioF() or 1.0
             phys_w = int(self.width() * dpr)
             phys_h = int(self.height() * dpr)
-            margin = 8  # physical pixels inside the visible window edge
+            # Inset the mini UI a few pixels inside the visible window edge so
+            # it doesn't sit flush against (or clip) the corner.
+            margin = 12  # physical pixels inside the visible window edge
 
             x = game_right - phys_w - margin
             y = game_bottom - phys_h - margin
