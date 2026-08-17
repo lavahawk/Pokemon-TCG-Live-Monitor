@@ -2,25 +2,25 @@
 
 This folder contains all installation and launcher scripts for v2.3.
 
-## 📦 Installation Files
+## Installation Files
 
 ### INSTALL_COMPLETE_v2.3.bat (Main Installer)
 **Right-click → Run as Administrator**
 
 Complete automated installation:
 - ✅ Checks/installs Python 3.10+
-- ✅ Checks/installs Tesseract OCR
-- ✅ Creates virtual environment
-- ✅ Installs all dependencies (50+ packages)
-- ✅ Optional OpenAI API key setup (or Local-Only mode)
-- ✅ Adds to Windows Task Scheduler for auto-start
-- ✅ Configures headless mode (no console window)
+- Checks/installs Tesseract OCR
+- Creates virtual environment
+- Installs all dependencies (50+ packages)
+- Optional OpenAI API key setup (or Local-Only mode)
+- Adds to Windows Task Scheduler for auto-start
+- Configures headless mode (no console window)
 
 **Note:** This is the ONLY file users need to run for first-time setup!
 
 ---
 
-## 🚀 Launcher Files
+## Launcher Files
 
 ### Start_GUI_Mode_v2.3.bat
 **Double-click to run**
@@ -34,7 +34,7 @@ Use this when auto-start is disabled or for testing.
 
 ---
 
-## 🛑 Utility Files
+## Utility Files
 
 ### Remove_AutoStart_v2.3.bat
 **Right-click → Run as Administrator**
@@ -46,7 +46,7 @@ Removes the auto-start task from Windows Task Scheduler:
 
 ---
 
-## 📋 What Gets Installed
+## What Gets Installed
 
 ### System Requirements
 - Windows 10/11 (64-bit)
@@ -105,14 +105,14 @@ The installer prompts for your OpenAI API key and saves it to `.openai_key`:
 ### Local-Only Mode (No API Key)
 If you skip the API key, the app runs in **Local-Only mode**:
 - ✅ Full battle tracking, OCR rank/deck detection, overlay, and stats database
-- ✅ You manually enter the opponent's deck name after each battle
-- ✅ No API key or internet required for core functionality
+- You manually enter the opponent's deck name after each battle
+- No API key or internet required for core functionality
 
 You can add an API key later at any time by creating a `.openai_key` file in the app folder.
 
 ---
 
-## 🎯 Quick Start
+## Quick Start
 
 **For new users:**
 1. Right-click `INSTALL_COMPLETE_v2.3.bat` → Run as Administrator
@@ -129,7 +129,7 @@ You can add an API key later at any time by creating a `.openai_key` file in the
 
 ---
 
-## 📂 File Locations
+## File Locations
 
 After installation:
 ```
@@ -152,7 +152,7 @@ PokemonTCGLiveMonitor/
 
 ---
 
-## 🆘 Troubleshooting
+## Troubleshooting
 
 **"This installer requires Administrator privileges"**
 - Right-click the .bat file → Run as Administrator
@@ -185,7 +185,7 @@ PokemonTCGLiveMonitor/
 
 ---
 
-## 📄 License
+## License
 
 Pokemon TCG Live Monitor v2.0
 For personal use only.

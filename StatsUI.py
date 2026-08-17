@@ -3039,7 +3039,7 @@ class StatsWindow(QWidget):
         else:
             rw_note = f"No rank data recorded • {rw_note}"
         if rw_tourney_games:
-            rw_note = f"🏆 {rw_tourney_games} tournament game(s) • {rw_note}"
+            rw_note = f"{rw_tourney_games} tournament game(s) • {rw_note}"
 
         container = QWidget()
         grid = QGridLayout(container)
@@ -3583,7 +3583,7 @@ class StatsWindow(QWidget):
 
             row_layout.addLayout(info)
             if is_tournament:
-                tourney_tag = QLabel("🏆 Limitless Tournament")
+                tourney_tag = QLabel("Limitless Tournament")
                 tourney_tag.setStyleSheet("""
                     QLabel {
                         color: #FFD54F;
@@ -4401,7 +4401,7 @@ class StatsWindow(QWidget):
         layout.addWidget(header)
         
         # Description
-        desc = QLabel("If you enjoy using this tool and want to support its development,\nconsider buying me a coffee! ☕")
+        desc = QLabel("If you enjoy using this tool and want to support its development,\nconsider buying me a coffee!")
         desc.setStyleSheet("color: rgba(255, 255, 255, 0.7); font-size: 13px; line-height: 1.5;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
@@ -5081,7 +5081,7 @@ class StatsWindow(QWidget):
         vlayout.addLayout(header_row)
 
         note = QLabel(
-            "📍 Japanese City League Season 4 • ~6,172 players across 450+ events "
+            "Japanese City League Season 4 • ~6,172 players across 450+ events "
             "• Includes JP-exclusive formats not yet released in the West"
         )
         note.setStyleSheet("color: rgba(255,255,255,0.45); font-size: 10px;")
@@ -5502,7 +5502,7 @@ class StatsWindow(QWidget):
             methods.append("Scheduled Task (elevated)")
 
         if methods:
-            print("\n✅ Successfully added to Windows startup!")
+            print("\nSuccessfully added to Windows startup!")
             print("   The monitor will now start automatically when you log in.")
             print("   Startup mode: Headless (no console window)")
             print(f"   Methods: {', '.join(methods)}")
@@ -5525,12 +5525,12 @@ class StatsWindow(QWidget):
     def remove_autorun(self):
         """Remove from Windows startup"""
         print("\n" + "="*50)
-        print("🔧 Removing TCG Live Monitor from Windows Startup...")
+        print("Removing TCG Live Monitor from Windows Startup...")
         print("="*50)
         report = startup_utils.disable_startup()
         if report["registry_ok"] and report["task_ok"]:
             removed = ", ".join(report["removed_tasks"]) if report["removed_tasks"] else "no scheduled tasks were present"
-            print("\n✅ Successfully removed Windows startup!")
+            print("\nSuccessfully removed Windows startup!")
             print("   The monitor will no longer start automatically.")
             print(f"   Removed tasks: {removed}")
             print("="*50 + "\n")
@@ -6342,7 +6342,7 @@ class StatsWindow(QWidget):
 
                 # Yellow "Limitless Tournament" tag for tournament games
                 if is_tournament:
-                    tourney_tag = QLabel("🏆 Limitless Tournament")
+                    tourney_tag = QLabel("Limitless Tournament")
                     tourney_tag.setStyleSheet("""
                         QLabel {
                             color: #FFD54F;
@@ -6799,7 +6799,7 @@ class StatsWindow(QWidget):
                     self._make_battle_mgmt_item(battle_id, confidence, editable=True),
                     self._make_battle_mgmt_item(battle_id, deck_source, editable=True),
                     self._make_battle_mgmt_item(battle_id, os.path.basename(log_file) if log_file else "", editable=False),
-                    self._make_battle_mgmt_item(battle_id, "🏆" if is_tournament else "", editable=False),
+                    self._make_battle_mgmt_item(battle_id, "T" if is_tournament else "", editable=False),
                 ]
                 for column, item in enumerate(items):
                     table.setItem(row, column, item)

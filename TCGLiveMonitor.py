@@ -127,7 +127,7 @@ def _acquire_single_instance():
 # Initialize colorama
 init(autoreset=True)
 
-# Reconfigure stdout/stderr to UTF-8 so emoji (🎮, ✗, ✓, 🏆) don't crash the
+# Reconfigure stdout/stderr to UTF-8 so unicode symbols (✗, ✓) don't crash the
 # console with a UnicodeEncodeError on Windows (cp1252 default).
 try:
     if sys.stdout is not None:
@@ -467,7 +467,7 @@ def start_overlay():
     try:
         overlay_script = os.path.join(BASE_DIR, "OverlayUI.py")
         if os.path.exists(overlay_script):
-            print(Fore.CYAN + "🎮 Starting overlay UI...")
+            print(Fore.CYAN + "Starting overlay UI...")
             # Use sys.executable to get current Python (venv-aware)
             # Use pythonw to run GUI without console window
             python_exe = sys.executable
@@ -486,7 +486,7 @@ def start_overlay():
 def detect_initial_stats():
     """Detect rank and deck on startup"""
     print(Fore.YELLOW + "\n" + "="*50)
-    print(Fore.CYAN + "📊 Detecting initial rank and deck...")
+    print(Fore.CYAN + "Detecting initial rank and deck...")
     print(Fore.YELLOW + "   Make sure you're on the main menu!")
     print(Fore.YELLOW + "="*50)
     

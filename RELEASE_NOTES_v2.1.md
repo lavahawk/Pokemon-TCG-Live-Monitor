@@ -2,44 +2,44 @@
 
 **Release Date:** January 9, 2026
 
-## 🎯 Overview
+## Overview
 
 Pokemon TCG Live Monitor v2.1 is a comprehensive battle tracking and statistics system with AI-powered analysis, OCR rank detection, and a modern overlay UI. This release includes major improvements to process management, console control, and battle database functionality.
 
 ---
 
-## ✨ What's New in v2.1
+## What's New in v2.1
 
-### 🔧 Process Management
+### Process Management
 - **Complete Application Shutdown** - Close entire monitor system from Stats Dashboard
 - **PID File System** - Track and manage monitor process across UI components
 - **Headless Mode Support** - Run without console window using `Run_Headless.bat`
 - **Command-Line Arguments** - `--headless` and `--no-overlay` flags for flexible operation
 
-### 🖥️ Console Management
+### Console Management
 - **Console Visibility Toggle** - Hide/show console window while monitor runs
 - **Persistent Preferences** - Console state saved and restored across sessions
 - **Smart Detection** - Automatically finds monitor console even when launched from child process
 - **Cross-Process Control** - Stats UI can control monitor's console window
 
-### 📊 Enhanced Stats Dashboard
+### Enhanced Stats Dashboard
 - **Battle Management** - View and delete recent battles (last 20)
 - **Clickable Battle Logs** - Click any battle to open its log file
 - **Improved Graphs** - Better date formatting and tick spacing
 - **Confidence Intervals** - Win rate stats now show 95% confidence intervals for decks with 3+ games
 - **Advanced Tab** - New settings, debugging tools, and AutoRun management
 
-### 🎨 Overlay Improvements
+### Overlay Improvements
 - **Clickable Arrow** - Toggle stats dashboard with small arrow button (▲/▼)
 - **Smart Stats Updates** - Database queries for faster W/L tracking
 - **Version Display** - Shows v2.1 in overlay title
 
-### 🗄️ Database Enhancements
+### Database Enhancements
 - **Automatic Rank Updates** - Most recent battle updated with detected rank
 - **Session Stats Sync** - Deleting battles updates session statistics
 - **Better Data Integrity** - Improved error handling and transaction management
 
-### 🛠️ New Tools & Scripts
+### New Tools & Scripts
 - **AutoClicker Module** - Template-based button clicking for automation
 - **SetupAutoClicker.py** - Interactive tool to capture button templates
 - **Run_Headless.py/.bat** - Launch monitor without console
@@ -47,7 +47,7 @@ Pokemon TCG Live Monitor v2.1 is a comprehensive battle tracking and statistics 
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### Quick Install (Recommended)
 
@@ -98,7 +98,7 @@ Pokemon TCG Live Monitor v2.1 is a comprehensive battle tracking and statistics 
 
 ---
 
-## 🚀 Usage
+## Usage
 
 ### Starting the Monitor
 
@@ -141,43 +141,43 @@ Run_TCGLiveMonitor_Command_Prompt.bat
 
 ---
 
-## 🔧 Features
+## Features
 
 ### Core Monitoring
-✅ **Automated Battle Log Capture** - Monitors clipboard for battle logs  
-✅ **AI-Powered Deck Detection** - GPT-4 identifies decks from battle logs  
-✅ **OCR Rank Detection** - Auto-detects Elo from screen (zero config after setup)  
-✅ **SQLite Database** - Fast queries, complete battle history  
-✅ **Excel Export** - Compatible with v1.x Excel sheets  
-✅ **Sound Notifications** - Plays sound when battle detected  
+- **Automated Battle Log Capture** - Monitors clipboard for battle logs  
+- **AI-Powered Deck Detection** - GPT-4 identifies decks from battle logs  
+- **OCR Rank Detection** - Auto-detects Elo from screen (zero config after setup)  
+- **SQLite Database** - Fast queries, complete battle history  
+- **Excel Export** - Compatible with v1.x Excel sheets  
+- **Sound Notifications** - Plays sound when battle detected  
 
 ### Overlay UI
-✅ **8-bit Pokeball Icons** - Changes based on Elo tier (Nest/Quick/Poke/Great/Ultra/Master)  
-✅ **Click-Through Window** - Won't block gameplay  
-✅ **Auto-Follows Game** - Stays positioned in game window  
-✅ **Minimal Design** - 170x24px display with real-time stats  
-✅ **Expandable Dashboard** - Click arrow to open full stats  
+- **8-bit Pokeball Icons** - Changes based on Elo tier (Nest/Quick/Poke/Great/Ultra/Master)  
+- **Click-Through Window** - Won't block gameplay  
+- **Auto-Follows Game** - Stays positioned in game window  
+- **Minimal Design** - 170x24px display with real-time stats  
+- **Expandable Dashboard** - Click arrow to open full stats  
 
 ### Stats Dashboard
-✅ **Elo Progression Graph** - Track your rank over time (last 50 updates)  
-✅ **Win Rate Trend Graph** - Daily win rates for past 30 days  
-✅ **Deck Usage Statistics** - Most-played decks with win rates and confidence intervals  
-✅ **Recent Battles List** - Last 10 battles with clickable log files  
-✅ **Battle Management** - Delete incorrect/duplicate battles  
-✅ **Limitless TCG Integration** - Quick access to play.limitlesstcg.com  
-✅ **Modern Glass-Morphism UI** - Transparent, sleek design  
+- **Elo Progression Graph** - Track your rank over time (last 50 updates)  
+- **Win Rate Trend Graph** - Daily win rates for past 30 days  
+- **Deck Usage Statistics** - Most-played decks with win rates and confidence intervals  
+- **Recent Battles List** - Last 10 battles with clickable log files  
+- **Battle Management** - Delete incorrect/duplicate battles  
+- **Limitless TCG Integration** - Quick access to play.limitlesstcg.com  
+- **Modern Glass-Morphism UI** - Transparent, sleek design  
 
 ### Advanced Features
-✅ **AutoRun Configuration** - Add/remove from Windows Startup  
-✅ **Process Management** - Full control over monitor lifecycle  
-✅ **Console Toggle** - Hide/show console while running  
-✅ **Headless Operation** - Run completely in background  
-✅ **Debug Tools** - OCR test window, AI parser access  
-✅ **Battle Log Archive** - All logs saved with timestamps  
+- **AutoRun Configuration** - Add/remove from Windows Startup  
+- **Process Management** - Full control over monitor lifecycle  
+- **Console Toggle** - Hide/show console while running  
+- **Headless Operation** - Run completely in background  
+- **Debug Tools** - OCR test window, AI parser access  
+- **Battle Log Archive** - All logs saved with timestamps  
 
 ---
 
-## 📋 Requirements
+## Requirements
 
 ### Software
 - **Windows 10/11** (required for Win32 API features)
@@ -202,7 +202,7 @@ See `requirements.txt` for complete list:
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 BattleLogImport/
@@ -237,7 +237,7 @@ BattleLogImport/
 
 ---
 
-## 🐛 Known Issues
+## Known Issues
 
 ### Windows-Specific
 - Console management requires Windows (uses Win32 API)
@@ -255,7 +255,7 @@ BattleLogImport/
 
 ---
 
-## 🔄 Migration from v2.0
+## Migration from v2.0
 
 ### Automatic Migration
 - v2.1 is fully backwards compatible with v2.0
@@ -269,7 +269,7 @@ BattleLogImport/
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 This is an open-source project. Contributions welcome!
 
@@ -284,13 +284,13 @@ This is an open-source project. Contributions welcome!
 
 ---
 
-## 📄 License
+## License
 
 This project is open source. See LICENSE file for details.
 
 ---
 
-## ☕ Support Development
+## Support Development
 
 If you enjoy using this tool, consider supporting development:
 
@@ -298,14 +298,14 @@ If you enjoy using this tool, consider supporting development:
 
 ---
 
-## 📞 Contact
+## Contact
 
 - **GitHub:** https://github.com/lavahawk/Pokemon-TCG-Live-Monitor
 - **Issues:** https://github.com/lavahawk/Pokemon-TCG-Live-Monitor/issues
 
 ---
 
-## 🙏 Credits
+## Credits
 
 - **OCR:** Powered by Tesseract OCR
 - **AI Analysis:** Powered by OpenAI GPT-4
@@ -315,7 +315,7 @@ If you enjoy using this tool, consider supporting development:
 
 ---
 
-## 📝 Changelog
+## Changelog
 
 ### v2.1 (2026-01-09)
 - Added complete process management system
@@ -343,4 +343,4 @@ If you enjoy using this tool, consider supporting development:
 
 ---
 
-**Thank you for using Pokemon TCG Live Monitor!** 🎮📊
+**Thank you for using Pokemon TCG Live Monitor!** (≧▽≦)

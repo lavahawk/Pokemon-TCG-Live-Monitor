@@ -1,4 +1,4 @@
-# 🚀 QUICK START - Pokemon TCG Live Monitor v2.3
+# QUICK START - Pokemon TCG Live Monitor v2.3
 
 ## First Time Setup (5 minutes)
 
@@ -26,10 +26,10 @@ When you play Pokemon TCG Live, you'll see a small overlay in the bottom-right:
 - **0-0** = Today's wins-losses
 
 The overlay:
-- ✅ **Follows the game window**
-- ✅ **Click-through** (won't block your clicks)
-- ✅ **Updates automatically** after each battle
-- ✅ **Runs in background** (no console windows)
+- **Follows the game window**
+- **Click-through** (won't block your clicks)
+- **Updates automatically** after each battle
+- **Runs in background** (no console windows)
 
 ---
 
@@ -90,12 +90,12 @@ Total install size: ~555 MB
 
 ## Features
 
-✨ **AI Battle Analysis** - GPT-4o identifies decks and winners  
-📊 **SQLite Database** - Fast statistics and history  
-🎯 **OCR Rank Detection** - Reads your rank from the game screen  
-🎨 **Live Overlay UI** - 8-bit pokeball icons for league tiers  
-⚡ **Auto-Start** - Runs on login with no console window  
-📈 **Excel Integration** - Backup storage in spreadsheet  
+**AI Battle Analysis** - GPT-4o identifies decks and winners  
+**SQLite Database** - Fast statistics and history  
+**OCR Rank Detection** - Reads your rank from the game screen  
+**Live Overlay UI** - 8-bit pokeball icons for league tiers  
+**Auto-Start** - Runs on login with no console window  
+**Excel Integration** - Backup storage in spreadsheet  
 
 ---
 

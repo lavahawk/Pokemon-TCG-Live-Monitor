@@ -3,11 +3,11 @@
 
 ---
 
-## 📖 [Quick Start Guide →](QUICK_START_v2.0.md)
+## [Quick Start Guide →](QUICK_START_v2.0.md)
 
 ---
 
-## 🚀 Quick Install (v2.3)
+## Quick Install (v2.3)
 
 **For first-time setup or upgrade from v2.x:**
 
@@ -21,36 +21,36 @@ See **[Installers/README.md](Installers/README.md)** for full installation guide
 
 ---
 
-## ✨ What's New in v2.3
+## What's New in v2.3
 
-### ⚡ Performance
+### Performance
 - **Faster deck icon menus** — Sprite icons are cached in memory, so the deck icon picker and deck dashboards load instantly.
 - **Cached icon choices** — The Pokemon icon list is computed once and reused.
 
-### 🛠️ Reliability
+### Reliability
 - **Fixed numpy/OpenCV crash** — New installs no longer hit the `numpy.dtype size changed` binary incompatibility error during rank detection. numpy is pinned to `1.26.4`.
 - **Complete dependency set** — The installer now also installs the meta-analysis packages.
 
-### 🌐 Local-Only Mode (No API Key Required)
+### Local-Only Mode (No API Key Required)
 - **Works out of the box** — Full monitor, OCR rank/deck detection, overlay, and stats database all work without an OpenAI API key.
 - **Clear guidance** — When no API key is present, the app explains local-only mode and guides you through manual deck entry.
 
 ---
 
 ## Features
-✅ **Integrated Overlay UI** - Auto-starts with monitoring, follows game window  
-✅ **League Pokeball Icons** - 8-bit icons change based on Elo tier (Nest/Quick/Poke/Great/Ultra/Master)  
-✅ **Click-Through Overlay** - Won't block gameplay, completely transparent to clicks  
-✅ **OCR Rank Detection** - Auto-detects Elo from screen (zero false positives!)  
-✅ **Max Rank Tracking** - Tracks your highest rank achieved  
-✅ **OCR Deck Detection** - Detects actual deck name from screen  
-✅ **Automated Battle Log Capture** - Monitors clipboard for Pokemon TCG Live battle logs  
-✅ **AI-Powered Analysis** - Uses OpenAI GPT-4o to identify decks and match outcomes (optional)  
-✅ **Local-Only Mode** - Full functionality without an API key  
-✅ **SQLite Database** - Complete battle history with rank progression  
-✅ **Modern Stats Dashboard** - Graphs, matchups, meta analysis  
-✅ **Background Operation** - Runs silently without interrupting gameplay  
-✅ **Sound Notifications** - Plays sound when battle log is detected  
+- **Integrated Overlay UI** - Auto-starts with monitoring, follows game window  
+- **League Pokeball Icons** - 8-bit icons change based on Elo tier (Nest/Quick/Poke/Great/Ultra/Master)  
+- **Click-Through Overlay** - Won't block gameplay, completely transparent to clicks  
+- **OCR Rank Detection** - Auto-detects Elo from screen (zero false positives!)  
+- **Max Rank Tracking** - Tracks your highest rank achieved  
+- **OCR Deck Detection** - Detects actual deck name from screen  
+- **Automated Battle Log Capture** - Monitors clipboard for Pokemon TCG Live battle logs  
+- **AI-Powered Analysis** - Uses OpenAI GPT-4o to identify decks and match outcomes (optional)  
+- **Local-Only Mode** - Full functionality without an API key  
+- **SQLite Database** - Complete battle history with rank progression  
+- **Modern Stats Dashboard** - Graphs, matchups, meta analysis  
+- **Background Operation** - Runs silently without interrupting gameplay  
+- **Sound Notifications** - Plays sound when battle log is detected  
 
 ## Quick Start
 
