@@ -404,20 +404,25 @@ class BattleDatabase:
         return rows if rows else []
     
     def get_deck_usage_stats(self, limit=10):
-        """Get deck usage statistics for decks you have played."""
+        """Get deck usage statistics for decks you have played.
+
+        Rows are (my_deck, games_played, wins, losses, ties, last_played)
+        where last_played is the timestamp of the most recent battle.
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         query = """
-            SELECT 
+            SELECT
                 my_deck,
                 COUNT(*) as games_played,
                 SUM(CASE WHEN result = 'Win' THEN 1 ELSE 0 END) as wins,
                 SUM(CASE WHEN result = 'Loss' THEN 1 ELSE 0 END) as losses,
-                SUM(CASE WHEN lower(result) IN ('tie', 'draw') THEN 1 ELSE 0 END) as ties
+                SUM(CASE WHEN lower(result) IN ('tie', 'draw') THEN 1 ELSE 0 END) as ties,
+                MAX(timestamp) as last_played
             FROM battles
             GROUP BY my_deck
-            ORDER BY games_played DESC
+            ORDER BY last_played DESC, games_played DESC
         """
         params = ()
         if limit is not None:

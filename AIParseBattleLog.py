@@ -419,47 +419,86 @@ def _coerce_confidence_value(value, default=0):
     return max(0, min(100, int(round(numeric))))
 
 
+# Recent OpenAI model used for battle-log parsing. Falls back to older models
+# if the primary is unavailable (e.g. revoked or renamed).
+AI_MODELS = [
+    "gpt-5.4-nano-2026-03-17",
+    "gpt-4.1-mini",
+    "gpt-4o",
+]
+
+
 def ai_parse(battlelog, username, api_key):
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key)
     possible_decks = load_possible_decks()
     prompt = f"""
-Here is a list of the current top Pokemon TCG deck names from our latest Limitless top-50-by-count scrape. Prefer matching to one of these when the log supports it: {possible_decks}.
-The main attacker of each deck is usually the deck name but not always. Sometimes a deck is named for its engine rather than attacker.
-Below is a battle log. Determine the winner and the decks used by each player based on the cards used and held.
-If no battlelog was provided return blank.
-Please include a confidence value 0-100 that you got each deck correctly.
-My username is {username}. Report if I won or lost the battle.
+You are identifying Pokemon TCG deck archetypes from an official battle log.
+
+Here is the current top-deck list from the latest Limitless scrape, ordered by
+how many tournament finishes each has (most popular first). This list is fresh
+from today's data:
+{possible_decks}
+
+STRICT RULES for deck identification:
+1. Identify each deck by its KEY Pokemon cards that actually appear in the log
+   (played, drawn, held, or discarded). The deck name is usually its main
+   attacker, but sometimes it is named for its engine/support Pokemon instead.
+2. Prefer an EXACT match from the list above when the evidence supports it.
+3. NEVER name a Pokemon that does not appear anywhere in the log. If the log
+   shows Dragapult and Dusknoir but zero Blaziken cards, the answer CANNOT be
+   a Blaziken deck.
+4. Support/Item/Engine cards (Buddy-Buddy Poffin, Capturing Aroma, etc.) do
+   not define the archetype — the Pokemon line does.
+5. If no list entry matches the evidence, output the best descriptive
+   archetype name yourself (e.g. "Dragapult Dusknoir") rather than forcing a
+   wrong match.
+6. "My_deck" is {username}'s deck; "OpponentsDeck" is the opponent's.
+7. If no battlelog was provided, return blank fields.
+
+Also determine the winner of the battle and a confidence value 0-100 for each
+deck identification.
+
 Export the data as JSON with these fields: My_deck, OpponentsDeck, Win_or_Loss, Confidence
 Battlelog:
-\"\"\"{battlelog}\"\"\"
+<<<BEGIN BATTLELOG>>>
+{battlelog}
+<<<END BATTLELOG>>>
 """
 
-    completion = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": "You parse Pokemon TCG battle logs and return JSON only.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        response_format={"type": "json_object"},
-    )
-    payload = json.loads(completion.choices[0].message.content)
-    parsed = BattleLogOutput(
-        My_deck=_coerce_text_field(payload, "My_deck", "MyDeck", "my_deck"),
-        OpponentsDeck=_coerce_text_field(payload, "OpponentsDeck", "OpponentDeck", "opponent_deck", "Opponent"),
-        Win_or_Loss=_coerce_text_field(payload, "Win_or_Loss", "WinLoss", "Result", "result").title(),
-        Confidence=_coerce_confidence_value(payload.get("Confidence")),
-    )
-    return {
-        "My_deck": parsed.My_deck,
-        "OpponentsDeck": parsed.OpponentsDeck,
-        "Win_or_Loss": parsed.Win_or_Loss,
-        "Confidence": parsed.Confidence,
-    }
+    last_error = None
+    for model in AI_MODELS:
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You parse Pokemon TCG battle logs and return JSON only.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
+            payload = json.loads(completion.choices[0].message.content)
+            parsed = BattleLogOutput(
+                My_deck=_coerce_text_field(payload, "My_deck", "MyDeck", "my_deck"),
+                OpponentsDeck=_coerce_text_field(payload, "OpponentsDeck", "OpponentDeck", "opponent_deck", "Opponent"),
+                Win_or_Loss=_coerce_text_field(payload, "Win_or_Loss", "WinLoss", "Result", "result").title(),
+                Confidence=_coerce_confidence_value(payload.get("Confidence")),
+            )
+            print(f"[AI] Parsed using model: {model}")
+            return {
+                "My_deck": parsed.My_deck,
+                "OpponentsDeck": parsed.OpponentsDeck,
+                "Win_or_Loss": parsed.Win_or_Loss,
+                "Confidence": parsed.Confidence,
+            }
+        except Exception as exc:
+            last_error = exc
+            print(f"[AI] Model {model} failed: {exc}. Trying next...")
+    raise last_error
 
 
 def main():

@@ -183,6 +183,7 @@ LIMITLESS_CHECK_INTERVAL_MS = 60000
 LIMITLESS_CHECK_DELAY_MS = 12000
 LIMITLESS_CHAT_POLL_INTERVAL_MS = 3000
 DECK_ICON_OVERRIDE_FILE = os.path.join(BASE_DIR, ".deck_icon_overrides.json")
+PINNED_DECKS_FILE = os.path.join(BASE_DIR, ".pinned_decks.json")
 PTCGL_REPLAY_URL = "https://www.ptcglreplay.com/"
 SPRITE_NAME_ALIASES = {
     "ogerpon": ["ogerpon-teal-mask"],
@@ -202,6 +203,17 @@ def _normalize_sprite_name(sprite_name):
 def _looks_japanese(text):
     """Return True if the text contains Japanese characters (untranslated)."""
     return bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", text or ""))
+
+
+def _invert_str(value):
+    """Invert a string so ascending sort yields descending order.
+
+    Complements each byte so lexicographic order reverses. Empty strings sort
+    last (least recently played) which is what we want for deck tabs.
+    """
+    if not value:
+        return "\uffff"
+    return "".join(chr(0xFFFF - ord(ch)) for ch in value)
 
 
 def _sprite_cache_path(sprite_name):
@@ -2222,6 +2234,7 @@ class StatsWindow(QWidget):
         self.trainerhill_row_links = []
         self.deck_tab_lookup = {}
         self.deck_analyses = []
+        self.pinned_decks = self._load_pinned_decks()
         self.deck_icon_overrides = self._load_deck_icon_overrides()
         self.limitless_standard_meta = self._load_meta_cache("limitless_standard")
         self._japan_rows = []
@@ -3422,7 +3435,7 @@ class StatsWindow(QWidget):
             })
         return rows
 
-    def _build_deck_analysis(self, deck_name, games, wins, losses, ties=0):
+    def _build_deck_analysis(self, deck_name, games, wins, losses, ties=0, last_played=None):
         summary = bayesian_binomial_summary(wins, losses, ties)
         # Rank-weighted Elo win rate: weights each battle by the rank it was
         # played at, so high-rank results count more and sub-Masterball games
@@ -3468,6 +3481,7 @@ class StatsWindow(QWidget):
             "wins": wins,
             "losses": losses,
             "ties": ties,
+            "last_played": last_played,
             "record": self._format_record_text(wins, losses, ties),
             "summary": summary,
             "rank_summary": rank_summary,
@@ -3705,6 +3719,21 @@ class StatsWindow(QWidget):
         title_layout.addLayout(text_col)
         hero_top.addWidget(title_wrap)
         hero_top.addStretch()
+
+        # Pin/star toggle — pinned decks always sort to the front of the tabs.
+        deck_name_for_pin = analysis.get("deck_name", "")
+        is_pinned = deck_name_for_pin in self.pinned_decks
+        pin_btn = QToolButton()
+        pin_btn.setObjectName("deckPinBtn")
+        pin_btn.setText("★" if is_pinned else "☆")
+        pin_btn.setToolTip("Pin this deck to the front of the tab bar" if not is_pinned else "Unpin this deck")
+        pin_btn.setCheckable(True)
+        pin_btn.setChecked(is_pinned)
+        pin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        pin_btn.setFixedSize(32, 30)
+        pin_btn.clicked.connect(lambda checked=False, name=deck_name_for_pin: self._toggle_pin_deck(name))
+        hero_top.addWidget(pin_btn)
+
         if matched_row.get("deck_url"):
             open_btn = QPushButton("Limitless ↗")
             open_btn.setObjectName("limitlessBtn")
@@ -3755,6 +3784,44 @@ class StatsWindow(QWidget):
         scroll.setWidget(content)
         return scroll
 
+    def _load_pinned_decks(self):
+        if not os.path.exists(PINNED_DECKS_FILE):
+            return []
+        try:
+            with open(PINNED_DECKS_FILE, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return [str(v) for v in data] if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def _save_pinned_decks(self):
+        try:
+            with open(PINNED_DECKS_FILE, "w", encoding="utf-8") as handle:
+                json.dump(self.pinned_decks, handle, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _toggle_pin_deck(self, deck_name):
+        """Pin/unpin a deck. Pinned decks always sort to the front."""
+        if deck_name in self.pinned_decks:
+            self.pinned_decks.remove(deck_name)
+        else:
+            # Newest pins go first.
+            self.pinned_decks.insert(0, deck_name)
+        self._save_pinned_decks()
+        self._refresh_deck_dashboards()
+
+    def _sort_deck_analyses(self, analyses):
+        """Pinned decks first (newest pin first), then by last played."""
+        def sort_key(analysis):
+            name = analysis.get("deck_name", "")
+            if name in self.pinned_decks:
+                return (0, self.pinned_decks.index(name))
+            last = analysis.get("last_played") or ""
+            # Descending by last_played: invert the string for sort().
+            return (1, _invert_str(last))
+        return sorted(analyses, key=sort_key)
+
     def _refresh_deck_dashboards(self, deck_analyses=None):
         if not hasattr(self, "deck_tabs"):
             return
@@ -3793,13 +3860,17 @@ class StatsWindow(QWidget):
             self.deck_tabs.addTab(placeholder, "No Data")
             return
 
-        for analysis in deck_analyses:
+        for analysis in self._sort_deck_analyses(deck_analyses):
             page = self._create_deck_dashboard_page(analysis)
             icon = self._icon_for_deck(analysis.get("deck_name", ""), analysis.get("deck_icons", []), size=18)
-            idx = self.deck_tabs.addTab(page, icon, self._deck_tab_label(analysis.get("deck_name", "")))
-            full_name = analysis.get("deck_name", "")
-            self.deck_tabs.tabBar().setTabToolTip(idx, full_name)
-            self.deck_tab_lookup[full_name] = idx
+            deck_name = analysis.get("deck_name", "")
+            label = self._deck_tab_label(deck_name)
+            # Prefix a star for pinned decks so the sort order is visible.
+            if deck_name in self.pinned_decks:
+                label = f"★ {label}"
+            idx = self.deck_tabs.addTab(page, icon, label)
+            self.deck_tabs.tabBar().setTabToolTip(idx, deck_name)
+            self.deck_tab_lookup[deck_name] = idx
 
         if current_name in self.deck_tab_lookup:
             self.deck_tabs.setCurrentIndex(self.deck_tab_lookup[current_name])
@@ -6129,8 +6200,8 @@ class StatsWindow(QWidget):
             
             deck_rows = self.db.get_deck_usage_stats(limit=None)
             self.deck_analyses = [
-                self._build_deck_analysis(deck_name, games, wins, losses, ties)
-                for deck_name, games, wins, losses, ties in deck_rows
+                self._build_deck_analysis(deck_name, games, wins, losses, ties, last_played)
+                for deck_name, games, wins, losses, ties, last_played in deck_rows
             ]
             
             # Load deck usage
@@ -7376,6 +7447,50 @@ class StatsWindow(QWidget):
                 padding: 6px 14px;
                 margin-right: 3px;
                 font-size: 10px;
+            }
+            /* Tab scroll buttons: bigger, clearly visible when many decks
+               overflow the tab bar. */
+            QTabWidget#deckTabs QTabBar::scroller {
+                background: transparent;
+            }
+            QTabWidget#deckTabs QToolButton::menu-indicator {
+                image: none;
+            }
+            QTabWidget#deckTabs QTabBar QToolButton {
+                background: rgba(255,255,255,0.06);
+                border: 1px solid rgba(255,255,255,0.14);
+                border-radius: 6px;
+                color: rgba(255,255,255,0.85);
+                width: 22px;
+                margin: 2px 1px;
+            }
+            QTabWidget#deckTabs QTabBar QToolButton:hover {
+                background: rgba(74,159,216,0.35);
+                border-color: rgba(74,159,216,0.6);
+                color: white;
+            }
+            QTabWidget#deckTabs QTabBar QToolButton:disabled {
+                background: rgba(255,255,255,0.02);
+                border-color: rgba(255,255,255,0.05);
+                color: rgba(255,255,255,0.2);
+            }
+
+            QToolButton#deckPinBtn {
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 6px;
+                color: rgba(255,255,255,0.6);
+                font-size: 15px;
+            }
+            QToolButton#deckPinBtn:hover {
+                background: rgba(249,168,37,0.18);
+                border-color: rgba(249,168,37,0.45);
+                color: rgba(249,168,37,0.9);
+            }
+            QToolButton#deckPinBtn:checked {
+                background: rgba(249,168,37,0.22);
+                border-color: rgba(249,168,37,0.55);
+                color: #F9A825;
             }
 
             QLineEdit#deckSearchInput {
