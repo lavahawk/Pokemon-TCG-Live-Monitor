@@ -72,7 +72,7 @@ def install_dependencies():
     core = [
         "psutil==5.9.8", "pyperclip==1.8.2", "pygame==2.5.2", "pyfiglet==1.0.2",
         "colorama==0.4.6", "pandas==2.2.0", "pyarrow==22.0.0", "openpyxl==3.1.2",
-        "xlwings==0.30.13", "openai==1.12.0", "pydantic==2.6.1",
+        "xlwings==0.30.13", "openai>=1.35.0", "pydantic==2.6.1",
         "numpy==1.26.4", "opencv-python==4.9.0.80", "pytesseract==0.3.10",
         "mss==9.0.1", "Pillow==10.2.0", "pywin32==306",
         "PySide6==6.10.1", "matplotlib==3.8.2",

@@ -338,13 +338,20 @@ def monitor_clipboard():
 def run_other_script(log_file_path=None):
     # Construct the absolute path to the other script
     script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), SCRIPT_TO_RUN))
-    
-    # Run the script using the same Python interpreter (ensures venv packages are available)
+
+    # Run the script using the same Python interpreter (ensures venv packages are available).
+    # A timeout guards the monitor: the parser used to prompt interactively in
+    # local-only mode and would block forever when run headless.
     print(f"Running {script_path}...")
     command = [sys.executable, script_path]
     if log_file_path:
         command.append(os.path.abspath(log_file_path))
-    subprocess.run(command)
+    try:
+        subprocess.run(command, timeout=180)
+    except subprocess.TimeoutExpired:
+        print(Fore.RED + "[Monitor] AI parser timed out after 180s — continuing to monitor.")
+    except Exception as exc:
+        print(Fore.RED + f"[Monitor] AI parser failed: {exc}")
     
     # After AI parsing, wait for user to return to main menu
     wait_for_main_menu_and_detect()

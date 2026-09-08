@@ -195,7 +195,10 @@ def parse_winner_from_log(battlelog):
     explicit = re.findall(r"All Prize cards taken\.\s*(.+?) wins\.", battlelog, flags=re.IGNORECASE)
     if explicit:
         return explicit[-1].strip()
-    generic = re.findall(r"\b(.+?) wins\.", battlelog, flags=re.IGNORECASE)
+    # Capture only the username token immediately before "wins." — a lazy
+    # match from the start of the line would swallow preceding text such as
+    # "Opponent conceded. 22lava44 wins." and misattribute the winner.
+    generic = re.findall(r"([A-Za-z0-9_\-]+)\s+wins\.", battlelog, flags=re.IGNORECASE)
     return generic[-1].strip() if generic else None
 
 
@@ -274,38 +277,83 @@ def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_
     )
 
 
+def _console_available():
+    """True when an interactive console/stdin is usable for prompts.
+
+    When the monitor runs headless (pythonw / hidden window), stdin is not a
+    TTY and prompting would block forever, silently preventing the battle
+    from being saved. Tk dialogs would also hang with no user visible UI.
+    """
+    if sys.stdin is None or not sys.stdin.isatty():
+        return False
+    return True
+
+
 def local_fallback_parse(battlelog, username):
     my_deck = load_last_deck()
-    if not my_deck:
+    if not my_deck and _console_available():
         my_deck = prompt_string(
             "Enter Your Deck",
             "Local-only mode could not find your deck from OCR.\n\nPlease enter your deck name:",
         )
 
-    opponents_deck = prompt_string(
-        "Enter Opponent Deck",
-        "Local-only mode is active.\n\nPlease enter the opponent's deck name for this battle:",
-    )
+    # Only prompt when a console is available. In headless mode a prompt
+    # would block forever, so fall back to a placeholder instead.
+    opponents_deck = None
+    if _console_available():
+        opponents_deck = prompt_string(
+            "Enter Opponent Deck",
+            "Local-only mode is active.\n\nPlease enter the opponent's deck name for this battle:",
+        )
+    if not opponents_deck:
+        inferred = infer_opponent_deck_from_log(battlelog)
+        opponents_deck = inferred or "Unknown (local mode)"
 
     win_or_loss = parse_result_from_log(battlelog, username)
-    if not win_or_loss:
+    if not win_or_loss and _console_available():
         win_or_loss = prompt_string(
             "Enter Result",
             "The battle result could not be inferred from the log.\n\nEnter Win or Loss:",
         )
+    if not win_or_loss:
+        win_or_loss = "Loss"
 
     confidence = 90
     if not load_last_deck():
         confidence = 80
     if not parse_result_from_log(battlelog, username):
         confidence = min(confidence, 75)
+    if not inferred:
+        confidence = min(confidence, 60)
 
     return {
-        "My_deck": (my_deck or "").strip(),
+        "My_deck": (my_deck or "").strip() or "Unknown Deck",
         "OpponentsDeck": (opponents_deck or "").strip(),
         "Win_or_Loss": (win_or_loss or "").strip().title(),
         "Confidence": confidence,
     }
+
+
+def infer_opponent_deck_from_log(battlelog):
+    """Best-effort guess of the opponent's deck from cards they played.
+
+    Local mode has no AI, so look for the opponent's first Basic Pokemon
+    played to the Active Spot as the likely deck archetype.
+    """
+    if not battlelog:
+        return None
+    opponent = parse_opponent_from_log(battlelog, load_username())
+    if not opponent:
+        return None
+    own = re.escape(opponent)
+    matches = re.findall(
+        rf"{own} played ([A-Za-z0-9'\- ]+?)(?: ex| V| VMAX| VSTAR)? to the Active Spot",
+        battlelog,
+        flags=re.IGNORECASE,
+    )
+    if matches:
+        return matches[0].strip()
+    return None
 
 
 class BattleLogOutput(BaseModel):
