@@ -209,16 +209,22 @@ class AutoClicker:
                         print(f"✓ Clicked {template_name} at ({x}, {y}) [background]")
 
             if not clicked and mode in ("auto", "physical"):
-                # Physical fallback: real cursor click. Save the user's
-                # cursor position first and put it back right after, so the
-                # automation is invisible outside the brief click itself.
+                # Physical fallback: real cursor click. Unity processes UI
+                # clicks a frame after mouse-up — moving the cursor away
+                # instantly cancels the click. Sequence: arrive, settle,
+                # press, hold, release, give the game a moment, then restore.
                 restore_pos = None
                 try:
                     import win32api
                     restore_pos = win32api.GetCursorPos()
                 except Exception:
                     restore_pos = pyautogui.position()
-                pyautogui.click(x, y)
+                pyautogui.moveTo(x, y, _pause=False)
+                time.sleep(0.08)
+                pyautogui.mouseDown(_pause=False)
+                time.sleep(0.06)
+                pyautogui.mouseUp(_pause=False)
+                time.sleep(0.25)
                 if restore_pos:
                     try:
                         pyautogui.moveTo(restore_pos[0], restore_pos[1], _pause=False)
