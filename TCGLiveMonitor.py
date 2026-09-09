@@ -18,6 +18,12 @@ import threading
 from multiprocessing import Process
 from BattleDatabase import BattleDatabase
 from app_settings import load_username, save_username, load_api_key, is_local_only_mode
+try:
+    from AutoClicker import AutoClicker
+    AUTOCLICKER_AVAILABLE = True
+except Exception as _ac_exc:
+    AUTOCLICKER_AVAILABLE = False
+    _ac_error = _ac_exc
 
 
 ###Version=2.3
@@ -28,6 +34,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "Logs")  # Directory to save battle log files
 SOUND_FILE = os.path.join(BASE_DIR, "ding.mp3")  # Path to the sound file
 SCRIPT_TO_RUN = os.path.join(BASE_DIR, "AIParseBattleLog.py")  # Path to AIParseBattleLog.py
+
+# Buttons auto-clicked after a battle ends, in order. Each waits for its
+# template to appear on screen (checked every 0.5s) with a per-button timeout.
+BATTLE_END_BUTTONS = [
+    {"template": "battle_log", "timeout": 30, "desc": "BATTLE LOG button"},
+    {"template": "battle_log_export", "timeout": 20, "desc": "battle log export button"},
+]
 PID_FILE = os.path.join(BASE_DIR, ".monitor_pid")  # PID file for process management
 
 # Ensure the log directory exists
@@ -324,6 +337,9 @@ def monitor_clipboard():
                 play_sound()
                 run_other_script(log_path)
                 previous_clipboard = clipboard_content
+                # After the battle: auto-click the BATTLE LOG button, then the
+                # export button, so the log is exported without manual clicks.
+                run_battle_end_autoclicks()
             elif clipboard_content != previous_clipboard and clipboard_content:
                 clip_preview = clipboard_content[:60].replace('\n', ' ')
                 print(Fore.YELLOW + f"[Monitor] Clipboard changed (not a battle log): {clip_preview}")
@@ -334,6 +350,47 @@ def monitor_clipboard():
             wait_for_game_startup()
             print(Fore.GREEN + "[Monitor] Pokémon TCG Live is running. Monitoring clipboard...")
             previous_clipboard = ""  # Reset previous_clipboard if the game is restarted
+
+def run_battle_end_autoclicks():
+    """After a battle ends, find and click the BATTLE LOG button, then the
+    export button. Each button's template is checked every 0.5s until it
+    appears (or the timeout expires). Missing templates are skipped with a
+    one-time hint to run SetupAutoClicker.py.
+    """
+    if not AUTOCLICKER_AVAILABLE:
+        return
+    try:
+        from RankDetector import RankDetector
+        detector = RankDetector()
+        game_window = detector.find_game_window()
+        if not game_window:
+            print(Fore.YELLOW + "[AutoClicker] Game window not found — skipping button clicks.")
+            return
+
+        clicker = AutoClicker(game_window)
+        missing = []
+        for spec in BATTLE_END_BUTTONS:
+            if not clicker.load_template(spec["template"]):
+                missing.append(spec["template"])
+                continue
+            found = clicker.find_button(spec["template"])
+            deadline = time.time() + spec["timeout"]
+            while not found and time.time() < deadline:
+                time.sleep(0.5)  # check every 0.5s as required
+                found = clicker.find_button(spec["template"])
+            if found:
+                clicker.click_button(spec["template"], force=True)
+                print(Fore.GREEN + f"[AutoClicker] Clicked {spec['desc']}.")
+                time.sleep(1.0)  # let the next screen settle
+            else:
+                print(Fore.YELLOW + f"[AutoClicker] {spec['desc']} not found within {spec['timeout']}s.")
+        if missing:
+            print(Fore.YELLOW +
+                  f"[AutoClicker] Missing templates: {', '.join(missing)}. "
+                  "Run 'python SetupAutoClicker.py' to capture them.")
+    except Exception as exc:
+        print(Fore.RED + f"[AutoClicker] Error during battle-end clicks: {exc}")
+
 
 def run_other_script(log_file_path=None):
     # Construct the absolute path to the other script

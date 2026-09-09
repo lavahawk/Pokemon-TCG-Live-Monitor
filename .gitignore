@@ -106,3 +106,6 @@ Testing New Stuff/
 # Archive folders
 _Archive/
 Docs_Archive/
+
+# Auto-clicker button templates (user-captured)
+button_templates/
