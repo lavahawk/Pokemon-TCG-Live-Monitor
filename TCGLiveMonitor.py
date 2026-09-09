@@ -2,6 +2,7 @@ import psutil
 import pyperclip
 import time
 import re
+import hashlib
 import pygame
 import sys
 import os
@@ -329,6 +330,9 @@ def wait_for_game_startup():
 
 def monitor_clipboard():
     previous_clipboard = ""
+    last_battle_log_hash = None   # content hash of the last processed battle log
+    last_battle_log_time = 0.0
+    BATTLE_LOG_DEDUPE_WINDOW = 600  # seconds; export click re-copies the same log
     tick = 0
     while True:
         if is_pokemon_tcg_live_running():
@@ -340,7 +344,19 @@ def monitor_clipboard():
                 clip_preview = clipboard_content[:60].replace('\n', ' ') if clipboard_content else '(empty)'
                 print(Fore.CYAN + f"[Monitor] Watching clipboard... (tick {tick}) | clip: {clip_preview}")
             if clipboard_content != previous_clipboard and is_battle_log(clipboard_content):
+                # The battle-end auto-clicker exports the log to the clipboard,
+                # which re-triggers this monitor with the SAME battle. Skip
+                # identical content within the dedupe window.
+                content_hash = hashlib.sha256(clipboard_content.encode('utf-8', 'ignore')).hexdigest()
+                if (content_hash == last_battle_log_hash
+                        and time.time() - last_battle_log_time < BATTLE_LOG_DEDUPE_WINDOW):
+                    print(Fore.YELLOW + "[Monitor] Duplicate battle log (auto-export echo) — skipping.")
+                    _alog("Duplicate battle log detected (auto-export echo) — skipped.")
+                    previous_clipboard = clipboard_content
+                    continue
                 print(Fore.GREEN + "[Monitor] Battle log detected! Saving...")
+                last_battle_log_hash = content_hash
+                last_battle_log_time = time.time()
                 log_path = save_battle_log(clipboard_content)
                 previous_clipboard = clipboard_content
                 # Race the user's Continue click: start auto-clicking the
