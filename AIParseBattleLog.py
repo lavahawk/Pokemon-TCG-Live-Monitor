@@ -192,7 +192,11 @@ def normalize_name(value):
 def parse_winner_from_log(battlelog):
     if not battlelog:
         return None
-    explicit = re.findall(r"All Prize cards taken\.\s*(.+?) wins\.", battlelog, flags=re.IGNORECASE)
+    explicit = re.findall(
+        r"All Prize cards taken\.\s*([A-Za-z0-9_\-]+)\s+wins\.",
+        battlelog,
+        flags=re.IGNORECASE,
+    )
     if explicit:
         return explicit[-1].strip()
     # Capture only the username token immediately before "wins." — a lazy
@@ -538,6 +542,23 @@ def main():
     opponents_deck = response_dict.get("OpponentsDeck") or "Unknown"
     win_or_loss = (response_dict.get("Win_or_Loss") or "Loss").title()
     confidence = int(response_dict.get("Confidence") or 0)
+
+    # The battle log is AUTHORITATIVE for the result. The AI's Win_or_Loss is
+    # only a guess from card evidence and has been observed to disagree with
+    # the log's explicit "... wins." line, corrupting the record. If the log
+    # yields a definitive winner, it always wins over the AI's answer.
+    log_result = parse_result_from_log(battlelog, username)
+    if log_result and log_result != win_or_loss:
+        print(
+            f"[Result] AI said {win_or_loss} but the battle log shows "
+            f"'{parse_winner_from_log(battlelog)} wins.' — trusting the log ({log_result})."
+        )
+        win_or_loss = log_result
+        # Result certainty from the log is high; reflect that in confidence.
+        confidence = max(confidence, 95)
+    elif log_result:
+        # Log agrees; bump confidence since two independent methods concur.
+        confidence = max(confidence, 90)
 
     # Prefer the OCR-detected deck name (from the main menu) over the
     # AI-suggested name. OCR is authoritative for YOUR deck because it reads
