@@ -32,7 +32,7 @@ BLOCKER_MAX_LIFE = 30  # failsafe: never linger longer than this
 
 # Default Continue-button region, relative to the game window.
 # Centered directly below the BATTLE LOG button (~50% x, ~81% y).
-DEFAULT_REL = {"x": 0.50, "y": 0.92, "w": 0.26, "h": 0.075}
+DEFAULT_REL = {"x": 0.50, "y": 0.935, "w": 0.26, "h": 0.075}
 
 
 def _dbg(msg):
@@ -65,6 +65,47 @@ def _make_pokeball_pixmap(size=14):
     return pm
 
 
+class _ProgressStrip(QWidget):
+    """Slim indeterminate progress bar: a soft glow segment glides along a
+    dim track. Fixed size, so nothing shifts while it animates."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(3)
+        self._pos = 0.0  # 0..1 head position of the glow
+
+    def advance(self):
+        # Ease toward 1.0, then wrap with a brief fade at the ends.
+        self._pos += 0.018
+        if self._pos > 1.15:
+            self._pos = -0.15
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        # dim track
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255, 22))
+        p.drawRoundedRect(0, 0, w, h, h / 2, h / 2)
+        # moving glow segment (clipped to the track)
+        seg_w = int(w * 0.30)
+        x = int(self._pos * (w + seg_w)) - seg_w
+        p.save()
+        p.setClipRect(0, 0, w, h)
+        grad_x0, grad_x1 = x, x + seg_w
+        from PySide6.QtGui import QLinearGradient
+        g = QLinearGradient(grad_x0, 0, grad_x1, 0)
+        g.setColorAt(0.0, QColor(159, 178, 192, 0))
+        g.setColorAt(0.5, QColor(159, 178, 192, 200))
+        g.setColorAt(1.0, QColor(159, 178, 192, 0))
+        p.setBrush(g)
+        p.drawRoundedRect(max(x, 0), 0, min(seg_w, w - max(x, 0)), h, h / 2, h / 2)
+        p.restore()
+        p.end()
+
+
 class ContinueBlocker(QWidget):
     def __init__(self, rel):
         super().__init__()
@@ -85,6 +126,9 @@ class ContinueBlocker(QWidget):
         self.label = QLabel("Saving battle log")
         self.label.setObjectName("blockLabel")
         layout.addWidget(self.label, 1)
+
+        self.strip = _ProgressStrip()
+        layout.addWidget(self.strip, 1)
 
         # Dim dismiss button — in case the blocker misbehaves or the user
         # needs to press Continue anyway. Styled like the reset-popup X.
@@ -118,14 +162,14 @@ class ContinueBlocker(QWidget):
             }
         """)
 
-        # Follow the game window; pulse the label; failsafe exit.
+        # Follow the game window; animate the strip; failsafe exit.
         self.follow_timer = QTimer(self)
         self.follow_timer.timeout.connect(self._follow_game)
         self.follow_timer.start(200)
 
-        self.pulse_timer = QTimer(self)
-        self.pulse_timer.timeout.connect(self._pulse_tick)
-        self.pulse_timer.start(90)
+        self.strip_timer = QTimer(self)
+        self.strip_timer.timeout.connect(self.strip.advance)
+        self.strip_timer.start(16)  # ~60fps glide
 
         self.life_timer = QTimer(self)
         self.life_timer.timeout.connect(self.close)
@@ -188,20 +232,20 @@ class ContinueBlocker(QWidget):
             _dbg(f"game=({l},{t},{r},{b}) blocker=({x},{y},{w},{h})")
             self._logged_pos = True
 
-    def _pulse_tick(self):
-        # Dancing dots: dot count cycles 1 -> 2 -> 3 -> back, giving a
-        # satisfying loading feel while the export runs.
-        self._dot_count = (getattr(self, "_dot_count", 0) + 1) % 4
-        dots = "." * max(self._dot_count, 1)
-        self.label.setText(f"Saving battle log{dots}")
-
     def paintEvent(self, event):
         from PySide6.QtGui import QPainterPath
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         path = QPainterPath()
-        path.addRoundedRect(self.rect().adjusted(0, 0, -1, -1), 6, 6)
+        path.addRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
+        # Card body
         p.fillPath(path, QColor(18, 18, 18, 235))
+        # Subtle top inner highlight for depth
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255, 10))
+        p.drawRoundedRect(self.rect().adjusted(1, 1, -2, -self.height() // 2), 7, 7)
+        # Border
+        p.setBrush(Qt.NoBrush)
         p.setPen(QColor(0x3E, 0x4A, 0x52))
         p.drawPath(path)
         p.end()
