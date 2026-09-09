@@ -451,7 +451,9 @@ def _battle_end_click_worker():
                 time.sleep(BATTLE_END_POLL_INTERVAL)
                 found = clicker.find_button(spec["template"])
             if found:
-                clicker.click_button(spec["template"], force=True)
+                # PTCG Live (Unity) reads raw input and ignores PostMessage
+                # background clicks, so always use a real cursor click.
+                clicker.click_button(spec["template"], force=True, mode="physical")
                 print(Fore.GREEN + f"[AutoClicker] Clicked {spec['desc']}.")
                 if spec["template"] == "battle_log":
                     # Minimize click-to-click time: guard against a stray
