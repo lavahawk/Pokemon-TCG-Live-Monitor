@@ -460,6 +460,16 @@ def _battle_end_click_worker():
                     # Continue click, then start searching for the export
                     # button immediately — no settle sleep.
                     _block_continue_button(1.0)
+                else:
+                    # The popup can still be animating in when the first
+                    # click lands — if the button is still visible after a
+                    # short wait, the click didn't register; retry.
+                    for attempt in range(2, 5):
+                        time.sleep(0.7)
+                        if not clicker.find_button(spec["template"]):
+                            break  # button gone = click registered
+                        clicker.click_button(spec["template"], force=True, mode="physical")
+                        print(Fore.GREEN + f"[AutoClicker] Clicked {spec['desc']} (retry {attempt - 1}).")
             else:
                 print(Fore.YELLOW + f"[AutoClicker] {spec['desc']} not found within {spec['timeout']}s.")
         if _battle_end_clicker_missing:
