@@ -369,6 +369,28 @@ def monitor_clipboard():
                 clip_preview = clipboard_content[:60].replace('\n', ' ')
                 print(Fore.YELLOW + f"[Monitor] Clipboard changed (not a battle log): {clip_preview}")
                 previous_clipboard = clipboard_content
+                # Forensics: if this looked like a big log but didn't match,
+                # record why so failed detections can be diagnosed later.
+                if len(clipboard_content) >= 120:
+                    normalized = clipboard_content.replace("\r\n", "\n").strip()
+                    reasons = []
+                    if not re.search(r"Turn #\s*\d+\s*-\s*.+?'s Turn", normalized, flags=re.IGNORECASE):
+                        reasons.append("no_old_turn")
+                    if not re.search(r"(?m)^[^\n]{1,40}'s Turn\s*$", normalized):
+                        reasons.append("no_new_turn")
+                    if not (normalized.startswith("Setup") or "\nSetup\n" in f"\n{normalized}\n"):
+                        reasons.append("no_setup")
+                    if not re.search(r"(?im)(all prize cards taken\..+? wins\.|opponent conceded\..+? wins\.|^.+? wins\.$)", normalized):
+                        reasons.append("no_result")
+                    _alog(f"UNMATCHED clipboard log ({len(normalized)} chars): "
+                          f"missing={','.join(reasons) or 'none'} | head={normalized[:80]!r}")
+                    try:
+                        os.makedirs(LOG_DIR, exist_ok=True)
+                        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                        with open(os.path.join(LOG_DIR, f"unmatched_{stamp}.txt"), "w", encoding="utf-8") as uf:
+                            uf.write(clipboard_content)
+                    except Exception:
+                        pass
         else:
             # If the game is not running, wait for it to start again
             print(Fore.RED + "[Monitor] Game closed. Waiting for Pokémon TCG Live to start...")
