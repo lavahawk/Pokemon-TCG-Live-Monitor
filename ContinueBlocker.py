@@ -23,7 +23,7 @@ import argparse
 import os
 
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPixmap, QPainter, QColor, QFont
+from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QPen
 from PySide6.QtWidgets import QApplication, QWidget, QLabel, QHBoxLayout, QPushButton
 
 import win32gui
@@ -32,7 +32,7 @@ BLOCKER_MAX_LIFE = 30  # failsafe: never linger longer than this
 
 # Default Continue-button region, relative to the game window.
 # Centered directly below the BATTLE LOG button (~50% x, ~81% y).
-DEFAULT_REL = {"x": 0.50, "y": 0.935, "w": 0.26, "h": 0.075}
+DEFAULT_REL = {"x": 0.50, "y": 0.955, "w": 0.32, "h": 0.11}
 
 
 def _dbg(msg):
@@ -65,54 +65,16 @@ def _make_pokeball_pixmap(size=14):
     return pm
 
 
-class _ProgressStrip(QWidget):
-    """Slim indeterminate progress bar: a soft glow segment glides along a
-    dim track. Fixed size, so nothing shifts while it animates."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(3)
-        self._pos = 0.0  # 0..1 head position of the glow
-
-    def advance(self):
-        # Ease toward 1.0, then wrap with a brief fade at the ends.
-        self._pos += 0.018
-        if self._pos > 1.15:
-            self._pos = -0.15
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        # dim track
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(255, 255, 255, 22))
-        p.drawRoundedRect(0, 0, w, h, h / 2, h / 2)
-        # moving glow segment (clipped to the track)
-        seg_w = int(w * 0.30)
-        x = int(self._pos * (w + seg_w)) - seg_w
-        p.save()
-        p.setClipRect(0, 0, w, h)
-        grad_x0, grad_x1 = x, x + seg_w
-        from PySide6.QtGui import QLinearGradient
-        g = QLinearGradient(grad_x0, 0, grad_x1, 0)
-        g.setColorAt(0.0, QColor(159, 178, 192, 0))
-        g.setColorAt(0.5, QColor(159, 178, 192, 200))
-        g.setColorAt(1.0, QColor(159, 178, 192, 0))
-        p.setBrush(g)
-        p.drawRoundedRect(max(x, 0), 0, min(seg_w, w - max(x, 0)), h, h / 2, h / 2)
-        p.restore()
-        p.end()
-
-
 class ContinueBlocker(QWidget):
     def __init__(self, rel):
         super().__init__()
         self.rel = rel
         self.born = time.time()
-        self._pulse = 0.0
-        self._pulse_dir = 1
+        self._dash_offset = 0.0  # animated border phase
+        self._opacity = 0.0      # current window opacity (fade state)
+        self._fade_target = 0.0
+        self._closing = False
+        self.setWindowOpacity(0.0)
 
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -127,16 +89,13 @@ class ContinueBlocker(QWidget):
         self.label.setObjectName("blockLabel")
         layout.addWidget(self.label, 1)
 
-        self.strip = _ProgressStrip()
-        layout.addWidget(self.strip, 1)
-
         # Dim dismiss button — in case the blocker misbehaves or the user
         # needs to press Continue anyway. Styled like the reset-popup X.
         self.close_btn = QPushButton("\u00d7")
         self.close_btn.setObjectName("blockClose")
         self.close_btn.setFixedSize(18, 18)
         self.close_btn.setCursor(Qt.PointingHandCursor)
-        self.close_btn.clicked.connect(self.close)
+        self.close_btn.clicked.connect(lambda: self.dismiss(close_after=True))
         layout.addWidget(self.close_btn)
 
         # Font matches the mini GUI's stats label ('Segoe UI', 11px, #DCDCDC).
@@ -162,17 +121,21 @@ class ContinueBlocker(QWidget):
             }
         """)
 
-        # Follow the game window; animate the strip; failsafe exit.
+        # Follow the game window; animate the border + opacity; failsafe exit.
         self.follow_timer = QTimer(self)
         self.follow_timer.timeout.connect(self._follow_game)
         self.follow_timer.start(200)
 
-        self.strip_timer = QTimer(self)
-        self.strip_timer.timeout.connect(self.strip.advance)
-        self.strip_timer.start(16)  # ~60fps glide
+        self.border_timer = QTimer(self)
+        self.border_timer.timeout.connect(self._border_tick)
+        self.border_timer.start(33)  # ~30fps: smooth, low CPU
+
+        self.fade_timer = QTimer(self)
+        self.fade_timer.timeout.connect(self._fade_tick)
+        self.fade_timer.start(16)
 
         self.life_timer = QTimer(self)
-        self.life_timer.timeout.connect(self.close)
+        self.life_timer.timeout.connect(lambda: self.dismiss(close_after=True))
         self.life_timer.start(int(BLOCKER_MAX_LIFE * 1000))
 
         self._follow_game()
@@ -201,13 +164,14 @@ class ContinueBlocker(QWidget):
 
     def _follow_game(self):
         if time.time() - self.born > BLOCKER_MAX_LIFE:
-            self.close()
+            _dbg("failsafe lifetime reached — fading out")
+            self.dismiss(close_after=True)
             return
         rect = self._find_game_rect()
         if rect is None:
-            if self.isVisible():
-                _dbg("game rect not found — hiding")
-                self.hide()
+            if self.isVisible() or self._fade_target > 0.0:
+                _dbg("game rect not found — fading out")
+                self._begin_fade_out()
             return
         l, t, r, b = rect
         gw, gh = r - l, b - t
@@ -215,22 +179,78 @@ class ContinueBlocker(QWidget):
         h = int(gh * self.rel["h"])
         x = l + int(gw * self.rel["x"]) - w // 2
         y = t + int(gh * self.rel["y"]) - h // 2
-        # Position in PHYSICAL pixels via win32 — Qt setGeometry works in
-        # logical pixels and gets DPI-scaled away from the intended spot.
-        # HWND_TOPMOST keeps the blocker above the fullscreen game so it
-        # physically intercepts clicks on Continue.
+        # Only reposition when the rect actually changed — calling
+        # SetWindowPos every tick with 1px rounding jitter makes the box
+        # visibly tremble. EXCEPTION: Qt shrinks the native window to its
+        # layout sizeHint after show(), so verify the REAL rect each tick
+        # and re-assert if it drifted.
+        new_geom = (x, y, w, h)
+        actual = None
         try:
-            import win32con
-            win32gui.SetWindowPos(
-                int(self.winId()), win32con.HWND_TOPMOST,
-                x, y, w, h, win32con.SWP_NOACTIVATE,
-            )
-        except Exception as exc:
-            _dbg(f"SetWindowPos failed: {exc}")
-        self.show()
+            al, at, ar, ab = win32gui.GetWindowRect(int(self.winId()))
+            actual = (al, at, ar - al, ab - at)
+        except Exception:
+            pass
+        if getattr(self, "_last_geom", None) != new_geom or actual != new_geom:
+            # Position in PHYSICAL pixels via win32 — Qt setGeometry works in
+            # logical pixels and gets DPI-scaled away from the intended spot.
+            # HWND_TOPMOST keeps the blocker above the fullscreen game so it
+            # physically intercepts clicks on Continue.
+            try:
+                import win32con
+                if not self.isVisible():
+                    self.show()
+                win32gui.SetWindowPos(
+                    int(self.winId()), win32con.HWND_TOPMOST,
+                    x, y, w, h, win32con.SWP_NOACTIVATE,
+                )
+                self._last_geom = new_geom
+            except Exception as exc:
+                _dbg(f"SetWindowPos failed: {exc}")
+        if not self.isVisible() and not self._closing:
+            self.show()
+            self._begin_fade_in()  # materialize from thin air
         if not getattr(self, "_logged_pos", False):
             _dbg(f"game=({l},{t},{r},{b}) blocker=({x},{y},{w},{h})")
             self._logged_pos = True
+
+    def _border_tick(self):
+        # Advance the comet along the border (0..1 around the perimeter).
+        self._comet_pos = (getattr(self, "_comet_pos", 0.0) + 0.0035) % 1.0
+        self.update()
+
+    def _fade_tick(self):
+        """Ease window opacity toward the target (fade in/out).
+        Uses an exponential approach for a silky, professional feel.
+        Once a fade-out completes, the window actually closes/hides."""
+        target = self._fade_target
+        cur = self._opacity
+        if abs(target - cur) < 0.01:
+            self._opacity = target
+        else:
+            # exponential ease: fast start, gentle settle
+            self._opacity = cur + (target - cur) * 0.18
+        self.setWindowOpacity(self._opacity)
+        if target == 0.0 and self._opacity <= 0.01:
+            if self._closing:
+                self.fade_timer.stop()
+                self.close()
+            else:
+                self.hide()
+
+    def _begin_fade_in(self):
+        self._fade_target = 1.0
+        self._closing = False
+
+    def _begin_fade_out(self, close_after=False):
+        self._fade_target = 0.0
+        self._closing = close_after
+
+    def dismiss(self, close_after=False):
+        """User- or system-initiated fade-out. Stops the follow timer so the
+        window isn't re-shown right after being dismissed."""
+        self.follow_timer.stop()
+        self._begin_fade_out(close_after=close_after)
 
     def paintEvent(self, event):
         from PySide6.QtGui import QPainterPath
@@ -244,10 +264,28 @@ class ContinueBlocker(QWidget):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(255, 255, 255, 10))
         p.drawRoundedRect(self.rect().adjusted(1, 1, -2, -self.height() // 2), 7, 7)
-        # Border
+        # Static dim border
         p.setBrush(Qt.NoBrush)
-        p.setPen(QColor(0x3E, 0x4A, 0x52))
+        dim = QPen(QColor(0x3E, 0x4A, 0x52), 1)
+        p.setPen(dim)
         p.drawPath(path)
+        # Comet: a single soft glowing head with a fading trail glides
+        # around the border — subtle, premium, not busy.
+        head = self._comet_pos = getattr(self, "_comet_pos", 0.0)
+        TRAIL = 14
+        for i in range(TRAIL, 0, -1):
+            frac = (head - i * 0.006) % 1.0
+            pt = path.pointAtPercent(frac)
+            fade = 1.0 - i / TRAIL
+            radius = 1.2 + 2.2 * fade
+            color = QColor(int(159 + 40 * fade), int(178 + 30 * fade), 192, int(230 * fade))
+            p.setPen(Qt.NoPen)
+            p.setBrush(color)
+            p.drawEllipse(pt, radius, radius)
+        # bright head
+        hp = path.pointAtPercent(head)
+        p.setBrush(QColor(233, 243, 255))
+        p.drawEllipse(hp, 3.2, 3.2)
         p.end()
 
 
