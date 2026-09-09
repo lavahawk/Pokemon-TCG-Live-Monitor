@@ -36,11 +36,19 @@ SOUND_FILE = os.path.join(BASE_DIR, "ding.mp3")  # Path to the sound file
 SCRIPT_TO_RUN = os.path.join(BASE_DIR, "AIParseBattleLog.py")  # Path to AIParseBattleLog.py
 
 # Buttons auto-clicked after a battle ends, in order. Each waits for its
-# template to appear on screen (checked every 0.5s) with a per-button timeout.
+# template to appear on screen (checked every 0.1s) with a per-button timeout.
+# Speed matters: the battle-end screen also has a Continue button, and if the
+# user clicks it before we grab the BATTLE LOG/export buttons they disappear.
 BATTLE_END_BUTTONS = [
     {"template": "battle_log", "timeout": 30, "desc": "BATTLE LOG button"},
     {"template": "battle_log_export", "timeout": 20, "desc": "battle log export button"},
 ]
+BATTLE_END_POLL_INTERVAL = 0  # continuous: mss capture (~30-50ms) IS the interval
+
+# Cached AutoClicker with templates preloaded once, reused every battle so no
+# per-battle template loading delay.
+_battle_end_clicker = None
+_battle_end_clicker_missing = []
 PID_FILE = os.path.join(BASE_DIR, ".monitor_pid")  # PID file for process management
 
 # Ensure the log directory exists
@@ -335,11 +343,12 @@ def monitor_clipboard():
                 print(Fore.GREEN + "[Monitor] Battle log detected! Saving...")
                 log_path = save_battle_log(clipboard_content)
                 play_sound()
-                run_other_script(log_path)
                 previous_clipboard = clipboard_content
-                # After the battle: auto-click the BATTLE LOG button, then the
-                # export button, so the log is exported without manual clicks.
+                # Race the user's Continue click: start auto-clicking the
+                # BATTLE LOG + export buttons immediately in the background,
+                # before the (slower) AI parser runs.
                 run_battle_end_autoclicks()
+                run_other_script(log_path)
             elif clipboard_content != previous_clipboard and clipboard_content:
                 clip_preview = clipboard_content[:60].replace('\n', ' ')
                 print(Fore.YELLOW + f"[Monitor] Clipboard changed (not a battle log): {clip_preview}")
@@ -351,45 +360,76 @@ def monitor_clipboard():
             print(Fore.GREEN + "[Monitor] Pokémon TCG Live is running. Monitoring clipboard...")
             previous_clipboard = ""  # Reset previous_clipboard if the game is restarted
 
-def run_battle_end_autoclicks():
-    """After a battle ends, find and click the BATTLE LOG button, then the
-    export button. Each button's template is checked every 0.5s until it
-    appears (or the timeout expires). Missing templates are skipped with a
-    one-time hint to run SetupAutoClicker.py.
+def _get_battle_end_clicker():
+    """Return a cached AutoClicker with all templates preloaded (or None).
+
+    Templates are loaded once and reused; only refreshed if the cached
+    clicker's game window no longer matches the current window position.
     """
-    if not AUTOCLICKER_AVAILABLE:
-        return
+    global _battle_end_clicker, _battle_end_clicker_missing
     try:
         from RankDetector import RankDetector
-        detector = RankDetector()
-        game_window = detector.find_game_window()
+        game_window = RankDetector().find_game_window()
         if not game_window:
-            print(Fore.YELLOW + "[AutoClicker] Game window not found — skipping button clicks.")
-            return
+            return None
+
+        cached = _battle_end_clicker
+        if cached is not None and cached.game_window == game_window:
+            return cached
 
         clicker = AutoClicker(game_window)
         missing = []
         for spec in BATTLE_END_BUTTONS:
             if not clicker.load_template(spec["template"]):
                 missing.append(spec["template"])
+        _battle_end_clicker = clicker
+        _battle_end_clicker_missing = missing
+        return clicker
+    except Exception as exc:
+        print(Fore.RED + f"[AutoClicker] Init error: {exc}")
+        return None
+
+
+def _battle_end_click_worker():
+    """Find and click each battle-end button in order, polling fast."""
+    clicker = _get_battle_end_clicker()
+    if clicker is None:
+        print(Fore.YELLOW + "[AutoClicker] Game window not found — skipping button clicks.")
+        return
+    try:
+        for spec in BATTLE_END_BUTTONS:
+            if spec["template"] in _battle_end_clicker_missing:
                 continue
-            found = clicker.find_button(spec["template"])
             deadline = time.time() + spec["timeout"]
+            found = clicker.find_button(spec["template"])
             while not found and time.time() < deadline:
-                time.sleep(0.5)  # check every 0.5s as required
+                time.sleep(BATTLE_END_POLL_INTERVAL)
                 found = clicker.find_button(spec["template"])
             if found:
                 clicker.click_button(spec["template"], force=True)
                 print(Fore.GREEN + f"[AutoClicker] Clicked {spec['desc']}.")
-                time.sleep(1.0)  # let the next screen settle
+                # Settle only as long as the game's screen transition needs —
+                # checking earlier is harmless (button just isn't there yet),
+                # but waiting too long wastes the animation window.
+                time.sleep(0.25)
             else:
                 print(Fore.YELLOW + f"[AutoClicker] {spec['desc']} not found within {spec['timeout']}s.")
-        if missing:
+        if _battle_end_clicker_missing:
             print(Fore.YELLOW +
-                  f"[AutoClicker] Missing templates: {', '.join(missing)}. "
+                  f"[AutoClicker] Missing templates: {', '.join(_battle_end_clicker_missing)}. "
                   "Run 'python SetupAutoClicker.py' to capture them.")
     except Exception as exc:
         print(Fore.RED + f"[AutoClicker] Error during battle-end clicks: {exc}")
+
+
+def run_battle_end_autoclicks():
+    """Kick off the battle-end button clicking in a background thread so it
+    starts immediately and races the user's Continue click, while the AI
+    parser runs at the same time.
+    """
+    if not AUTOCLICKER_AVAILABLE:
+        return
+    threading.Thread(target=_battle_end_click_worker, daemon=True).start()
 
 
 def run_other_script(log_file_path=None):

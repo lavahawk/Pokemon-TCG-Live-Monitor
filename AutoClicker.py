@@ -11,6 +11,11 @@ import time
 import os
 from PIL import Image
 
+# Remove pyautogui's default 0.1s pause after every action — clicks fire as
+# fast as the game animation allows.
+pyautogui.PAUSE = 0
+pyautogui.FAILSAFE = True  # slam mouse to a screen corner to abort
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "button_templates")
 
