@@ -390,6 +390,51 @@ def _get_battle_end_clicker():
         return None
 
 
+def _block_continue_button(duration=1.0):
+    """Suppress clicks on the Continue button region for a short window.
+
+    After clicking BATTLE LOG, the next screen can be advanced accidentally
+    by a stray user click before the export button is captured. For
+    `duration` seconds, any click landing inside the bottom-center area of
+    the game window (where Continue lives) is swallowed.
+    """
+    try:
+        import mouse as _mouse
+    except ImportError:
+        _mouse = None
+    if _mouse is None:
+        return
+
+    win = _battle_end_clicker.game_window if _battle_end_clicker else None
+    if not win:
+        return
+
+    # Bottom-center strip of the game window where Continue sits.
+    left = win['left'] + int(win['width'] * 0.35)
+    right = win['left'] + int(win['width'] * 0.65)
+    top = win['top'] + int(win['height'] * 0.82)
+    bottom = win['top'] + int(win['height'] * 0.98)
+    end_time = time.time() + duration
+
+    def _guard(event):
+        if time.time() < end_time and left <= event.x <= right and top <= event.y <= bottom:
+            return False  # swallow the click
+        return True
+
+    _mouse.hook(_guard)
+    # Unhook after the window elapses (hook returns its removal handler in
+    # some versions; fall back to unhook_all scoped to our callback).
+    def _release():
+        try:
+            _mouse.unhook(_guard)
+        except Exception:
+            try:
+                _mouse.unhook_all()
+            except Exception:
+                pass
+    threading.Timer(duration + 0.05, _release).start()
+
+
 def _battle_end_click_worker():
     """Find and click each battle-end button in order, polling fast."""
     clicker = _get_battle_end_clicker()
@@ -408,10 +453,11 @@ def _battle_end_click_worker():
             if found:
                 clicker.click_button(spec["template"], force=True)
                 print(Fore.GREEN + f"[AutoClicker] Clicked {spec['desc']}.")
-                # Settle only as long as the game's screen transition needs —
-                # checking earlier is harmless (button just isn't there yet),
-                # but waiting too long wastes the animation window.
-                time.sleep(0.25)
+                if spec["template"] == "battle_log":
+                    # Minimize click-to-click time: guard against a stray
+                    # Continue click, then start searching for the export
+                    # button immediately — no settle sleep.
+                    _block_continue_button(1.0)
             else:
                 print(Fore.YELLOW + f"[AutoClicker] {spec['desc']} not found within {spec['timeout']}s.")
         if _battle_end_clicker_missing:

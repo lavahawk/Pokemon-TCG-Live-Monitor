@@ -29,6 +29,7 @@ matplotlib==3.8.2
 pytesseract==0.3.10
 mss==9.0.1
 Pillow==10.2.0
+mouse==0.7.1
 pywin32==306  # For window detection and positioning
 
 # UI/Overlay (NEW - for minimal overlay display)

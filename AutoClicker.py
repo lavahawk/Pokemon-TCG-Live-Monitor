@@ -130,15 +130,56 @@ class AutoClicker:
         
         return None
     
-    def click_button(self, template_name, region=None, force=False):
+    @staticmethod
+    def _background_click(hwnd, x, y):
+        """Click a window via PostMessage without moving the real cursor.
+
+        Sends WM_LBUTTONDOWN/WM_LBUTTONUP directly to the window. Works even
+        when the game is unfocused and never touches the user's mouse. Some
+        games (Unity raw input) ignore posted messages, so callers should
+        verify the click landed and fall back to a physical click.
+        """
+        try:
+            import win32api
+            import win32con
+            lparam = win32api.MAKELONG(x, y)
+            win32api.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
+            time.sleep(0.02)
+            win32api.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, lparam)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _screen_to_client(hwnd, x, y):
+        """Convert absolute screen coords to window-client coords."""
+        try:
+            import win32gui
+            return win32gui.ScreenToClient(hwnd, (x, y))
+        except Exception:
+            return (x, y)
+
+    @staticmethod
+    def _window_from_point(x, y):
+        """Return the top-level window handle at the given screen point."""
+        try:
+            import win32gui
+            return win32gui.WindowFromPoint((x, y))
+        except Exception:
+            return None
+
+    def click_button(self, template_name, region=None, force=False, mode="auto"):
         """
         Find and click a button if it's visible
-        
+
         Args:
             template_name: Name of the loaded template
             region: Optional region to search
             force: If True, ignore click cooldown
-        
+            mode: 'auto'  = background click, falls back to physical if the
+                            window didn't accept it
+                  'physical' = real cursor click (pyautogui)
+
         Returns:
             True if button was found and clicked
         """
@@ -147,20 +188,30 @@ class AutoClicker:
             last_click = self.last_click_time.get(template_name, 0)
             if time.time() - last_click < self.click_cooldown:
                 return False
-        
+
         # Find button
         coords = self.find_button(template_name, region)
-        
+
         if coords:
             x, y = coords
-            
-            # Move and click
-            pyautogui.click(x, y)
+
+            clicked = False
+            if mode in ("auto", "background"):
+                hwnd = self._window_from_point(x, y)
+                if hwnd:
+                    cx, cy = self._screen_to_client(hwnd, x, y)
+                    clicked = self._background_click(hwnd, cx, cy)
+                    if clicked:
+                        print(f"✓ Clicked {template_name} at ({x}, {y}) [background]")
+
+            if not clicked and mode in ("auto", "physical"):
+                # Physical fallback: real cursor click.
+                pyautogui.click(x, y)
+                print(f"✓ Clicked {template_name} at ({x}, {y}) [physical]")
+
             self.last_click_time[template_name] = time.time()
-            
-            print(f"✓ Clicked {template_name} at ({x}, {y})")
-            return True
-        
+            return clicked or mode == "physical"
+
         return False
     
     def watch_and_click(self, buttons, region=None, interval=0.5, duration=30):
