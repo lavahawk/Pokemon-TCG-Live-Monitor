@@ -205,8 +205,21 @@ class AutoClicker:
                         print(f"✓ Clicked {template_name} at ({x}, {y}) [background]")
 
             if not clicked and mode in ("auto", "physical"):
-                # Physical fallback: real cursor click.
+                # Physical fallback: real cursor click. Save the user's
+                # cursor position first and put it back right after, so the
+                # automation is invisible outside the brief click itself.
+                restore_pos = None
+                try:
+                    import win32api
+                    restore_pos = win32api.GetCursorPos()
+                except Exception:
+                    restore_pos = pyautogui.position()
                 pyautogui.click(x, y)
+                if restore_pos:
+                    try:
+                        pyautogui.moveTo(restore_pos[0], restore_pos[1], _pause=False)
+                    except Exception:
+                        pass
                 print(f"✓ Clicked {template_name} at ({x}, {y}) [physical]")
 
             self.last_click_time[template_name] = time.time()
