@@ -109,7 +109,11 @@ class AutoClicker:
         }
         
         try:
-            screenshot = self.sct.grab(monitor)
+            # mss.mss() is NOT thread-safe: an instance created in one thread
+            # raises ThreadSafetyError when reused in another. Create a
+            # per-capture instance here so any thread can use find_button.
+            with mss.mss() as sct:
+                screenshot = sct.grab(monitor)
             img = np.array(screenshot)
             img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
             
@@ -278,7 +282,8 @@ class AutoClicker:
         }
         
         try:
-            screenshot = self.sct.grab(monitor)
+            with mss.mss() as sct:
+                screenshot = sct.grab(monitor)
             img = np.array(screenshot)
             img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
             

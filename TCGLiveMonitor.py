@@ -342,12 +342,12 @@ def monitor_clipboard():
             if clipboard_content != previous_clipboard and is_battle_log(clipboard_content):
                 print(Fore.GREEN + "[Monitor] Battle log detected! Saving...")
                 log_path = save_battle_log(clipboard_content)
-                play_sound()
                 previous_clipboard = clipboard_content
                 # Race the user's Continue click: start auto-clicking the
-                # BATTLE LOG + export buttons immediately in the background,
-                # before the (slower) AI parser runs.
+                # BATTLE LOG + export buttons immediately — before the sound
+                # and the (slower) AI parser — so no time is lost.
                 run_battle_end_autoclicks()
+                play_sound()
                 run_other_script(log_path)
             elif clipboard_content != previous_clipboard and clipboard_content:
                 clip_preview = clipboard_content[:60].replace('\n', ' ')
@@ -359,6 +359,22 @@ def monitor_clipboard():
             wait_for_game_startup()
             print(Fore.GREEN + "[Monitor] Pokémon TCG Live is running. Monitoring clipboard...")
             previous_clipboard = ""  # Reset previous_clipboard if the game is restarted
+
+def _alog(msg):
+    """Append a timestamped line to Logs/autoclicker.log.
+
+    The headless monitor has no visible console, so print() output from the
+    clicker worker is invisible — this makes every clicker event debuggable.
+    """
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    print(Fore.CYAN + f"[AutoClicker] {msg}")
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(os.path.join(LOG_DIR, "autoclicker.log"), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
 
 def _get_battle_end_clicker():
     """Return a cached AutoClicker with all templates preloaded (or None).
@@ -386,7 +402,7 @@ def _get_battle_end_clicker():
         _battle_end_clicker_missing = missing
         return clicker
     except Exception as exc:
-        print(Fore.RED + f"[AutoClicker] Init error: {exc}")
+        _alog(f"Init error: {exc}")
         return None
 
 
@@ -439,7 +455,7 @@ def _battle_end_click_worker():
     """Find and click each battle-end button in order, polling fast."""
     clicker = _get_battle_end_clicker()
     if clicker is None:
-        print(Fore.YELLOW + "[AutoClicker] Game window not found — skipping button clicks.")
+        _alog("Game window not found — skipping button clicks.")
         return
     try:
         for spec in BATTLE_END_BUTTONS:
@@ -454,7 +470,7 @@ def _battle_end_click_worker():
                 # PTCG Live (Unity) reads raw input and ignores PostMessage
                 # background clicks, so always use a real cursor click.
                 clicker.click_button(spec["template"], force=True, mode="physical")
-                print(Fore.GREEN + f"[AutoClicker] Clicked {spec['desc']}.")
+                _alog(f"Clicked {spec['desc']}.")
                 if spec["template"] == "battle_log":
                     # Minimize click-to-click time: guard against a stray
                     # Continue click, then start searching for the export
@@ -469,15 +485,14 @@ def _battle_end_click_worker():
                         if not clicker.find_button(spec["template"]):
                             break  # button gone = click registered
                         clicker.click_button(spec["template"], force=True, mode="physical")
-                        print(Fore.GREEN + f"[AutoClicker] Clicked {spec['desc']} (retry {attempt - 1}).")
+                        _alog(f"Clicked {spec['desc']} (retry {attempt - 1}).")
             else:
-                print(Fore.YELLOW + f"[AutoClicker] {spec['desc']} not found within {spec['timeout']}s.")
+                _alog(f"{spec['desc']} not found within {spec['timeout']}s.")
         if _battle_end_clicker_missing:
-            print(Fore.YELLOW +
-                  f"[AutoClicker] Missing templates: {', '.join(_battle_end_clicker_missing)}. "
+            _alog(f"Missing templates: {', '.join(_battle_end_clicker_missing)}. "
                   "Run 'python SetupAutoClicker.py' to capture them.")
     except Exception as exc:
-        print(Fore.RED + f"[AutoClicker] Error during battle-end clicks: {exc}")
+        _alog(f"Error during battle-end clicks: {exc}")
 
 
 def run_battle_end_autoclicks():
@@ -486,7 +501,9 @@ def run_battle_end_autoclicks():
     parser runs at the same time.
     """
     if not AUTOCLICKER_AVAILABLE:
+        _alog("AutoClicker module unavailable — battle-end clicks skipped.")
         return
+    _alog("Battle log detected — starting battle-end click sequence.")
     threading.Thread(target=_battle_end_click_worker, daemon=True).start()
 
 
