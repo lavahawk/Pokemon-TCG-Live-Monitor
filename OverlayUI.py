@@ -15,7 +15,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize
 from PySide6.QtGui import QPixmap, QPainter, QColor
 from BattleDatabase import BattleDatabase
 
