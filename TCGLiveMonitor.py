@@ -578,6 +578,59 @@ def run_battle_end_autoclicks():
     threading.Thread(target=_battle_end_click_worker, daemon=True).start()
 
 
+#------------------------------------------------------------------------------
+# Battle-state watcher: polls the in-battle HUD (chat bubble, prize counters,
+# timer panel) at a low interval. When the HUD vanishes -> battle over ->
+# immediately show the Continue blocker and click BATTLE LOG + export. The
+# export puts the log on the clipboard, which the clipboard monitor then
+# saves/parses as usual. This triggers the clicks the moment the battle ends
+# instead of waiting for the user to click first.
+#------------------------------------------------------------------------------
+_BATTLE_STATE_STARTED = False
+
+
+def _battle_state_watcher():
+    """Watch the battle HUD; on battle end, trigger the click sequence."""
+    try:
+        from BattleState import check_hud, IN_BATTLE_POLL
+    except Exception as exc:
+        _alog(f"BattleState unavailable: {exc}")
+        return
+    was_in_battle = False
+    hud_gone_count = 0
+    while True:
+        try:
+            in_battle, hits, details = check_hud()
+            if in_battle and not was_in_battle:
+                _alog(f"Battle HUD detected ({hits}/3): {', '.join(details)}")
+                was_in_battle = True
+                hud_gone_count = 0
+            elif was_in_battle and not in_battle:
+                hud_gone_count += 1
+                if hud_gone_count >= 2:
+                    _alog(f"Battle HUD gone — battle over ({hits}/3): {', '.join(details)}")
+                    was_in_battle = False
+                    hud_gone_count = 0
+                    # Blocker FIRST, then the click sequence (which also
+                    # re-launches the blocker idempotently).
+                    _launch_continue_blocker()
+                    run_battle_end_autoclicks()
+            else:
+                hud_gone_count = 0
+            time.sleep(IN_BATTLE_POLL if was_in_battle else 3.0)
+        except Exception as exc:
+            _alog(f"Battle-state watcher error: {exc}")
+            time.sleep(5.0)
+
+
+def start_battle_state_watcher():
+    global _BATTLE_STATE_STARTED
+    if _BATTLE_STATE_STARTED:
+        return
+    _BATTLE_STATE_STARTED = True
+    threading.Thread(target=_battle_state_watcher, daemon=True).start()
+
+
 def run_other_script(log_file_path=None):
     # Construct the absolute path to the other script
     script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), SCRIPT_TO_RUN))
@@ -855,6 +908,10 @@ if __name__ == "__main__":
         # Start the overlay UI (unless disabled)
         if not args.no_overlay:
             start_overlay()
+
+        # Watch the in-battle HUD so battle-end clicks fire the moment the
+        # battle ends (independent of the clipboard trigger).
+        start_battle_state_watcher()
         
         # Wait for game to be running
         wait_for_game_startup()
