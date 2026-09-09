@@ -470,6 +470,41 @@ class MinimalOverlay(QWidget):
         except Exception as e:
             _dbg(f"load_stats error: {e}")
 
+    def _make_pokeball_icon(self, size=12, color="#FFD9D9"):
+        """Draw a tiny subtle pokeball glyph for the Reset button.
+
+        Simple flat pokeball: top half filled with the accent color, bottom
+        half transparent-ish, center band + button dot. Kept faint so it
+        reads as an accent, not a mascot.
+        """
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pixmap)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        r = size / 2.0 - 0.5
+        # Outline circle
+        pen = QColor(color)
+        pen.setAlpha(220)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(1, 1, size - 2, size - 2)
+        # Top half fill (faint)
+        fill = QColor(color)
+        fill.setAlpha(70)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawPie(1, 1, size - 2, size - 2, 0 * 16, 180 * 16)
+        # Center band
+        band = QColor(color)
+        band.setAlpha(200)
+        p.setBrush(band)
+        p.drawRect(1, size / 2.0 - 0.75, size - 2, 1.5)
+        # Center dot
+        p.setBrush(QColor(color))
+        p.drawEllipse(size / 2.0 - 1.75, size / 2.0 - 1.75, 3.5, 3.5)
+        p.end()
+        return QPixmap(pixmap)
+
     def confirm_reset_today_stats(self):
         """Tiny frameless popup matching the overlay style: "Reset?" + red Reset."""
         try:
@@ -485,26 +520,30 @@ class MinimalOverlay(QWidget):
                 | Qt.WindowType.Tool,
             )
             popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            # A touch of transparency for the whole popup.
+            popup.setWindowOpacity(0.92)
             popup.setObjectName("resetPopup")
 
             card = QFrame()
             card.setObjectName("resetCard")
             v = QVBoxLayout(card)
-            v.setContentsMargins(12, 9, 12, 10)
-            v.setSpacing(7)
+            v.setContentsMargins(9, 6, 9, 7)
+            v.setSpacing(4)
 
-            current = QLabel(f"Current {self.wins}-{self.losses}")
+            current = QLabel(f"Reset?  ({self.wins}-{self.losses})")
             current.setObjectName("resetCurrent")
             current.setAlignment(Qt.AlignmentFlag.AlignCenter)
             v.addWidget(current)
 
             row = QHBoxLayout()
-            row.setSpacing(6)
+            row.setSpacing(4)
 
-            reset_btn = QPushButton("Reset")
+            reset_btn = QPushButton(" Reset")
             reset_btn.setObjectName("resetConfirmBtn")
+            reset_btn.setIcon(self._make_pokeball_icon(12))
+            reset_btn.setIconSize(QSize(12, 12))
             reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            reset_btn.setFixedHeight(22)
+            reset_btn.setFixedHeight(18)
             reset_btn.clicked.connect(
                 lambda: self._do_reset_today(popup)
             )
@@ -513,7 +552,7 @@ class MinimalOverlay(QWidget):
             cancel_btn = QPushButton("✕")
             cancel_btn.setObjectName("resetCancelBtn")
             cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            cancel_btn.setFixedSize(22, 22)
+            cancel_btn.setFixedSize(18, 18)
             cancel_btn.setToolTip("Cancel")
             cancel_btn.clicked.connect(popup.close)
             row.addWidget(cancel_btn)
@@ -550,41 +589,41 @@ class MinimalOverlay(QWidget):
     def _reset_popup_style(self):
         return """
             QFrame#resetCard {
-                background-color: #141414;
-                border: 1px solid #505050;
-                border-radius: 4px;
+                background-color: rgba(20, 20, 20, 0.88);
+                border: 1px solid rgba(80, 80, 80, 0.85);
+                border-radius: 10px;
             }
             QLabel#resetCurrent {
                 color: #DCDCDC;
                 font-family: 'Segoe UI', Arial;
-                font-size: 10px;
+                font-size: 9px;
                 font-weight: 500;
                 background-color: transparent;
             }
             QPushButton#resetConfirmBtn {
-                background-color: #8B1A1A;
-                border: 1px solid #B22222;
-                border-radius: 3px;
+                background-color: rgba(139, 26, 26, 0.85);
+                border: 1px solid rgba(178, 34, 34, 0.9);
+                border-radius: 9px;
                 color: #FFECEC;
                 font-family: 'Segoe UI', Arial;
-                font-size: 10px;
+                font-size: 9px;
                 font-weight: 700;
-                padding: 2px 12px;
+                padding: 1px 9px;
             }
             QPushButton#resetConfirmBtn:hover {
-                background-color: #B22222;
+                background-color: rgba(178, 34, 34, 0.95);
                 border-color: #D33A3A;
                 color: #FFFFFF;
             }
             QPushButton#resetConfirmBtn:pressed {
-                background-color: #6E1414;
+                background-color: rgba(110, 20, 20, 0.95);
             }
             QPushButton#resetCancelBtn {
                 background-color: transparent;
-                border: 1px solid #505050;
-                border-radius: 3px;
+                border: 1px solid rgba(80, 80, 80, 0.8);
+                border-radius: 9px;
                 color: #9A9A9A;
-                font-size: 9px;
+                font-size: 8px;
                 font-weight: 700;
             }
             QPushButton#resetCancelBtn:hover {
