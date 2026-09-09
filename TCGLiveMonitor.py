@@ -467,12 +467,40 @@ def _block_continue_button(duration=1.0):
     threading.Timer(duration + 0.05, _release).start()
 
 
+def _launch_continue_blocker():
+    """Show the themed Continue-blocker overlay over the Continue button."""
+    try:
+        blocker_script = os.path.join(BASE_DIR, "ContinueBlocker.py")
+        if os.path.exists(blocker_script):
+            return subprocess.Popen(
+                [sys.executable, blocker_script],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+    except Exception as exc:
+        _alog(f"Continue blocker launch failed: {exc}")
+    return None
+
+
+def _close_continue_blocker(proc):
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=3)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 def _battle_end_click_worker():
     """Find and click each battle-end button in order, polling fast."""
     clicker = _get_battle_end_clicker()
     if clicker is None:
         _alog("Game window not found — skipping button clicks.")
         return
+    blocker_proc = None
     try:
         for spec in BATTLE_END_BUTTONS:
             if spec["template"] in _battle_end_clicker_missing:
@@ -488,10 +516,10 @@ def _battle_end_click_worker():
                 clicker.click_button(spec["template"], force=True, mode="physical")
                 _alog(f"Clicked {spec['desc']}.")
                 if spec["template"] == "battle_log":
-                    # Minimize click-to-click time: guard against a stray
-                    # Continue click, then start searching for the export
-                    # button immediately — no settle sleep.
+                    # Cover the Continue button with the themed blocker so a
+                    # stray click can't skip past the battle-log popup.
                     _block_continue_button(1.0)
+                    blocker_proc = _launch_continue_blocker()
                 else:
                     # The popup can still be animating in when the first
                     # click lands — if the button is still visible after a
@@ -502,6 +530,9 @@ def _battle_end_click_worker():
                             break  # button gone = click registered
                         clicker.click_button(spec["template"], force=True, mode="physical")
                         _alog(f"Clicked {spec['desc']} (retry {attempt - 1}).")
+                    # Export done (or given up) — release the Continue button.
+                    _close_continue_blocker(blocker_proc)
+                    blocker_proc = None
             else:
                 _alog(f"{spec['desc']} not found within {spec['timeout']}s.")
         if _battle_end_clicker_missing:
@@ -509,6 +540,8 @@ def _battle_end_click_worker():
                   "Run 'python SetupAutoClicker.py' to capture them.")
     except Exception as exc:
         _alog(f"Error during battle-end clicks: {exc}")
+    finally:
+        _close_continue_blocker(blocker_proc)
 
 
 def run_battle_end_autoclicks():
