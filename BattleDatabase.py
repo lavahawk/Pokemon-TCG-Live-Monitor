@@ -267,6 +267,27 @@ class BattleDatabase:
             return row[0], row[1]  # wins, losses
         return 0, 0
     
+    def reset_today_stats(self):
+        """Reset today's win/loss counters to 0-0.
+
+        Only the session counters are cleared; battle history and rank data
+        are untouched. Called from the overlay's double-click reset popup.
+        """
+        today = datetime.now().date()
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT wins, losses FROM session_stats WHERE date = ?", (today,))
+        row = cursor.fetchone()
+        cursor.execute(
+            "UPDATE session_stats SET wins = 0, losses = 0 WHERE date = ?",
+            (today,),
+        )
+        conn.commit()
+        conn.close()
+        old = f"{row[0]}-{row[1]}" if row else "0-0"
+        print(f"✓ Session stats reset: {old} → 0-0")
+        return True
+    
     def get_current_rank(self):
         """Get most recent rank"""
         conn = sqlite3.connect(self.db_path)

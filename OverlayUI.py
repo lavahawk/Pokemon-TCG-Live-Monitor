@@ -13,7 +13,7 @@ import win32con
 import psutil
 from datetime import datetime
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QMessageBox
 )
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPixmap, QPainter, QColor
@@ -360,9 +360,11 @@ class MinimalOverlay(QWidget):
         self.ball_icon.setFixedSize(12, 12)
         stats_layout.addWidget(self.ball_icon)
         
-        # Stats text label
+        # Stats text label — double-click opens a mini reset popup
         self.stats_label = QLabel("Elo:-- | Max:-- | 0-0")
         self.stats_label.setObjectName("stats")
+        self.stats_label.setToolTip("Double-click to reset today's W/L count")
+        self.stats_label.mouseDoubleClickEvent = lambda e: self.confirm_reset_today_stats()
         stats_layout.addWidget(self.stats_label)
         
         # Small arrow indicator (clickable)
@@ -467,6 +469,31 @@ class MinimalOverlay(QWidget):
 
         except Exception as e:
             _dbg(f"load_stats error: {e}")
+
+    def confirm_reset_today_stats(self):
+        """Mini popup to reset today's W/L count after double-clicking the score."""
+        try:
+            box = QMessageBox(self)
+            box.setWindowTitle("Reset Session Count")
+            box.setText(
+                f"Reset today's count?\n\n"
+                f"Current: {self.wins}-{self.losses} (W-L)\n\n"
+                f"Battle history and rank data are kept — only the\n"
+                f"today counter on this overlay returns to 0-0."
+            )
+            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            box.setDefaultButton(QMessageBox.StandardButton.No)
+            # Keep the popup on top like the overlay itself.
+            box.setWindowFlags(box.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+            result = box.exec()
+
+            if result == QMessageBox.StandardButton.Yes:
+                self.db.reset_today_stats()
+                self.wins, self.losses = 0, 0
+                self.update_display()
+                _dbg("Session stats reset via overlay popup")
+        except Exception as e:
+            _dbg(f"confirm_reset_today_stats error: {e}")
 
     def update_limitless_chat(self, payload):
         try:
