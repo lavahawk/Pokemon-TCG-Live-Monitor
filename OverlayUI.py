@@ -13,7 +13,7 @@ import win32con
 import psutil
 from datetime import datetime
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QMessageBox
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton
 )
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPixmap, QPainter, QColor
@@ -471,29 +471,127 @@ class MinimalOverlay(QWidget):
             _dbg(f"load_stats error: {e}")
 
     def confirm_reset_today_stats(self):
-        """Mini popup to reset today's W/L count after double-clicking the score."""
+        """Tiny frameless popup matching the overlay style: "Reset?" + red Reset."""
         try:
-            box = QMessageBox(self)
-            box.setWindowTitle("Reset Session Count")
-            box.setText(
-                f"Reset today's count?\n\n"
-                f"Current: {self.wins}-{self.losses} (W-L)\n\n"
-                f"Battle history and rank data are kept — only the\n"
-                f"today counter on this overlay returns to 0-0."
-            )
-            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            box.setDefaultButton(QMessageBox.StandardButton.No)
-            # Keep the popup on top like the overlay itself.
-            box.setWindowFlags(box.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-            result = box.exec()
+            # Reuse the existing popup if it's already open.
+            if getattr(self, "_reset_popup", None) is not None and self._reset_popup.isVisible():
+                self._reset_popup.close()
+                return
 
-            if result == QMessageBox.StandardButton.Yes:
-                self.db.reset_today_stats()
-                self.wins, self.losses = 0, 0
-                self.update_display()
-                _dbg("Session stats reset via overlay popup")
+            popup = QWidget(
+                None,
+                Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+                | Qt.WindowType.Tool,
+            )
+            popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            popup.setObjectName("resetPopup")
+
+            card = QFrame()
+            card.setObjectName("resetCard")
+            v = QVBoxLayout(card)
+            v.setContentsMargins(12, 9, 12, 10)
+            v.setSpacing(7)
+
+            current = QLabel(f"Current {self.wins}-{self.losses}")
+            current.setObjectName("resetCurrent")
+            current.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            v.addWidget(current)
+
+            row = QHBoxLayout()
+            row.setSpacing(6)
+
+            reset_btn = QPushButton("Reset")
+            reset_btn.setObjectName("resetConfirmBtn")
+            reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            reset_btn.setFixedHeight(22)
+            reset_btn.clicked.connect(
+                lambda: self._do_reset_today(popup)
+            )
+            row.addWidget(reset_btn)
+
+            cancel_btn = QPushButton("✕")
+            cancel_btn.setObjectName("resetCancelBtn")
+            cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            cancel_btn.setFixedSize(22, 22)
+            cancel_btn.setToolTip("Cancel")
+            cancel_btn.clicked.connect(popup.close)
+            row.addWidget(cancel_btn)
+
+            v.addLayout(row)
+
+            outer = QVBoxLayout(popup)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.addWidget(card)
+
+            popup.setStyleSheet(self._reset_popup_style())
+            self._reset_popup = popup
+
+            # Position just above the overlay, right-aligned with it.
+            popup.adjustSize()
+            geo = self.frameGeometry()
+            popup.move(geo.right() - popup.width(), geo.top() - popup.height() - 6)
+            popup.show()
+            _dbg("Reset popup opened")
         except Exception as e:
             _dbg(f"confirm_reset_today_stats error: {e}")
+
+    def _do_reset_today(self, popup):
+        try:
+            self.db.reset_today_stats()
+            self.wins, self.losses = 0, 0
+            self.update_display()
+            _dbg("Session stats reset via overlay popup")
+        except Exception as e:
+            _dbg(f"reset error: {e}")
+        finally:
+            popup.close()
+
+    def _reset_popup_style(self):
+        return """
+            QFrame#resetCard {
+                background-color: #141414;
+                border: 1px solid #505050;
+                border-radius: 4px;
+            }
+            QLabel#resetCurrent {
+                color: #DCDCDC;
+                font-family: 'Segoe UI', Arial;
+                font-size: 10px;
+                font-weight: 500;
+                background-color: transparent;
+            }
+            QPushButton#resetConfirmBtn {
+                background-color: #8B1A1A;
+                border: 1px solid #B22222;
+                border-radius: 3px;
+                color: #FFECEC;
+                font-family: 'Segoe UI', Arial;
+                font-size: 10px;
+                font-weight: 700;
+                padding: 2px 12px;
+            }
+            QPushButton#resetConfirmBtn:hover {
+                background-color: #B22222;
+                border-color: #D33A3A;
+                color: #FFFFFF;
+            }
+            QPushButton#resetConfirmBtn:pressed {
+                background-color: #6E1414;
+            }
+            QPushButton#resetCancelBtn {
+                background-color: transparent;
+                border: 1px solid #505050;
+                border-radius: 3px;
+                color: #9A9A9A;
+                font-size: 9px;
+                font-weight: 700;
+            }
+            QPushButton#resetCancelBtn:hover {
+                border-color: #808080;
+                color: #DCDCDC;
+            }
+        """
 
     def update_limitless_chat(self, payload):
         try:
