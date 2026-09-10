@@ -683,12 +683,19 @@ def _battle_state_watcher():
         return
     was_in_battle = False
     hud_gone_count = 0
+    # Once a battle has been seen, keep a continuous low-cost watch for the
+    # BATTLE LOG button whenever we're NOT in battle — the HUD flickers on
+    # and off mid-battle (cards over anchors), so one-shot windows after
+    # "HUD gone" expire before the real battle-end screen appears. This
+    # persistent watch catches the button whenever it actually shows.
+    battle_seen = False
     while True:
         try:
             in_battle, hits, details = check_hud()
             if in_battle and not was_in_battle:
                 _alog(f"Battle HUD detected ({hits}/3): {', '.join(details)}")
                 was_in_battle = True
+                battle_seen = True
                 hud_gone_count = 0
             elif was_in_battle and not in_battle:
                 hud_gone_count += 1
@@ -696,15 +703,18 @@ def _battle_state_watcher():
                 # even considering it battle end — cards sliding over the
                 # anchors cause momentary flicker mid-battle.
                 if hud_gone_count >= 3:
-                    _alog(f"Battle HUD gone x{hud_gone_count} — watching for BATTLE LOG button (60s)...")
+                    _alog(f"Battle HUD gone x{hud_gone_count} — battle may be over.")
                     was_in_battle = False
                     hud_gone_count = 0
-                    if _confirm_battle_log_visible(timeout=60):
-                        _alog("BATTLE LOG button confirmed — firing sequence.")
-                        _launch_continue_blocker()
-                        run_battle_end_autoclicks()
-                    else:
-                        _alog("No BATTLE LOG button within 60s — resuming HUD watch.")
+            elif not in_battle and battle_seen:
+                # Not in battle and a battle was seen this session: watch
+                # for the BATTLE LOG button directly (cheap bottom-half
+                # search). If it's on screen, the battle-end screen is up.
+                if _confirm_battle_log_visible(timeout=0.5):
+                    _alog("BATTLE LOG button confirmed — firing sequence.")
+                    _launch_continue_blocker()
+                    run_battle_end_autoclicks()
+                    battle_seen = False  # re-arm on next battle's HUD
             else:
                 hud_gone_count = 0
             time.sleep(IN_BATTLE_POLL if was_in_battle else 3.0)
