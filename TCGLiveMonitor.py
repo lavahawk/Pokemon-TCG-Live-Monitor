@@ -50,6 +50,8 @@ BATTLE_END_POLL_INTERVAL = 0  # continuous: mss capture (~30-50ms) IS the interv
 # per-battle template loading delay.
 _battle_end_clicker = None
 _battle_end_clicker_missing = []
+_last_click_sequence_time = 0.0  # dedupe: watcher + clipboard both trigger
+CLICK_SEQUENCE_COOLDOWN = 30  # seconds
 PID_FILE = os.path.join(BASE_DIR, ".monitor_pid")  # PID file for process management
 
 # Ensure the log directory exists
@@ -552,11 +554,16 @@ def _battle_end_click_worker():
                             break  # button gone = click registered
                         clicker.click_button(spec["template"], force=True, mode="physical")
                         _alog(f"Clicked {spec['desc']} (retry {attempt - 1}).")
-                    # Export done (or given up) — release the Continue button.
+                    # Export done — release the Continue button immediately
+                    # so the blocker never outstays its welcome.
                     _close_continue_blocker(blocker_proc)
                     blocker_proc = None
             else:
                 _alog(f"{spec['desc']} not found within {spec['timeout']}s.")
+                # Button never appeared — don't leave the blocker hanging.
+                if spec["template"] == "battle_log_export":
+                    _close_continue_blocker(blocker_proc)
+                    blocker_proc = None
         if _battle_end_clicker_missing:
             _alog(f"Missing templates: {', '.join(_battle_end_clicker_missing)}. "
                   "Run 'python SetupAutoClicker.py' to capture them.")
@@ -571,9 +578,18 @@ def run_battle_end_autoclicks():
     starts immediately and races the user's Continue click, while the AI
     parser runs at the same time.
     """
+    global _last_click_sequence_time
     if not AUTOCLICKER_AVAILABLE:
         _alog("AutoClicker module unavailable — battle-end clicks skipped.")
         return
+    # Both the HUD watcher AND the clipboard trigger call this — the export
+    # click puts the log on the clipboard, re-triggering the sequence. Run
+    # only once per battle.
+    now = time.time()
+    if now - _last_click_sequence_time < CLICK_SEQUENCE_COOLDOWN:
+        _alog("Click sequence already ran recently — skipping duplicate trigger.")
+        return
+    _last_click_sequence_time = now
     _alog("Battle log detected — starting battle-end click sequence.")
     threading.Thread(target=_battle_end_click_worker, daemon=True).start()
 
