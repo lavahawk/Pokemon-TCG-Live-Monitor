@@ -29,6 +29,7 @@ from PySide6.QtWidgets import QApplication, QWidget, QLabel, QHBoxLayout, QPushB
 import win32gui
 
 BLOCKER_MAX_LIFE = 30  # failsafe: never linger longer than this
+DISMISS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Logs", ".blocker_dismiss")
 
 # Default Continue-button region, relative to the game window.
 # Centered directly below the BATTLE LOG button (~50% x, ~81% y).
@@ -134,11 +135,24 @@ class ContinueBlocker(QWidget):
         self.fade_timer.timeout.connect(self._fade_tick)
         self.fade_timer.start(16)
 
+        # Watch for the monitor's dismiss signal (export hit the clipboard).
+        self.dismiss_timer = QTimer(self)
+        self.dismiss_timer.timeout.connect(self._check_dismiss_signal)
+        self.dismiss_timer.start(100)
+
         self.life_timer = QTimer(self)
         self.life_timer.timeout.connect(lambda: self.dismiss(close_after=True))
         self.life_timer.start(int(BLOCKER_MAX_LIFE * 1000))
 
         self._follow_game()
+
+    def _check_dismiss_signal(self):
+        """Fade out the moment the monitor signals the export happened."""
+        try:
+            if os.path.exists(DISMISS_FILE):
+                self.dismiss(close_after=True)
+        except Exception:
+            pass
 
     def _find_game_rect(self):
         # RankDetector resolves the real game window (FindWindow alone can

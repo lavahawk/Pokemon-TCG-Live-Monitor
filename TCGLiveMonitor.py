@@ -361,6 +361,9 @@ def monitor_clipboard():
                 last_battle_log_time = time.time()
                 log_path = save_battle_log(clipboard_content)
                 previous_clipboard = clipboard_content
+                # Export just landed on the clipboard (the ding moment) —
+                # dismiss the Continue blocker now.
+                _signal_blocker_dismiss()
                 # Race the user's Continue click: start auto-clicking the
                 # BATTLE LOG + export buttons immediately — before the sound
                 # and the (slower) AI parser — so no time is lost.
@@ -505,7 +508,20 @@ def _launch_continue_blocker():
     return None
 
 
+BLOCKER_DISMISS_FILE = os.path.join(LOG_DIR, ".blocker_dismiss")
+
+
+def _signal_blocker_dismiss():
+    """Tell any running Continue blocker to fade out now (export happened)."""
+    try:
+        with open(BLOCKER_DISMISS_FILE, "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
+
+
 def _close_continue_blocker(proc):
+    _signal_blocker_dismiss()
     if proc is None:
         return
     try:
