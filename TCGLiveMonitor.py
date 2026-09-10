@@ -562,12 +562,19 @@ def _battle_end_click_worker():
                     blocker_proc = _launch_continue_blocker()
                 else:
                     # The popup can still be animating in when the first
-                    # click lands — if the button is still visible after a
-                    # short wait, the click didn't register; retry.
+                    # click lands — if the export never happened (clipboard
+                    # still empty of a battle log), retry. The moment the log
+                    # lands on the clipboard, stop: the click worked. This
+                    # keeps the mouse to exactly TWO movements per battle.
+                    import pyperclip
                     for attempt in range(2, 5):
-                        time.sleep(0.7)
-                        if not clicker.find_button(spec["template"]):
-                            break  # button gone = click registered
+                        time.sleep(1.0)
+                        try:
+                            clip = pyperclip.paste() or ""
+                        except Exception:
+                            clip = ""
+                        if is_battle_log(clip):
+                            break  # export registered — done clicking
                         clicker.click_button(spec["template"], force=True, mode="physical")
                         _alog(f"Clicked {spec['desc']} (retry {attempt - 1}).")
                     # Export done — release the Continue button immediately

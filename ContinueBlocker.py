@@ -230,7 +230,7 @@ class ContinueBlocker(QWidget):
 
     def _border_tick(self):
         # Advance the comet along the border (0..1 around the perimeter).
-        self._comet_pos = (getattr(self, "_comet_pos", 0.0) + 0.0035) % 1.0
+        self._comet_pos = (getattr(self, "_comet_pos", 0.0) + 0.0028) % 1.0
         self.update()
 
     def _fade_tick(self):
@@ -286,20 +286,20 @@ class ContinueBlocker(QWidget):
         # Comet: a single soft glowing head with a fading trail glides
         # around the border — subtle, premium, not busy.
         head = self._comet_pos = getattr(self, "_comet_pos", 0.0)
-        TRAIL = 14
+        TRAIL = 10
         for i in range(TRAIL, 0, -1):
-            frac = (head - i * 0.006) % 1.0
+            frac = (head - i * 0.008) % 1.0
             pt = path.pointAtPercent(frac)
             fade = 1.0 - i / TRAIL
-            radius = 1.2 + 2.2 * fade
-            color = QColor(int(159 + 40 * fade), int(178 + 30 * fade), 192, int(230 * fade))
+            radius = 1.0 + 1.8 * fade
+            color = QColor(int(159 + 40 * fade), int(178 + 30 * fade), 192, int(210 * fade))
             p.setPen(Qt.NoPen)
             p.setBrush(color)
             p.drawEllipse(pt, radius, radius)
         # bright head
         hp = path.pointAtPercent(head)
         p.setBrush(QColor(233, 243, 255))
-        p.drawEllipse(hp, 3.2, 3.2)
+        p.drawEllipse(hp, 2.8, 2.8)
         p.end()
 
 
