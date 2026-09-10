@@ -590,7 +590,13 @@ _BATTLE_STATE_STARTED = False
 
 
 def _battle_state_watcher():
-    """Watch the battle HUD; on battle end, trigger the click sequence."""
+    """Watch the battle HUD; on battle end, trigger the click sequence.
+
+    The HUD is only used to ARM a fast poll — the trigger that actually
+    fires the blocker + clicks is the BATTLE LOG button template appearing
+    on screen. This prevents false positives from arena themes and cards
+    covering the HUD anchors mid-battle.
+    """
     try:
         from BattleState import check_hud, IN_BATTLE_POLL
     except Exception as exc:
@@ -607,20 +613,43 @@ def _battle_state_watcher():
                 hud_gone_count = 0
             elif was_in_battle and not in_battle:
                 hud_gone_count += 1
-                if hud_gone_count >= 2:
-                    _alog(f"Battle HUD gone — battle over ({hits}/3): {', '.join(details)}")
+                # Require the HUD to stay gone for ~6s (3 checks) before
+                # even considering it battle end — cards sliding over the
+                # anchors cause momentary flicker mid-battle.
+                if hud_gone_count >= 3:
+                    _alog(f"Battle HUD gone x{hud_gone_count} — checking for BATTLE LOG button...")
                     was_in_battle = False
                     hud_gone_count = 0
-                    # Blocker FIRST, then the click sequence (which also
-                    # re-launches the blocker idempotently).
-                    _launch_continue_blocker()
-                    run_battle_end_autoclicks()
+                    if _confirm_battle_log_visible(timeout=12):
+                        _alog("BATTLE LOG button confirmed — firing sequence.")
+                        _launch_continue_blocker()
+                        run_battle_end_autoclicks()
+                    else:
+                        _alog("BATTLE LOG button not visible — false alarm, resuming HUD watch.")
             else:
                 hud_gone_count = 0
             time.sleep(IN_BATTLE_POLL if was_in_battle else 3.0)
         except Exception as exc:
             _alog(f"Battle-state watcher error: {exc}")
             time.sleep(5.0)
+
+
+def _confirm_battle_log_visible(timeout=12):
+    """Return True if the BATTLE LOG button template appears within timeout."""
+    if not AUTOCLICKER_AVAILABLE:
+        return False
+    clicker = _get_battle_end_clicker()
+    if clicker is None or "battle_log" in _battle_end_clicker_missing:
+        return False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if clicker.find_button("battle_log"):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.15)
+    return False
 
 
 def start_battle_state_watcher():
