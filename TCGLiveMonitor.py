@@ -534,6 +534,27 @@ def _close_continue_blocker(proc):
             pass
 
 
+def _sweep_orphan_blockers():
+    """Kill any ContinueBlocker processes left over from previous battles.
+    Orphaned blockers keep 30fps animation timers + topmost windows alive,
+    which makes the cursor feel glitchy after an import."""
+    try:
+        import psutil
+        killed = 0
+        for p in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                cmd = " ".join(p.info["cmdline"] or [])
+                if "ContinueBlocker.py" in cmd:
+                    p.kill()
+                    killed += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if killed:
+            _alog(f"Swept {killed} orphaned blocker process(es).")
+    except Exception:
+        pass
+
+
 def _battle_end_click_worker():
     """Find and click each battle-end button in order, polling fast."""
     clicker = _get_battle_end_clicker()
@@ -594,6 +615,8 @@ def _battle_end_click_worker():
         _alog(f"Error during battle-end clicks: {exc}")
     finally:
         _close_continue_blocker(blocker_proc)
+        # Guarantee zero lingering blocker processes after every sequence.
+        threading.Timer(2.0, _sweep_orphan_blockers).start()
 
 
 def run_battle_end_autoclicks():

@@ -236,7 +236,8 @@ class ContinueBlocker(QWidget):
     def _fade_tick(self):
         """Ease window opacity toward the target (fade in/out).
         Uses an exponential approach for a silky, professional feel.
-        Once a fade-out completes, the window actually closes/hides."""
+        Once a fade-out completes, the process HARD-EXITS — no lingering
+        Qt timers, no polling, zero footprint after dismissal."""
         target = self._fade_target
         cur = self._opacity
         if abs(target - cur) < 0.01:
@@ -247,8 +248,8 @@ class ContinueBlocker(QWidget):
         self.setWindowOpacity(self._opacity)
         if target == 0.0 and self._opacity <= 0.01:
             if self._closing:
-                self.fade_timer.stop()
-                self.close()
+                _dbg("fade-out complete — hard exit")
+                os._exit(0)  # kill ALL timers/threads instantly
             else:
                 self.hide()
 
