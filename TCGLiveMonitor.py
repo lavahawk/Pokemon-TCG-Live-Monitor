@@ -617,15 +617,15 @@ def _battle_state_watcher():
                 # even considering it battle end — cards sliding over the
                 # anchors cause momentary flicker mid-battle.
                 if hud_gone_count >= 3:
-                    _alog(f"Battle HUD gone x{hud_gone_count} — checking for BATTLE LOG button...")
+                    _alog(f"Battle HUD gone x{hud_gone_count} — watching for BATTLE LOG button (60s)...")
                     was_in_battle = False
                     hud_gone_count = 0
-                    if _confirm_battle_log_visible(timeout=12):
+                    if _confirm_battle_log_visible(timeout=60):
                         _alog("BATTLE LOG button confirmed — firing sequence.")
                         _launch_continue_blocker()
                         run_battle_end_autoclicks()
                     else:
-                        _alog("BATTLE LOG button not visible — false alarm, resuming HUD watch.")
+                        _alog("No BATTLE LOG button within 60s — resuming HUD watch.")
             else:
                 hud_gone_count = 0
             time.sleep(IN_BATTLE_POLL if was_in_battle else 3.0)
