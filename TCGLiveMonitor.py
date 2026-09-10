@@ -494,8 +494,19 @@ def _block_continue_button(duration=1.0):
     threading.Timer(duration + 0.05, _release).start()
 
 
+BLOCKER_DISMISS_FILE = os.path.join(LOG_DIR, ".blocker_dismiss")
+
+
 def _launch_continue_blocker():
     """Show the themed Continue-blocker overlay over the Continue button."""
+    # Clear any stale dismiss signal from a previous battle — otherwise the
+    # new blocker sees the old file and dismisses instantly (the
+    # "works once, not the second time" bug).
+    try:
+        if os.path.exists(BLOCKER_DISMISS_FILE):
+            os.remove(BLOCKER_DISMISS_FILE)
+    except Exception:
+        pass
     try:
         blocker_script = os.path.join(BASE_DIR, "ContinueBlocker.py")
         if os.path.exists(blocker_script):
@@ -506,9 +517,6 @@ def _launch_continue_blocker():
     except Exception as exc:
         _alog(f"Continue blocker launch failed: {exc}")
     return None
-
-
-BLOCKER_DISMISS_FILE = os.path.join(LOG_DIR, ".blocker_dismiss")
 
 
 def _signal_blocker_dismiss():
@@ -562,15 +570,24 @@ def _battle_end_click_worker():
         _alog("Game window not found — skipping button clicks.")
         return
     blocker_proc = None
+    # Both battle-end buttons live in the bottom half of the game window —
+    # searching a quarter of the pixels keeps the fast poll cheap.
+    win = clicker.game_window
+    search_region = {
+        "left": win["left"],
+        "top": win["top"] + win["height"] // 2,
+        "width": win["width"],
+        "height": win["height"] // 2,
+    }
     try:
         for spec in BATTLE_END_BUTTONS:
             if spec["template"] in _battle_end_clicker_missing:
                 continue
             deadline = time.time() + spec["timeout"]
-            found = clicker.find_button(spec["template"])
+            found = clicker.find_button(spec["template"], region=search_region)
             while not found and time.time() < deadline:
                 time.sleep(BATTLE_END_POLL_INTERVAL)
-                found = clicker.find_button(spec["template"])
+                found = clicker.find_button(spec["template"], region=search_region)
             if found:
                 # PTCG Live (Unity) reads raw input and ignores PostMessage
                 # background clicks, so always use a real cursor click.
@@ -696,21 +713,33 @@ def _battle_state_watcher():
             time.sleep(5.0)
 
 
-def _confirm_battle_log_visible(timeout=12):
-    """Return True if the BATTLE LOG button template appears within timeout."""
+def _confirm_battle_log_visible(timeout=60):
+    """Return True if the BATTLE LOG button template appears within timeout.
+
+    Searches only the bottom half of the game window (where the battle-end
+    buttons live) — a quarter of the pixels of a full-window capture, so
+    the 60s watch costs almost nothing.
+    """
     if not AUTOCLICKER_AVAILABLE:
         return False
     clicker = _get_battle_end_clicker()
     if clicker is None or "battle_log" in _battle_end_clicker_missing:
         return False
+    win = clicker.game_window
+    search_region = {
+        "left": win["left"],
+        "top": win["top"] + win["height"] // 2,
+        "width": win["width"],
+        "height": win["height"] // 2,
+    }
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            if clicker.find_button("battle_log"):
+            if clicker.find_button("battle_log", region=search_region):
                 return True
         except Exception:
             pass
-        time.sleep(0.15)
+        time.sleep(0.25)
     return False
 
 
