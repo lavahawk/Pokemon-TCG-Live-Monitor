@@ -1,64 +1,57 @@
 """
 Battle-state (in-battle HUD) detector for Pokemon TCG Live.
 
-Samples three tiny colour patches (relative to the game window rect):
+In battle, the game shows a settings gear in the top-right corner of the
+board (the menus show a "more" button there instead). This module
+template-matches that gear in a small top-right region of the game window.
 
-  1. Chat bubble   - white circle on the left edge (~59% height)
-  2. Prize counter - yellow badge on the left deck box (bottom-left)
-  3. Timer strip   - dark HUD panel on the right edge
+v2.4.1: replaces the old three-colour-patch check, whose anchors no longer
+matched the game's layout (it reported "in battle" on the home screen and
+"not in battle" during real matches). Template captured at a 1136 px tall
+client area; scaled to the current window height.
 
->= 2 of 3 hits means "in battle". The HUD is only a hint used to speed up
-the BATTLE LOG button search; it never triggers clicks by itself.
-
-v2.4: only the three 12x12 patches are captured (not the whole window), and
-the caller supplies the mss instance + rect, so no GDI objects leak and no
-window enumeration happens per poll (BUG-010).
+The HUD is only a hint (polling speed, re-arming after an end screen); it
+never triggers clicks by itself.
 
 Standalone test:  python BattleState.py [--once]
 """
 
+import os
 import time
 
+import cv2
 import numpy as np
 
-REQUIRED_HITS = 2
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+GEAR_TEMPLATE = os.path.join(BASE_DIR, "button_templates", "battle_hud_gear.png")
+GEAR_CAPTURE_HEIGHT = 1136
+# Search area as fractions of the game window (gear centre is at ~0.969, 0.086).
+REGION = (0.90, 0.0, 1.0, 0.18)   # x0, y0, x1, y1
+THRESHOLD = 0.80
 IN_BATTLE_POLL = 1.5
 
-ANCHORS = {
-    "chat": (0.022, 0.59),
-    "prize": (0.225, 0.862),
-    "timer": (0.975, 0.30),
-}
-PATCH = 6  # half-size in pixels
+_template = None
+_scaled = {}
 
 
-def _is_whiteish(bgr, min_level=190):
-    b, g, r = bgr
-    return min(b, g, r) >= min_level
-
-
-def _is_yellowish(bgr):
-    b, g, r = bgr
-    return r > 150 and g > 120 and b < 110 and (r - b) > 60
-
-
-def _is_dark_panel(bgr, max_level=70):
-    return max(bgr) <= max_level
-
-
-_CHECKS = {"chat": _is_whiteish, "prize": _is_yellowish, "timer": _is_dark_panel}
-
-
-def _sample(sct, rect, rx, ry):
-    cx = rect["left"] + int(rect["width"] * rx)
-    cy = rect["top"] + int(rect["height"] * ry)
-    box = {"left": cx - PATCH, "top": cy - PATCH, "width": 2 * PATCH, "height": 2 * PATCH}
-    patch = np.asarray(sct.grab(box))[:, :, :3]
-    return tuple(float(c) for c in patch.reshape(-1, 3).mean(axis=0))
+def _gear(height):
+    """Gear template (gray) scaled for a window of the given height."""
+    global _template
+    if _template is None:
+        _template = cv2.imread(GEAR_TEMPLATE, cv2.IMREAD_GRAYSCALE)
+        if _template is None:
+            raise FileNotFoundError(GEAR_TEMPLATE)
+    key = int(height)
+    if key not in _scaled:
+        s = height / float(GEAR_CAPTURE_HEIGHT)
+        size = max(10, int(round(_template.shape[0] * s)))
+        _scaled.clear()
+        _scaled[key] = cv2.resize(_template, (size, size), interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
+    return _scaled[key]
 
 
 def check_hud(game_rect=None, sct=None):
-    """Return (in_battle, hits, details).
+    """Return (in_battle, score_pct, details).
 
     game_rect: dict {left, top, width, height} or legacy (l, t, w, h) tuple.
     sct:       an mss instance owned by the calling thread (optional).
@@ -72,22 +65,25 @@ def check_hud(game_rect=None, sct=None):
         if isinstance(game_rect, (tuple, list)):
             l, t, w, h = game_rect
             game_rect = {"left": l, "top": t, "width": w, "height": h}
-
+        w, h = game_rect["width"], game_rect["height"]
+        x0, y0, x1, y1 = REGION
+        box = {"left": game_rect["left"] + int(w * x0), "top": game_rect["top"] + int(h * y0),
+               "width": max(1, int(w * (x1 - x0))), "height": max(1, int(h * (y1 - y0)))}
         own = None
         if sct is None:
             import mss
             own = sct = mss.mss()
         try:
-            hits, details = 0, []
-            for name, (rx, ry) in ANCHORS.items():
-                bgr = _sample(sct, game_rect, rx, ry)
-                ok = _CHECKS[name](bgr)
-                hits += ok
-                details.append(f"{name}={tuple(int(v) for v in bgr)}:{'Y' if ok else 'N'}")
+            frame = np.asarray(sct.grab(box))
         finally:
             if own is not None:
                 own.close()
-        return hits >= REQUIRED_HITS, hits, details
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        tpl = _gear(h)
+        if tpl.shape[0] > gray.shape[0] or tpl.shape[1] > gray.shape[1]:
+            return False, 0, ["window_too_small"]
+        score = float(cv2.minMaxLoc(cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED))[1])
+        return score >= THRESHOLD, int(score * 100), [f"gear={score:.2f}"]
     except Exception as exc:
         return False, 0, [f"error:{exc}"]
 
@@ -96,9 +92,9 @@ if __name__ == "__main__":
     import sys
     print("Battle-state detector test - Ctrl+C to stop")
     while True:
-        in_battle, hits, details = check_hud()
+        in_battle, score, details = check_hud()
         state = "IN BATTLE" if in_battle else "not in battle"
-        print(f"[{time.strftime('%H:%M:%S')}] {state} ({hits}/3): {', '.join(details)}")
+        print(f"[{time.strftime('%H:%M:%S')}] {state}: {', '.join(details)}")
         if "--once" in sys.argv:
             break
         time.sleep(2)

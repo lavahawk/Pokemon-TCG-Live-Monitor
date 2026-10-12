@@ -9,19 +9,16 @@
 
 ## Quick Install (v2.4)
 
-**Option A: installer:** run `Pokemon-TCG-Live-Monitor-v2.4.0-Setup.exe` from the Releases page. No admin rights are needed.
+Download **`PokemonTCGLiveMonitor-2.4.0-Setup.exe`** from the [Releases page](https://github.com/lavahawk/Pokemon-TCG-Live-Monitor/releases/latest) and run it.
 
-**Option B: from the source folder:** double-click `Installers\INSTALL_COMPLETE_v2.4.bat`. You don't need to run it as Administrator.
+- Everything is included (its own Python runtime, all packages, Tesseract OCR). Nothing is downloaded during setup, and no admin rights are needed.
+- Setup optionally asks for your TCG Live username and an OpenAI API key (leave it empty for Local-Only mode).
+- With auto-start ticked, the monitor starts hidden at login, waits quietly until Pokemon TCG Live opens, then shows the overlay.
+- Upgrading keeps your battle history and settings.
 
-Either way, setup:
-1. Finds Python 3.10–3.12, or installs Python 3.12 for your user if none is found.
-2. Creates `.venv` and installs the packages, then downloads Tesseract OCR if needed.
-3. Asks for an optional OpenAI API key. Leave it empty for Local-Only mode.
-4. Registers auto-start: the monitor starts hidden at login, waits quietly until Pokemon TCG Live opens, then shows the overlay.
+If Windows SmartScreen warns about an unrecognised app, click **More info → Run anyway** (the installer isn't code-signed).
 
-**Debug mode:** run `Run_TCGLiveMonitor_Command_Prompt.bat` to see live output in a console. Everything is also written to `Logs\monitor.log`. Auto-export events go to `Logs\autoclicker.log`.
-
-**After pulling new code** that changes `requirements.txt`, run `Install_Dependencies.bat`.
+**Debug mode:** Start menu → Pokemon TCG Live Monitor → Tools → *Monitor (debug console)*. Everything is also written to `Logs\monitor.log`. Auto-export events go to `Logs\autoclicker.log`.
 
 See **[RELEASE_NOTES_v2.4.md](RELEASE_NOTES_v2.4.md)** for what changed, and `DevVault/` (open it as an Obsidian vault) for architecture, process maps and the bug register.
 
@@ -41,25 +38,17 @@ See **[RELEASE_NOTES_v2.4.md](RELEASE_NOTES_v2.4.md)** for what changed, and `De
 - **Background Operation** - Runs silently without interrupting gameplay  
 - **Sound Notifications** - Plays sound when battle log is detected  
 
-## Quick Start
+## Running from source (developers)
 
-### 1. Install Dependencies
-```batch
-Install_Dependencies.bat
+1. `Install_Dependencies.bat` creates `.venv` with Python 3.10–3.12 and installs `requirements.txt`.
+2. Install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki), or copy a `tesseract\` folder next to the code.
+3. `Run_TCGLiveMonitor_Command_Prompt.bat` runs the monitor with a console.
+
+### Building the installer
 ```
-
-**Important**: Also install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) for rank detection
-
-### 2. Run the Monitor
-```batch
-Run_TCGLiveMonitor_Command_Prompt.bat
+powershell -NoProfile -ExecutionPolicy Bypass -File installer\build_installer.ps1
 ```
-Or run in the background (headless):
-```batch
-Run_Headless.bat
-```
-
-Or add to Windows startup using `AutoRun_Add.py`
+Needs Inno Setup 6 and Tesseract on the build machine. It produces `installer\Output\PokemonTCGLiveMonitor-<version>-Setup.exe` plus a `.sha256` file. The version comes from `version.py`, and the shipped files are listed in `release_manifest.txt`. The build smoke-tests the bundled runtime before compiling.
 
 ## How It Works
 
@@ -91,20 +80,20 @@ Or add to Windows startup using `AutoRun_Add.py`
 - `deck_analytics.py` - Deck analytics helpers
 - `startup_utils.py` - Startup/launch helpers
 
-### Installers & Launchers
-- `Installers\INSTALL_COMPLETE_v2.4.bat` - Main installer (calls `bootstrap_setup.ps1`)
-- `Installers\Start_GUI_Mode_v2.4.bat` - Debug console launcher
-- `Installers\Remove_AutoStart_v2.4.bat` - Remove from startup
-- `Run_Headless.bat` - Headless launcher
-- `Run_TCGLiveMonitor_Command_Prompt.bat` - Console mode
+### Installer & Launchers
+- `installer\` - Installer build (`build_installer.ps1`, Inno Setup script, smoke test, wizard artwork)
+- `release_manifest.txt` - Files shipped in the installer
+- `version.py` - App version (single source)
+- `Run_TCGLiveMonitor_Command_Prompt.bat` - Console mode (source checkout)
+- `Install_Dependencies.bat` - Developer setup (.venv)
 
 ### Utilities
-- `AutoRun_Add.py` - Add to Windows startup
-- `AutoRun_Remove.py` - Remove from startup
 - `BattleEndAutomation.py` + `AutoClicker.py` - Battle-end auto-export (BATTLE LOG → export)
+- `BattleState.py` - In-battle detection (settings-gear template)
+- `SetupAutoClicker.py` - Recapture the auto-export button images
 - `game_window.py` - Shared game-window lookup
 - `leagues.py` - Ladder league thresholds
-- `SetupStartup.py` - Startup manager GUI
+- `qt_dialogs.py` - Small Qt prompts
 
 ### Configuration Files
 - `.openai_key` - Your OpenAI API key (optional, auto-created)

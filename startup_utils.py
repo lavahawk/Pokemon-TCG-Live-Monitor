@@ -10,7 +10,7 @@ import sys
 import winreg
 from pathlib import Path
 
-VERSION = "2.4"
+from version import VERSION
 TASK_NAME = "PokemonTCGLiveMonitor_v2.4"
 REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REG_VALUE = "PokemonTCGLiveMonitor"
@@ -69,9 +69,12 @@ def find_install_root(explicit_base: str | os.PathLike[str] | None = None) -> Pa
 
 
 def venv_python(root: str | os.PathLike[str], windowed: bool = False) -> Path | None:
+    """Python of an installed copy (bundled ``runtime\\``) or a dev checkout (``.venv``)."""
     exe_name = "pythonw.exe" if windowed else "python.exe"
-    candidate = Path(root) / ".venv" / "Scripts" / exe_name
-    return candidate if candidate.exists() else None
+    for candidate in (Path(root) / "runtime" / exe_name, Path(root) / ".venv" / "Scripts" / exe_name):
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def resolve_python(root: str | os.PathLike[str], windowed: bool = False) -> Path | None:

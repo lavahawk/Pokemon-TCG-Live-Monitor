@@ -33,7 +33,7 @@ import time
 from datetime import datetime
 
 ###Version=2.4
-VERSION = "2.4"
+from version import VERSION
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "Logs")
@@ -591,15 +591,8 @@ def ensure_username():
         while not username:
             username = input("First time setup\nEnter your TCG Live username: ").strip()
     else:
-        try:
-            import tkinter as tk
-            from tkinter import simpledialog
-            root = tk.Tk()
-            root.withdraw()
-            username = (simpledialog.askstring("TCG Live Monitor", "Enter your TCG Live username:") or "").strip()
-            root.destroy()
-        except Exception:
-            username = ""
+        from qt_dialogs import ask_string
+        username = ask_string("TCG Live Monitor", "Enter your TCG Live username:") or ""
     if username:
         save_username(username)
     return username

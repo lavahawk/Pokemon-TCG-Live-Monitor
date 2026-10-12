@@ -4,7 +4,7 @@ updated: 2026-10-11
 ---
 # Bug Register
 
-> [!success] v2.4 (2026-10-11): every item marked `fixed (v2.4)` was changed and verified offscreen. Each fix is described in [[Session Log]]. **Still needs real-game confirmation on Windows:** BUG-009 (auto-start), BUG-014 (auto-export), BUG-010 (GDI).
+> [!success] v2.4 (2026-10-11): every item marked `fixed (v2.4)` was changed and verified offscreen. Each fix is described in [[Session Log]]. **Confirmed in a real game (2026-10-11):** BUG-014 auto-export, after fixing BUG-037/038. **Still to confirm on Windows:** BUG-009 (auto-start at login), BUG-010 (GDI).
 
 **Status values:** `open` · `in-progress` · `fixed` · `wontfix` · `needs-info`
 **Confidence:** `confirmed` (reproduced or visible in real data/logs) · `code` (certain from reading the code, not executed) · `likely` (strong inference; needs a check on Windows)
@@ -51,6 +51,10 @@ Line numbers are from the 2026-10-11 snapshot.
 | BUG-034 | Low | confirmed | partial | various | Code health: `\(` SyntaxWarning in banner, unused vars, stale VERSION strings, no-assert test, dead code, doc drift |
 | BUG-036 | High | confirmed | fixed (v2.4) | [[Startup and Installers]] | Pinned packages (numpy 1.26, pandas 2.2, pygame 2.5, pydantic 2.6, matplotlib 3.8) have no wheels for Python 3.13, so pip fails on fresh PCs with the current python.org default. bootstrap_setup.ps1 now finds or installs Python 3.12 |
 | BUG-035 | Low | code | fixed (v2.4) | [[TCGLiveMonitor]] | `pyperclip.copy('')` wipes the user's clipboard every time the game starts |
+| BUG-037 | Critical | confirmed | fixed (v2.4) | [[BattleEndAutomation]] | Real game, home screen: BATTLE LOG template matched a dark bar beside PLAY (0.84) and clicked it twice; the wrong spot was then cached. Fix: OCR must read "BATTLE LOG" in the matched box before any click; unverified positions are never cached |
+| BUG-038 | High | confirmed | fixed (v2.4) | [[RankDetector and BattleState]] | Colour-patch HUD check matched an old layout: 3/3 "in battle" on the home screen, 1/3 during real matches. Replaced by a settings-gear template (battle 0.98–1.00, home 0.44); BATTLE LOG search no longer paused while the HUD shows |
+| BUG-039 | Med | confirmed | fixed (v2.4) | [[Startup and Installers]] | Script installers download Python, pip-install ~1 GB and fetch Tesseract on the user's PC, so they fail offline, behind proxies or with AV. Replaced by an offline Inno Setup bundle (Python 3.12 runtime + packages + minimal Tesseract) with a build-time smoke test |
+| BUG-040 | Low | confirmed | open | [[TCGLiveMonitor]] | Post-battle menu OCR read the deck but `rank=None` (2026-10-11 23:24, battle #46); the rank counter likely still animating |
 
 ## Details
 

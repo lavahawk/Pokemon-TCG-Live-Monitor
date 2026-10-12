@@ -120,3 +120,11 @@ BattleExampleImage.png
 # Auto-clicker: button templates ARE shipped (matching is scale-tolerant since
 # v2.4); only the per-machine scale/location cache is ignored.
 button_templates/scale_cache.json
+
+# Installer build output (installer\build_installer.ps1)
+installer/build/
+installer/Output/
+
+# Per-user app settings
+.app_settings.json
+*.log.*

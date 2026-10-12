@@ -40,6 +40,33 @@ from game_window import GameWindowCache, is_foreground, is_game_process_running
 BATTLE_LOG = "battle_log"
 EXPORT = "battle_log_export"
 
+
+def reads_battle_log(gray_crop):
+    """OCR the matched BATTLE LOG box; True only if it really says BATTLE LOG.
+
+    Runs only on template hits (a few times per battle), ~50-150 ms each.
+    """
+    import re
+    import cv2
+    try:
+        import pytesseract
+        from RankDetector import _find_tesseract
+        pytesseract.pytesseract.tesseract_cmd = _find_tesseract()
+        # Tesseract reads this button reliably when the box is ~100-140 px
+        # tall (tuned on the real template at 0.5x-1.4x window scales).
+        for target, binarize in ((100, True), (100, False), (140, False)):
+            f = target / float(max(1, gray_crop.shape[0]))
+            img = 255 - cv2.resize(gray_crop, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
+            if binarize:
+                img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+            img = cv2.copyMakeBorder(img, 10, 10, 10, 10, cv2.BORDER_REPLICATE)
+            letters = re.sub(r"[^A-Z]", "", pytesseract.image_to_string(img, config="--psm 7").upper())
+            if "BATTLE" in letters and "LOG" in letters:
+                return True
+    except Exception:
+        return False
+    return False
+
 HOT_WINDOW_S = 180
 HOT_POLL_S = 0.25
 COLD_POLL_S = 1.5
@@ -65,6 +92,7 @@ class BattleEndAutomation(threading.Thread):
         self._capture_lock = threading.Lock()
         self._last_capture = 0.0
         self._capture_event = threading.Event()
+        self._last_rejected_logged = None
         self.ready = self.clicker.load_template(BATTLE_LOG) and self.clicker.load_template(EXPORT)
 
     # ── called from the clipboard monitor ──────────────────────────────
@@ -91,13 +119,20 @@ class BattleEndAutomation(threading.Thread):
             "height": rect["height"] - rect["height"] // 2,
         }
 
-    def _find(self, sct, name, rect, region=None):
+    def _find(self, sct, name, rect, region=None, verify=None):
         region = region or rect
         frame = np.asarray(sct.grab(region))
-        return self.clicker.find_in_frame(name, frame, (region["left"], region["top"]), rect["height"])
+        return self.clicker.find_in_frame(name, frame, (region["left"], region["top"]), rect["height"],
+                                          verify=verify)
 
     def _battle_log_visible(self, sct, rect):
-        return self._find(sct, BATTLE_LOG, rect, self._bottom_half(rect))
+        hit = self._find(sct, BATTLE_LOG, rect, self._bottom_half(rect), verify=reads_battle_log)
+        rejected = self.clicker.last_rejected.pop(BATTLE_LOG, None)
+        if rejected and rejected != self._last_rejected_logged:
+            self._last_rejected_logged = rejected
+            self.log(f"Ignored BATTLE LOG look-alike at ({rejected[1]},{rejected[2]}) "
+                     f"(score {rejected[0]:.2f}, text check failed).")
+        return hit
 
     # ── main loop ──────────────────────────────────────────────────────
     def run(self):
@@ -124,16 +159,19 @@ class BattleEndAutomation(threading.Thread):
                         time.sleep(3 if is_game_process_running() else 10)
                         continue
 
-                    hud, hits, _details = check_hud(rect, sct)
+                    hud, _score, details = check_hud(rect, sct)
                     now = time.time()
                     if hud:
                         if not in_battle:
-                            self.log(f"Battle HUD detected ({hits}/3).")
-                        in_battle, last_hud, streak, armed = True, now, 0, True
-                        time.sleep(HUD_POLL_S)
-                        continue
-                    in_battle = False
+                            self.log(f"Battle HUD detected ({details[0]}).")
+                        in_battle, last_hud, armed = True, now, True
+                    elif in_battle:
+                        in_battle = False
+                        self.log("Battle HUD gone - watching for the end screen.")
 
+                    # Searched even while the HUD is visible (the in-battle gear
+                    # may still be showing on the end screen); OCR verification
+                    # makes in-battle look-alikes harmless.
                     hit = self._battle_log_visible(sct, rect)
                     if not hit:
                         streak = 0
@@ -146,6 +184,9 @@ class BattleEndAutomation(threading.Thread):
                         self._handle_end_screen(hwnd, sct, rect, hit, last_hud)
                         armed, streak, last_hud = False, 0, 0.0
                         absent_since = time.time()
+                        continue
+                    if in_battle and streak == 0:
+                        time.sleep(HUD_POLL_S)
                         continue
                     hot = (now - last_hud) < HOT_WINDOW_S or streak > 0
                     time.sleep(HOT_POLL_S if (hot and armed) else COLD_POLL_S)

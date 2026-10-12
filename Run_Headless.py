@@ -5,8 +5,6 @@ No console window - only overlay and stats UI visible
 
 import os
 import sys
-import tkinter as tk
-from tkinter import messagebox
 
 from startup_utils import launch_monitor
 
@@ -15,8 +13,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if __name__ == "__main__":
     result = launch_monitor(BASE_DIR, headless=True)
     if not result["ok"]:
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror("Headless Launch Failed", result["error"])
-        root.destroy()
+        from qt_dialogs import show_message
+        show_message("Headless Launch Failed", result["error"], error=True)
         sys.exit(1)

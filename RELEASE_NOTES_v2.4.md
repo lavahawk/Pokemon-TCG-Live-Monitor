@@ -2,13 +2,23 @@
 
 A reliability release. Every fix is tracked in `DevVault/03 Findings/Bug Register.md`.
 
-## Auto-start and installation
+## Install
+Download **`PokemonTCGLiveMonitor-2.4.0-Setup.exe`** below and run it. That's all.
+
+- **Everything is included.** The installer carries its own Python runtime with every package pre-installed, plus Tesseract OCR. Nothing is downloaded during setup, and any Python already on your PC is left alone.
+- **No admin rights.** It installs for your Windows account only (`%LOCALAPPDATA%\Programs\Pokemon TCG Live Monitor`).
+- **Upgrades keep your data.** Installing over v2.x keeps your battle history, settings and captured button images, and cleans up the old `.venv` and batch files. Uninstalling asks before deleting your battle history.
+- Start menu: **Pokemon TCG Live Monitor** (background monitor), **Stats Dashboard**, and a Tools folder (debug console, recapture auto-export buttons, log files).
+- Windows SmartScreen may say "Windows protected your PC" because the installer isn't code-signed. Click **More info → Run anyway**. You can check the file against the `.sha256` checksum attached to this release.
+- Requires Windows 10 or 11, 64-bit.
+
+## Auto-start
 - **Auto-start works again.** Launching at Windows login (hidden, `pythonw`) crashed immediately because the monitor read the console input that `pythonw` doesn't have. It now runs fully in the background, writes its output to `Logs\monitor.log`, idles at low CPU priority until Pokemon TCG Live opens, and starts the overlay only once the game is running.
-- **New one-step setup.** `bootstrap_setup.ps1` finds Python 3.10–3.12, or installs Python 3.12 for your user account if none is found (the pinned packages don't install on Python 3.13). It then builds the `.venv`, installs the packages, sets up Tesseract, registers auto-start and launches the monitor. The Inno Setup installer, `INSTALL_COMPLETE_v2.4.bat` and the wizard installer all use it.
-- **No admin rights needed.** Everything installs per user, and auto-start uses the registry Run key instead of an elevated scheduled task.
-- **Installers include every module.** The v2.3 installers left out `japan_data.py`, `BattleState.py` and `ContinueBlocker.py`, so the dashboard couldn't open. Installers now use `*.py` / `release_manifest.txt`.
+- Auto-start uses the registry Run key (the installer checkbox) instead of an elevated scheduled task. Old v2.x scheduled tasks are removed.
 
 ## Battle-end auto-export (reworked)
+- **No more clicks on the wrong screen.** A button image is only acted on if OCR confirms it actually says "BATTLE LOG". Before, a look-alike near the PLAY button on the home screen could be clicked.
+- **Reliable battle detection.** The in-battle check now looks for the in-game settings gear instead of sampling three pixel colours. The old check had stopped matching the game's layout.
 - Button matching works across window sizes and resolutions, and remembers where the button appears, so polling is cheap.
 - Each end screen is handled exactly once. Exporting the log yourself is always respected, and nothing is clicked unless the game is the focused window.
 - One Continue blocker per battle, no extra BATTLE LOG clicks after a manual export, and automatic re-clicks when the game swallows a click.

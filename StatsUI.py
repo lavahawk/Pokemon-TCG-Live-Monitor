@@ -3,7 +3,7 @@ Stats Dashboard for Pokemon TCG Live Monitor v2.1
 Modern, sleek UI with transparent glass-morphism design
 """
 
-VERSION = "2.4"
+from version import VERSION
 
 import sys
 import os

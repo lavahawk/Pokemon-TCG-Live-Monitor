@@ -3,7 +3,7 @@ Minimal Game Overlay for Pokemon TCG Live Monitor v2.1
 Ultra-compact, professional overlay that follows the game and allows click-through
 """
 
-VERSION = "2.4"
+from version import VERSION
 
 import sys
 import os

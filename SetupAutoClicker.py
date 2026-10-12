@@ -13,12 +13,10 @@ Usage:
 
 import os
 import sys
-import tkinter as tk
 
 import cv2
 import numpy as np
 import mss
-from PIL import Image, ImageTk
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "button_templates")
@@ -52,63 +50,24 @@ def grab_game_window():
     return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR), rect
 
 
-class RegionSelector:
-    """Shows the game screenshot (scaled to fit) and lets you drag a box.
+def select_region(image_bgr):
+    """Show the game screenshot (scaled to fit) and let the user drag a box.
 
-    Works for a game window on ANY monitor (the old version only showed the
-    primary screen). The selection is mapped back to full-resolution pixels.
+    Works for a game window on ANY monitor. Uses OpenCV's built-in selector
+    (no tkinter needed). Returns (x, y, w, h) in full-resolution pixels, or None.
     """
-
-    def __init__(self, image_bgr):
-        self.image_bgr = image_bgr
-        self.selection = None
-        self.start = self.end = (0, 0)
-        self.rect_id = None
-
-        self.root = tk.Tk()
-        self.root.title("Drag a tight box around the button, then press ENTER (ESC = cancel)")
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        h, w = image_bgr.shape[:2]
-        self.scale = min(1.0, (screen_w * 0.9) / w, (screen_h * 0.85) / h)
-        disp = cv2.resize(image_bgr, (int(w * self.scale), int(h * self.scale)), interpolation=cv2.INTER_AREA)
-        self.photo = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)))
-        self.canvas = tk.Canvas(self.root, width=disp.shape[1], height=disp.shape[0],
-                                cursor="crosshair", highlightthickness=0)
-        self.canvas.pack()
-        self.canvas.create_image(0, 0, image=self.photo, anchor=tk.NW)
-        self.canvas.bind("<ButtonPress-1>", self.on_press)
-        self.canvas.bind("<B1-Motion>", self.on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_drag)
-        self.root.bind("<Return>", self.confirm)
-        self.root.bind("<Escape>", lambda e: self.root.destroy())
-        self.root.attributes("-topmost", True)
-
-    def on_press(self, event):
-        self.start = self.end = (event.x, event.y)
-        if self.rect_id:
-            self.canvas.delete(self.rect_id)
-        self.rect_id = self.canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="#FF5252", width=2)
-
-    def on_drag(self, event):
-        self.end = (event.x, event.y)
-        if self.rect_id:
-            self.canvas.coords(self.rect_id, *self.start, *self.end)
-
-    def confirm(self, _event=None):
-        (x1, y1), (x2, y2) = self.start, self.end
-        x1, x2 = sorted((x1, x2))
-        y1, y2 = sorted((y1, y2))
-        if x2 - x1 < 4 or y2 - y1 < 4:
-            print("Selection too small - try again.")
-            return
-        s = self.scale
-        self.selection = (int(x1 / s), int(y1 / s), int((x2 - x1) / s), int((y2 - y1) / s))
-        self.root.destroy()
-
-    def run(self):
-        self.root.mainloop()
-        return self.selection
+    import ctypes
+    user32 = ctypes.windll.user32
+    screen_w, screen_h = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    h, w = image_bgr.shape[:2]
+    scale = min(1.0, (screen_w * 0.9) / w, (screen_h * 0.85) / h)
+    disp = cv2.resize(image_bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    title = "Drag a tight box around the button, then press ENTER (C = cancel)"
+    x, y, sw, sh = cv2.selectROI(title, disp, showCrosshair=False)
+    cv2.destroyAllWindows()
+    if sw < 4 or sh < 4:
+        return None
+    return int(x / scale), int(y / scale), int(sw / scale), int(sh / scale)
 
 
 def capture_template(name):
@@ -121,7 +80,7 @@ def capture_template(name):
     if rect is None:
         print("Warning: game window not found - using the primary screen. "
               "Scaling to other window sizes will be less reliable.")
-    sel = RegionSelector(image).run()
+    sel = select_region(image)
     if not sel:
         print("Cancelled.")
         return False

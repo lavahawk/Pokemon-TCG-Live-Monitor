@@ -1,6 +1,10 @@
-# Files shipped in every release (zip, Inno Setup, portable wizard).
+# Application files shipped by the installer (installer\build_installer.ps1).
 # One path per line, relative to the repo root. Lines starting with # are ignored.
-# Optional files end with "?" (skipped when missing, e.g. user-captured templates).
+# Optional files end with "?" (skipped when missing).
+# The Python runtime and Tesseract are added by the build script, not listed here.
+# Every .py listed here is imported by the build's smoke test.
+
+# Monitor and its helpers
 TCGLiveMonitor.py
 AIParseBattleLog.py
 BattleDatabase.py
@@ -12,32 +16,28 @@ SetupAutoClicker.py
 RankDetector.py
 game_window.py
 leagues.py
+app_settings.py
+startup_utils.py
+qt_dialogs.py
+version.py
+Run_Headless.py
+
+# UI
 OverlayUI.py
 StatsUI.py
-app_settings.py
 deck_analytics.py
 japan_data.py
-startup_utils.py
-setup_install.py
-SetupStartup.py
-AutoRun_Add.py
-AutoRun_Remove.py
-Run_Headless.py
-Run_Headless.bat
-Run_TCGLiveMonitor_Command_Prompt.bat
-Install_Dependencies.bat
-Installers\INSTALL_COMPLETE_v2.4.bat
-Installers\Start_GUI_Mode_v2.4.bat
-Installers\Remove_AutoStart_v2.4.bat
-Installers\README.md
-requirements.txt
+
+# Data and assets
 screen_regions.json
 icon.ico
 ding.mp3
+button_templates\battle_log.png
+button_templates\battle_log_export.png
+button_templates\battle_hud_gear.png
+button_templates\templates.json?
+
+# Documents
 LICENSE
 README.md
-QUICK_START_v2.0.md
 RELEASE_NOTES_v2.4.md
-button_templates\battle_log.png?
-button_templates\battle_log_export.png?
-button_templates\templates.json?

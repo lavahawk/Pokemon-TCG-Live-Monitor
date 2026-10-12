@@ -76,6 +76,7 @@ class AutoClicker:
         self.meta = _load_json(TEMPLATE_META_FILE)
         self.scale_cache = _load_json(SCALE_CACHE_FILE)
         self.last_score = {}
+        self.last_rejected = {}   # name -> (score, x, y) of the last match that failed verify
         self._sweep_counter = {}
         self._tpl_cache = {}      # (name, w, h) -> resized template
         self._loc_cache = {}      # (name, window_height) -> (cx_rel, cy_rel) in window-relative fractions
@@ -145,12 +146,14 @@ class AutoClicker:
                 best = (max_val, scale, max_loc, (tw, th))
         return best
 
-    def find_in_frame(self, name, frame, origin, window_height, window_origin=None):
+    def find_in_frame(self, name, frame, origin, window_height, window_origin=None, verify=None):
         """Find a template in a captured frame.
 
         frame          ndarray (BGRA/BGR/gray) of the searched region
         origin         (left, top) screen coords of the frame's top-left
         window_height  current game-window height in physical pixels
+        verify         optional fn(gray_crop_of_match) -> bool; a match that
+                       fails it is rejected and its position is not cached
         Returns (x, y, score) screen-centre coords or None.
 
         Speed: after the first hit the button's position (relative to the
@@ -202,11 +205,25 @@ class AutoClicker:
             if cache_key in self.scale_cache and score < tpl["threshold"] * 0.85:
                 self.scale_cache.pop(cache_key, None)
             return None
+        fx = offset[0] + (loc[0] + size[0] / 2.0) / factor
+        fy = offset[1] + (loc[1] + size[1] / 2.0) / factor
+        if verify is not None:
+            # Template scores alone are not proof (a dark bar with light text
+            # on the home screen scored 0.84 for BATTLE LOG). Check the
+            # matched box itself, and never cache an unverified position.
+            bw, bh = size[0] / factor, size[1] / factor
+            x0, y0 = max(0, int(fx - bw / 2)), max(0, int(fy - bh / 2))
+            x1, y1 = min(gray.shape[1], int(fx + bw / 2)), min(gray.shape[0], int(fy + bh / 2))
+            crop = gray[y0:y1, x0:x1]
+            if crop.size == 0 or not verify(crop):
+                self.last_rejected[name] = (round(float(score), 2), int(round(origin[0] + fx)), int(round(origin[1] + fy)))
+                if self._loc_cache.get(roi_key) is not None:
+                    self._loc_cache.pop(roi_key, None)
+                self.scale_cache.pop(f"roi:{name}@{int(window_height)}@{gray.shape[1]}x{gray.shape[0]}", None)
+                return None
         if self.scale_cache.get(cache_key) != scale:
             self.scale_cache[cache_key] = scale
             _save_json(SCALE_CACHE_FILE, self.scale_cache)
-        fx = offset[0] + (loc[0] + size[0] / 2.0) / factor
-        fy = offset[1] + (loc[1] + size[1] / 2.0) / factor
         if roi_key not in self._loc_cache:
             self.scale_cache[f"roi:{name}@{int(window_height)}@{gray.shape[1]}x{gray.shape[0]}"] = [
                 round(fx / gray.shape[1], 4), round(fy / gray.shape[0], 4)]

@@ -125,17 +125,8 @@ def is_tournament_battle(battlelog, username):
 def prompt_string(title, prompt, *, secret=False):
     if _console_available():
         return input(f"{prompt}\n> ").strip()
-    try:
-        import tkinter as tk
-        from tkinter import simpledialog
-    except Exception:
-        return None
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        return simpledialog.askstring(title, prompt, show="*" if secret else None)
-    finally:
-        root.destroy()
+    from qt_dialogs import ask_string
+    return ask_string(title, prompt, secret=secret)
 
 
 def ensure_username():
