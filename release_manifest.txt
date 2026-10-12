@@ -25,7 +25,14 @@ Run_Headless.py
 # UI
 OverlayUI.py
 StatsUI.py
+charts.py
+ui_widgets.py
 deck_analytics.py
+deck_score.py
+formulas.py
+decklists.py
+weights.py
+meta_sources.py
 japan_data.py
 
 # Data and assets

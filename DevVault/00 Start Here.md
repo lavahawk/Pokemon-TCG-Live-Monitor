@@ -1,6 +1,6 @@
 ---
 tags: [index, handoff]
-updated: 2026-10-11
+updated: 2026-10-12
 ---
 # PTCGL Monitor — Dev Vault (Start Here)
 
@@ -10,7 +10,8 @@ This vault is the shared engineering notebook for **Pokemon TCG Live Monitor** (
 > **Phase 1: full code review and process mapping. DONE (2026-10-11).**
 > **Phase 2: v2.4 fixes. CODE DONE (2026-10-11).** 33 bugs + 8 security items fixed and written to the project folder (originals in `Backups/pre-v2.4-code/`). See [[Session Log]].
 > **Phase 3: real-game verification + v2.4 follow-ups. DONE (2026-10-12).** Auto-export, blocker, rank OCR verified in real matches; unified meta sheet, statistics rework, Meta / In Person tabs, preferences.
-> **Phase 4 (next): fix the silent-install exit, rebuild the installer, then the open items.** → **[[Handoff 2026-10-12]]** (read this first).
+> **Phase 3b: dashboard + statistics overhaul. DONE (2026-10-12, afternoon).** Interactive charts, deck pin/star/ignore, hierarchical Bayesian Deck Score ([[deck_score]]), opponent-strength weighting, Meta tab data filters, hover formulas.
+> **Phase 4 (next): restart the overlay and check on the PC, fix the silent-install exit, rebuild the installer, push.** → **[[Handoff 2026-10-12]]** (read this first).
 
 ## Map of this vault
 | Area | Note | What's in it |
@@ -18,7 +19,7 @@ This vault is the shared engineering notebook for **Pokemon TCG Live Monitor** (
 | Architecture | [[System Overview]] | Processes, components, data stores, external services |
 | Architecture | [[Process Map]] | Step-by-step flows: startup, battle lifecycle, stats UI, Limitless tournament flow |
 | Architecture | [[Data Model]] | SQLite schema + every dot-file / cache file and who reads/writes it |
-| Modules | [[TCGLiveMonitor]] · [[BattleEndAutomation]] · [[AIParseBattleLog]] · [[BattleDatabase]] · [[RankDetector and BattleState]] · [[OverlayUI]] · [[StatsUI]] · [[Limitless Dashboard Manager]] · [[deck_analytics]] · [[japan_data]] · [[AutoClicker and ContinueBlocker]] · [[Startup and Installers]] | One note per module: purpose, key functions, gotchas, linked bugs |
+| Modules | [[deck_score]] · [[TCGLiveMonitor]] · [[BattleEndAutomation]] · [[AIParseBattleLog]] · [[BattleDatabase]] · [[RankDetector and BattleState]] · [[OverlayUI]] · [[StatsUI]] · [[Limitless Dashboard Manager]] · [[deck_analytics]] · [[japan_data]] · [[AutoClicker and ContinueBlocker]] · [[Startup and Installers]] | One note per module: purpose, key functions, gotchas, linked bugs |
 | Findings | [[Bug Register]] | Every bug with ID, severity, status, location, evidence |
 | Findings | [[Security and Privacy Review]] | Vulnerabilities and privacy issues |
 | Findings | [[Data Integrity Audit]] | What's actually wrong in `tcg_battles.db` and `Logs/` today |

@@ -512,6 +512,11 @@ class BattleDatabase:
         return [{"result": str(r or "").strip(), "my_rank": rank, "is_tournament": bool(t),
                  "timestamp": ts, "opponent": opp} for r, rank, t, ts, opp in rows]
 
+    def get_battle_timeline(self):
+        """Every battle oldest first: (timestamp, my_deck, opponent_deck, result, my_rank, is_tournament)."""
+        return self._fetchall("SELECT timestamp, my_deck, opponent_deck, result, my_rank, is_tournament "
+                              "FROM battles ORDER BY timestamp ASC, id ASC")
+
     def get_all_battles_with_rank(self):
         rows = self._fetchall("SELECT my_deck, result, my_rank, is_tournament FROM battles ORDER BY timestamp ASC")
         return [{"my_deck": str(d or "").strip(), "result": str(r or "").strip(), "my_rank": rank, "is_tournament": bool(t)}

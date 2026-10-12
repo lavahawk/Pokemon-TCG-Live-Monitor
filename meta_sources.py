@@ -412,7 +412,19 @@ def _in_person_summary(ip, totals):
     }
 
 
-def build_meta_sheet(session=None, progress=lambda msg: None):
+ALL_SOURCES = ("online", "in_person", "japan")
+INPUTS_FILE = "last_inputs"  # .meta_store/last_inputs.json: event lists of the last full build
+
+
+class _NoNetwork:
+    """Session stand-in for rebuilds from cache: any download attempt fails,
+    so only events already in .meta_store are used."""
+
+    def get(self, *args, **kwargs):
+        raise RuntimeError("offline rebuild")
+
+
+def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, sources=ALL_SOURCES):
     global WEIGHTS
     WEIGHTS = current_weights()
     session = session or make_session()
@@ -433,6 +445,46 @@ def build_meta_sheet(session=None, progress=lambda msg: None):
                       _fetch_all(session, fetch_in_person_standings, in_person, "in-person standings", progress)}
     japan_data = _fetch_all(session, fetch_japan_event, japan, "Japan", progress)
     online_data = _fetch_all(session, fetch_online_event, online, "online", progress)
+    try:
+        path = _store_path(INPUTS_FILE)
+        with open(path + ".tmp", "w", encoding="utf-8") as handle:
+            json.dump({"exp_en": exp_en, "exp_jp": exp_jp, "since_en": since_en, "since_jp": since_jp,
+                       "in_person": in_person, "japan": japan, "online": online}, handle, ensure_ascii=False)
+        os.replace(path + ".tmp", path)
+    except Exception:
+        pass
+    return _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data, japan_data, online_data,
+                     use_weights, sources)
+
+
+def rebuild_meta_sheet(use_weights=True, sources=ALL_SOURCES, progress=lambda msg: None):
+    """The sheet from cached events only (no downloads), e.g. with weights off
+    or one source. None if no full build has run yet."""
+    global WEIGHTS
+    WEIGHTS = current_weights()
+    try:
+        with open(_store_path(INPUTS_FILE), "r", encoding="utf-8") as handle:
+            inputs = json.load(handle)
+    except Exception:
+        return None
+    session = _NoNetwork()
+    inperson_data = _fetch_all(session, fetch_in_person_event, inputs["in_person"], "in-person", progress)
+    standings_data = {d["event"]["id"]: d for d in
+                      _fetch_all(session, fetch_in_person_standings, inputs["in_person"], "in-person standings", progress)}
+    japan_data = _fetch_all(session, fetch_japan_event, inputs["japan"], "Japan", progress)
+    online_data = _fetch_all(session, fetch_online_event, inputs["online"], "online", progress)
+    return _assemble(inputs["exp_en"], inputs["exp_jp"], inputs["since_en"], inputs["since_jp"],
+                     inperson_data, standings_data, japan_data, online_data, use_weights, sources)
+
+
+def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data, japan_data, online_data,
+              use_weights=True, sources=ALL_SOURCES):
+    sources = set(sources or ALL_SOURCES)
+
+    def event_weight(kind, event, era):
+        """Preferences weights, or 1 per event (inside the era window) when off."""
+        w = _event_weight(kind, event, era)
+        return w if use_weights else (1.0 if w > 0 else 0.0)
 
     archetypes = {}
 
@@ -443,6 +495,8 @@ def build_meta_sheet(session=None, progress=lambda msg: None):
             a = archetypes[key] = {"id": key, "deck": name, "icons": [], "deck_url": None,
                                    "share_num": 0.0, "share_en_num": 0.0, "top_num": 0.0, "count": 0,
                                    "w": 0.0, "l": 0.0, "t": 0.0, "raw_games": 0,
+                                   # effective sample: Kish sums and per-pilot records (deck_score.py)
+                                   "sw": 0.0, "sw2": 0.0, "pilots": [],
                                    "sources": {"online": 0, "in_person": 0, "japan": 0},
                                    "matchups": {},
                                    # in-person placings (raw counts + weighted for conversion)
@@ -464,9 +518,16 @@ def build_meta_sheet(session=None, progress=lambda msg: None):
 
     for data in online_data:
         ev = data["event"]
-        weight = _event_weight("online", ev, era_of(ev["date"], exp_en))
+        weight = event_weight("online", ev, era_of(ev["date"], exp_en))
         total = len(data["decks"])
         if weight <= 0 or not total:
+            continue
+        if "online" not in sources:
+            for d in data["decks"]:
+                arch(d["deck"], d["deck_id"], d["icons"],
+                     f"https://play.limitlesstcg.com/decks/{d['deck_id']}?game=PTCG")
+                if d["icons"]:
+                    icon_names.setdefault(tuple(sorted(d["icons"])), d["deck"])
             continue
         events_used["online"] += 1
         share_den += weight
@@ -481,7 +542,12 @@ def build_meta_sheet(session=None, progress=lambda msg: None):
             a["w"] += weight * d["w"]
             a["l"] += weight * d["l"]
             a["t"] += weight * d["t"]
-            a["raw_games"] += d["w"] + d["l"] + d["t"]
+            g = d["w"] + d["l"] + d["t"]
+            a["raw_games"] += g
+            a["sw"] += weight * g
+            a["sw2"] += weight * weight * g
+            if g:
+                a["pilots"].append((d["w"] + 0.5 * d["t"], g))
             if d["icons"]:
                 icon_names.setdefault(tuple(sorted(d["icons"])), d["deck"])
             if a["id"] not in seen:
@@ -511,10 +577,17 @@ def build_meta_sheet(session=None, progress=lambda msg: None):
         ev = data["event"]
         legal = (standings_data.get(ev["id"]) or {}).get("legal")
         era = era_of(ev["date"], exp_en, legal)
-        weight = _event_weight("in_person", ev, era)
+        weight = event_weight("in_person", ev, era)
         total = sum(d["count"] for d in data["decks"])
         points = sum(d["points"] for d in data["decks"]) or 1
         if weight <= 0 or not total:
+            continue
+        if "in_person" not in sources:
+            for d in data["decks"]:
+                arch(resolve_in_person(d["deck"]), d["deck_id"], d["icons"],
+                     f"{LIMITLESS}/decks/{d['deck_id']}" if d.get("deck_id") else None)
+                if d["icons"]:
+                    icon_names.setdefault(tuple(sorted(d["icons"])), d["deck"])
             continue
         events_used["in_person"] += 1
         top_den += weight
@@ -561,9 +634,9 @@ def build_meta_sheet(session=None, progress=lambda msg: None):
 
     for data in japan_data:
         ev = data["event"]
-        weight = _event_weight("japan", ev, era_of(ev["date"], exp_jp))
+        weight = event_weight("japan", ev, era_of(ev["date"], exp_jp))
         placings = data["placings"]
-        if weight <= 0 or not placings:
+        if weight <= 0 or not placings or "japan" not in sources:
             continue
         events_used["japan"] += 1
         top_den += weight
@@ -590,6 +663,35 @@ def build_meta_sheet(session=None, progress=lambda msg: None):
                 a["sources"]["japan"] += 1
                 seen.add(a["id"])
 
+    # Games are clustered by pilot (one player plays 5-9 rounds with the same
+    # list), so they are not independent coin flips. Estimate the spread of
+    # pilot win rates within an archetype (tau^2, method of moments, pooled over
+    # all archetypes) and the resulting design effect per archetype. The
+    # effective sample = Kish's weighted n / design effect.
+    num = den = 0.0
+    for a in archetypes.values():
+        n_tot = sum(n for _x, n in a["pilots"])
+        if n_tot < 20:
+            continue
+        p = sum(x for x, _n in a["pilots"]) / n_tot
+        var = p * (1.0 - p)
+        for x, n in a["pilots"]:
+            num += (x - n * p) ** 2 - n * var
+            den += n * (n - 1.0)
+    pilot_var = max(0.0, num / den) if den else 0.0
+
+    def effective_games(a):
+        if a["sw2"] <= 0:
+            return 0.0
+        kish = a["sw"] * a["sw"] / a["sw2"]
+        n_tot = sum(n for _x, n in a["pilots"])
+        if not n_tot:
+            return kish
+        p = min(0.95, max(0.05, sum(x for x, _n in a["pilots"]) / n_tot))
+        cluster = sum(n * (n - 1.0) for _x, n in a["pilots"]) / n_tot
+        design = 1.0 + pilot_var / (p * (1.0 - p)) * cluster
+        return kish / design
+
     rows = []
     for a in archetypes.values():
         share = 100.0 * a["share_num"] / share_den if share_den else 0.0
@@ -612,6 +714,7 @@ def build_meta_sheet(session=None, progress=lambda msg: None):
             "losses": round(a["l"], 1),
             "ties": round(a["t"], 1),
             "raw_games": a["raw_games"],
+            "eff_games": round(effective_games(a), 1),
             "win_pct": round(post["observed"] * 100.0, 1) if post and post["observed"] is not None else None,
             "bayes_win_pct": round(post["mean"] * 100.0, 1) if post else None,
             "sources": a["sources"],
@@ -631,6 +734,10 @@ def build_meta_sheet(session=None, progress=lambda msg: None):
         "in_person_events": sorted(in_person_events, key=lambda e: e["date"], reverse=True),
         "expansions": {"en": exp_en[:4], "jp": exp_jp[:4]},
         "weights": WEIGHTS,
+        # sd of pilot win rates within an archetype (pilot skill + luck of the
+        # draw beyond binomial noise); used as the prior spread for YOUR decks.
+        "pilot_sd": round(pilot_var ** 0.5, 4),
+        "view": {"use_weights": bool(use_weights), "sources": sorted(sources)},
         "window": {"en_since": since_en, "jp_since": since_jp},
     }
     return sheet

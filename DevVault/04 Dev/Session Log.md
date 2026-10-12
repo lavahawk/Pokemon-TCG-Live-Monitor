@@ -68,3 +68,62 @@ git push
 **Did:** Verified auto-export in real matches and fixed what the game exposed (BUG-037 home-screen misclick, BUG-038 HUD detector, blocker timing → standby blocker 0.05 s, Master-league rank OCR). Dashboard performance (lazy deck pages, hidden-hub dashboard, background sprites, opacity slider). Statistics rework (exact Beta, pooling, meta-adjusted, tie modes, weighted personal records). Unified meta sheet (meta_sources.py: online + in-person + Japan, era/legality weighting). Preferences (weights.py). New Meta and In Person tabs, decklist capture (decklists.py). Published v2.4.0 as a GitHub pre-release.
 
 **Next:** see [[Handoff 2026-10-12]] → Open items (silent-install exit, rebuild installer, manifest update).
+
+## 2026-10-12 — Claude (Dashboard charts overhaul)
+**Did:** Replaced the Stats-tab matplotlib Elo / win-rate graphs with an interactive pure-Qt chart (`charts.py`, `SeriesChart`). Added to `release_manifest.txt`.
+- **x axis = game / rank change, evenly spaced**, so breaks between sessions no longer squash the data. Days get dotted separators. Day labels are placed newest-first and **dropped when they would collide** (no rotated or overlapping text). Y ticks use a nice-number step sized to the chart height.
+- **Auto range (default):** rank = the current climb (walks back until a ≥300 jump such as ladder → Master points, a 3-week break or 60 points). Win rate = last 30 games. Y always auto-fits the visible data (rank clamped ≥0, win rate 0–100 incl. 50%).
+- One shared range bar: Auto · Session · 1W · 1M · 3M · All, saved as `dashboard_chart_range` in `.app_settings.json`. Time ranges on the rank chart start from the reading before the window, so the change matches the Today card.
+- Hover = crosshair + tooltip (rank: ▲/▼ change, time, league, the game that caused it; win rate: rolling record, game #, opponent, deck, all-time %). Drag = zoom, double-click / right-click = reset, wheel = page scroll. Summary line above each chart describes the visible range.
+- Rank: one point per **change** (repeat OCR readings collapsed), dots green/red by direction, league threshold lines (labels de-overlapped). Win rate: rolling last-N (5/10/20/50 picker, `dashboard_winrate_window`, default 10) under the tie rule, dashed all-time line, W/L/T strip along the bottom.
+- Headline cards cut from 6 to 4, most useful first: **Current rank** (league, peak), **Win rate** (record, tie rule), **Today / Last session** (record, ±pts, %), **Last 10** (record, form dots, streak). Removed Total/Wins/Losses/Best Elo (now in the subtitles).
+- `BattleDatabase.get_battle_timeline()` added. Pre-change copies in `Backups/pre-charts/`.
+- Verified offscreen against a copy of the real DB at 1100 and 900 px: auto/hover/all screenshots, drag-zoom, reset, every range, refresh keeps the view.
+
+**Next:** check it on the real PC (fonts are Segoe UI there; offscreen used a fallback). Possible follow-ups: per-deck filter on the charts, and the same chart on the deck pages (they still use matplotlib `MplCanvas`).
+
+## 2026-10-12 — Claude (Win-rate confidence band, chart font)
+- Charts use **DejaVu Sans 10 px** again (what the old matplotlib graphs used), loaded from matplotlib's bundled TTF via `charts.chart_font()`; app font if matplotlib is missing. Card values back to 28 px.
+- Win-rate chart: solid line = **weighted Beta posterior mean after each game**, shaded band = its **90% likely range** (`CREDIBLE_LEVEL`). Same maths as the deck pages: `battle_weight` (era × league/tournament) → Kish effective n → `win_rate_posterior` under the tie rule, computed with running prefix sums (O(n)). The band narrows as effective games add up. Games older than two expansions count 0, so the earliest stretch stays at the Beta(2,2) prior (wide, 50%), and the tooltip says "not counted". The band can widen slightly when much heavier games arrive (Kish n drops when weights mix). Dashed = rolling last N. Auto = last 100 games.
+- `SeriesChart` supports `lo`/`hi` per point (band). `get_battle_timeline()` also returns `my_rank`, `is_tournament`. The Win rate card subtitle shows "est. 66% (53–79)".
+
+## 2026-10-12 — Claude (Deck pin / star / ignore, In Person cleanup)
+- The single ★ pin button on deck pages is replaced by three painted toggles (`ui_widgets.DeckFlagButton`, no emoji/glyphs): **Pin** (front of the Decks tabs, `.pinned_decks.json`), **Star** (deck shows as a ★ row in the Meta tab; checkbox renamed "★ Starred decks"), **Ignore** (left out of the headline cards, both charts, Deck Performance list, Recent Battles and Meta rows; the deck keeps its tab, dimmed and sorted last). Star/ignore live in `.deck_flags.json`. On first run `starred` is seeded from the pinned list, since the old star was the pin.
+- Animation: press squeezes the icon (0.82, 90 ms), release springs back with OutBack overshoot (340 ms), colour crossfades (200 ms), switching on draws an expanding ring (star adds 6 sparks).
+- Toggles apply **in place**: tabs move with `QTabBar.moveTab`, dashboard pieces refresh via `_refresh_dashboard_summary()`, and the Meta tab is marked dirty. The page isn't rebuilt, so the animation finishes. `DeckTabBar` paints a blue dot on pinned tabs and dims ignored ones (the tab stylesheet overrides text colours).
+- Ignore doesn't touch the rank chart (it's your ladder rank) or the overlay's today W-L (`session_stats`).
+- In Person tab: removed the emoji from the Event finder / Track your homies / Print buttons and the trophy on 1st place in the in-person placings.
+- **Gotcha:** the overlay imports `StatsUI` at start and keeps the dashboard alive, so code changes only show after restarting `OverlayUI.py` (the user saw the first charts.py font because of this).
+
+## 2026-10-12 — Claude (Statistics wording pass)
+- One phrasing everywhere: **"72%" + "range 54–88%"**, built by `_pct_range()`. Explanations come from `RANGE_EXPLAINED` ("Confidence range (90%): where the true win rate most likely sits. It narrows as you play more games."). No more "likely x–y%", "Bayesian WR" or "95% CI".
+- Visible text only shows what isn't elsewhere on the page. Methodology (weighting, effective games, chance >50%, actual record, Limitless benchmark) moved into hovers.
+  - Deck page cards: captions are now just the range. Removed the record/actual (in the header), "faced X% of the meta" (it's the META FACED tile) and the "est."/"exp." tags. Verdict says "N% chance" instead of "N% sure".
+  - Matchup table: "Likely range" → "Range". The estimate cell hover shows the range and the chance you're favored.
+  - Dashboard: Win rate card "27-18 · est. 65%" with details on hover. Rank summary dropped "peak" (in the hover with low and number of changes). Win-rate summary "65% 51–78% · 27-18 · dates", with the legend and stats on hover.
+  - Deck Performance rows now use the **same weighted 90% estimate as the deck page** (was the unweighted 95% summary): "72%" over "54–88%", record as subtitle, everything else on hover. Decks whose games are all older-format show "--" / "Older format" with an empty grey bar.
+  - Meta tab "Likely range" → "Range". The Limitless/Japan tables' "Raw WR / Bayes WR / 95% CI / P>50" → "Actual / Estimate / Range / Chance >50%". Those tables keep their own 95% maths.
+
+## 2026-10-12 — Claude (Deck Score + Meta view filters)
+- **Audit:** "Bayes WR" was genuinely Bayesian (exact Beta-Binomial), but (1) meta W/L were weighted sums larger than the real game counts (Dragapult 7,217 weighted vs 4,847 raw), so ranges were too narrow; (2) games are clustered by pilot; (3) the prior was a fixed Beta(2,2).
+- `meta_sources.py`: per-archetype Kish sums + per-pilot records → `eff_games` per row and `pilot_sd` on the sheet. **Build split:** `build_meta_sheet` (network) saves `.meta_store/last_inputs.json`, `rebuild_meta_sheet(use_weights, sources)` re-assembles from cached events only (~0.2 s), and `_assemble(...)` holds the pure maths. Excluded sources still register names/icons, so archetype names stay stable.
+- New [[deck_score]] (`deck_score.py`): hierarchical empirical-Bayes Score. Meta tab columns now `# · Deck · Score · Range · Share · Top cut · Record · Win % · Converts · Sources`, sorted by Score. ★ rows show the would-be rank. The deck page "VS THE META" card became **META SCORE** ("Would rank #N of M"), and RANK-WEIGHTED became TOP 5 CHANCE once ranked.
+- Meta tab **Data:** All sources / Online / In-person / Japan, plus a **Custom weights** toggle (on by default; off = every event and game counts once, raw records for your games too). Meta tab only; deck pages keep the full weighted sheet. In-person/Japan views have no Score (placings only), and the status line says so.
+- Manifest: added `deck_score.py`, `meta_sources.py`, `weights.py`, `decklists.py` (the last three were the handoff's open item 2).
+- Real `.meta_cache_limitless_standard.json` rebuilt with the new fields (backup in `Backups/pre-charts/`).
+
+## 2026-10-12 — Claude (Score prior fix + hover formulas)
+- The user's Gengar deck (14 games, 11-3) ranked #1 at 61.4 because its prior used the pilot spread (τ = 13 pts). It now uses archetype uncertainty + the fitted deck spread (≈4.2 pts): **48.6 (40–57), would rank #10**, with a 31% top-5 chance. See [[deck_score]].
+- New `formulas.py`: every custom rating/weighting shows its formula with the numbers plugged in on hover. Covers the deck page Win rate / Verdict / matchup cells, the dashboard Win rate card, Deck Performance rows, the win-rate chart summary, Meta tab Score (fitted k, θ with its starting value, biggest share × rate terms), Record (event weight + effective games: played → weighted → effective), Share / Top cut / Converts headers and cells, and the Custom weights button. Added to the manifest.
+
+## 2026-10-12 — Claude (Own-games score, ★ highlighting, Bayesian conversion)
+- Your decks now get two Scores: **with archetype** (deck strength) and **own games only** (your results, nothing borrowed). Meta tab combo for ★ rows; deck page OWN GAMES SCORE tile; both in the hover with formulas.
+- ★ rows: `ui_widgets.MineRowDelegate` paints a purple tint plus a 4 px accent bar (the table stylesheet makes item backgrounds transparent, so `setBackground` wouldn't show). The deck cell gets a purple bold title and a filled "YOUR DECK" badge with "N games · basis". Score text and range bar are in purple.
+- Converts column is now the Bayesian conversion (see [[deck_score]]) with its formula on hover.
+- The user asked for no hidden-gem detector; it was removed before shipping. Gems should come out of the Score itself.
+
+## 2026-10-12 — Claude (Opponent strength + precision ranking, commit)
+- ★ row score/bar use the normal colour scale (by value, ranked or not); only the row tint/badge is purple.
+- Opponent strength: `deck_score.adjust_personal` (ladder gap on the log-odds scale + evidence factor), new Preferences group **Opponent strength** (`ladder_evidence` 0.5, `ladder_gap` 4 pts, `tournament_evidence` 1.0, `rank_margin` 15 pts). In-person Day 2 → Top 32 enters θ through the fitted logit link β (≈ 0.6 on current data = weak link; reported honestly in hovers).
+- Ranking rule per the user: effective games ≥ (1.645 × 0.5 / margin)² (30 at ±15 pts). Raw-count thresholds removed (`MY_MIN_GAMES` is gone). Same rule for meta decks (plus the Min games filter).
+- Handoff rewritten; committed locally on `main`.

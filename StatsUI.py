@@ -29,7 +29,9 @@ from PySide6.QtTest import QTest
 from BattleDatabase import BattleDatabase
 from weights import cached_expansions, load_weights, save_weights, DEFAULT_WEIGHTS, LABELS as WEIGHT_LABELS
 from deck_analytics import (
+    CREDIBLE_LEVEL,
     TIE_MODES,
+    battle_weight,
     result_rate,
     tie_mode,
     weighted_record,
@@ -44,6 +46,11 @@ from deck_analytics import (
     win_rate_posterior,
 )
 import japan_data
+from charts import SeriesChart
+from deck_score import compute_scores
+import formulas
+from ui_widgets import DeckFlagButton, DeckTabBar, MineRowDelegate, MINE_ROLE
+from leagues import LEAGUES, league_name
 from app_settings import (
     clear_api_key,
     load_api_key,
@@ -85,6 +92,33 @@ try:
     PYGAME_AVAILABLE = True
 except ImportError:
     PYGAME_AVAILABLE = False
+
+
+def _short_day(value):
+    """'Oct 12' (adds the year when it isn't this year)."""
+    text = f"{value:%b} {value.day}"
+    return text if value.year == datetime.now().year else f"{text}, {value.year}"
+
+
+def _clock(value):
+    hour = value.hour % 12 or 12
+    return f"{hour}:{value:%M} {'AM' if value.hour < 12 else 'PM'}"
+
+
+def _pct_range(low, high):
+    """'53–79%' - how every confidence range is written."""
+    return f"{low * 100:.0f}–{high * 100:.0f}%"
+
+
+RANGE_EXPLAINED = ("Confidence range ({level}%): where the true win rate most likely sits. "
+                   "It narrows as you play more games.")
+
+
+def _range_dates(items, key="t"):
+    first, last = items[0][key], items[-1][key]
+    if first.date() == last.date():
+        return _short_day(first)
+    return f"{_short_day(first)} – {_short_day(last)}"
 
 
 class PageScrollArea(QScrollArea):
@@ -167,6 +201,7 @@ LIMITLESS_CHECK_DELAY_MS = 12000
 LIMITLESS_CHAT_POLL_INTERVAL_MS = 3000
 DECK_ICON_OVERRIDE_FILE = os.path.join(BASE_DIR, ".deck_icon_overrides.json")
 PINNED_DECKS_FILE = os.path.join(BASE_DIR, ".pinned_decks.json")
+DECK_FLAGS_FILE = os.path.join(BASE_DIR, ".deck_flags.json")  # starred / ignored decks
 PTCGL_REPLAY_URL = "https://www.ptcglreplay.com/"
 SPRITE_NAME_ALIASES = {
     "ogerpon": ["ogerpon-teal-mask"],
@@ -1999,7 +2034,7 @@ class RangeBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._h = 0.0
         self._anim = _hover_animation(self, self._set_h)
-        tip = f"<b>{mid * 100:.0f}%</b> estimate &nbsp;·&nbsp; likely {low * 100:.0f}–{high * 100:.0f}%"
+        tip = f"<b>{mid * 100:.0f}%</b> &nbsp;·&nbsp; range {_pct_range(low, high)}"
         if benchmark is not None:
             tip += f"<br><span style='color:#FFD54F'>▍</span> {benchmark_label or 'Benchmark'} {benchmark * 100:.0f}%"
         self.setToolTip(tip)
@@ -2949,6 +2984,7 @@ class StatsWindow(QWidget):
         self.deck_tab_lookup = {}
         self.deck_analyses = []
         self.pinned_decks = self._load_pinned_decks()
+        self.starred_decks, self.ignored_decks = self._load_deck_flags()
         self.deck_icon_overrides = self._load_deck_icon_overrides()
         self.limitless_standard_meta = self._load_meta_cache("limitless_standard")
         self._japan_rows = []
@@ -2965,13 +3001,13 @@ class StatsWindow(QWidget):
         self._replay_request_token = 0
         self._window_focus_protection_active = False
         self._replay_tab_visible = False
-        self.elo_time_scale = "all"
-        self.elo_time_scale_days = {
-            "1w": 7,
-            "1m": 30,
-            "3m": 90,
-            "1y": 365,
-        }
+        self.chart_range = self.app_settings.get("dashboard_chart_range", "auto")
+        if self.chart_range not in {key for key, _label, _tip in self.CHART_RANGES}:
+            self.chart_range = "auto"
+        try:
+            self.winrate_window = int(self.app_settings.get("dashboard_winrate_window", 10))
+        except (TypeError, ValueError):
+            self.winrate_window = 10
         
         self.init_ui()
         self.load_stats()
@@ -3494,9 +3530,7 @@ class StatsWindow(QWidget):
         content_layout.addWidget(self.stats_summary)
         
         # Graphs section
-        if MATPLOTLIB_AVAILABLE:
-            graphs_container = self.create_graphs_section()
-            content_layout.addWidget(graphs_container)
+        content_layout.addWidget(self.create_graphs_section())
         
         # Deck usage section
         self.deck_usage_widget = self.create_deck_section()
@@ -3524,6 +3558,8 @@ class StatsWindow(QWidget):
         vlayout.setSpacing(0)
 
         self.deck_tabs = QTabWidget()
+        self.deck_tab_bar = DeckTabBar()
+        self.deck_tabs.setTabBar(self.deck_tab_bar)
         self.deck_tabs.setObjectName("deckTabs")
         self.deck_tabs.setDocumentMode(True)
         self.deck_tabs.setMovable(True)
@@ -3794,7 +3830,7 @@ class StatsWindow(QWidget):
         bar_layout.addStretch(right_spacer)
         meter_layout.addWidget(bar)
 
-        marker_row = QLabel(f"{low_pct:.0f}% - {high_pct:.0f}%")
+        marker_row = QLabel(f"{low_pct:.0f}–{high_pct:.0f}%")
         marker_row.setObjectName("deckMetricNote")
         meter_layout.addWidget(marker_row)
         layout.addWidget(meter)
@@ -3883,20 +3919,37 @@ class StatsWindow(QWidget):
         # 1. Win rate
         est = post.get("mean", 0.5) * 100.0
         deck_accent = self._confidence_accent(post.get("p_above_even") if games else None)
-        tip = (f"<b>Estimated true win rate: {est:.0f}%</b><br>"
-               f"Likely between {post.get('low', 0) * 100:.0f}% and {post.get('high', 1) * 100:.0f}% (90%).<br>"
-               f"Actual: {analysis.get('record')} ({(observed or 0) * 100:.0f}%). Small samples are pulled toward 50%.")
+        level = int(round(post.get("level", 0.9) * 100))
+        tip = (f"<b>Estimated win rate: {est:.0f}%</b><br>"
+               f"Range {_pct_range(post.get('low', 0), post.get('high', 1))}. {RANGE_EXPLAINED.format(level=level)}<br>"
+               f"<span style='color:#8A97AA'>Actual {analysis.get('record')} ({(observed or 0) * 100:.0f}%). "
+               f"{post.get('games', 0):.1f} effective games.</span><br>"
+               + (formulas.estimate(post) if post.get("alpha") else ""))
         if limitless_wr is not None:
             tip += f"<br><span style='color:#FFD54F'>▍</span> Limitless average for this archetype: {limitless_wr * 100:.1f}%"
         top.addWidget(self._create_estimate_card(
             "WIN RATE", f"{est:.0f}%" if games else "--", deck_accent,
             post.get("low", 0), post.get("mean", 0.5), post.get("high", 1),
-            f"{analysis.get('record')} · {(observed or 0) * 100:.0f}% actual" if games else "No games yet",
-            tip, benchmark=limitless_wr, benchmark_label="Limitless", tag="est.",
+            ("Older format: not counted" if post.get("games", 0) <= 0 else
+             f"Range {_pct_range(post.get('low', 0), post.get('high', 1))}") if games else "No games yet",
+            tip, benchmark=limitless_wr, benchmark_label="Limitless",
         ), 0, 0)
 
-        # 2. Vs the current meta
-        if meta_adj:
+        # 2. Meta Score (deck_score.py) - same number as the Meta tab
+        scores, score_info = self._deck_scores()
+        score = scores.get(f"you:{analysis.get('deck_name', '')}")
+        if score and score.get("eff_games", 0) > 0:
+            sc = score["score"] * 100.0
+            ranked = score_info.get("ranked", 0)
+            caption = (f"Would rank #{score['rank']} of {ranked} · range {_pct_range(score['low'], score['high'])}" if score.get("rank")
+                       else f"{score.get('eff_games', 0):.0f} of {score_info.get('n_needed', 0):.0f} effective games to rank · "
+                            f"range {_pct_range(score['low'], score['high'])}")
+            top.addWidget(self._create_estimate_card(
+                "META SCORE", f"{sc:.0f}", self._confidence_accent(score["p_above_even"]),
+                score["low"], score["score"], score["high"], caption,
+                self._score_tooltip(analysis.get("deck_name", ""), score, score_info, True),
+            ), 0, 1)
+        elif meta_adj:
             adj = meta_adj["mean"] * 100.0
             diff = (observed or 0) * 100.0 - adj
             mix = ("Your opponents were close to the real meta mix."
@@ -3904,13 +3957,13 @@ class StatsWindow(QWidget):
                    f"Your opponents were {'easier' if diff > 0 else 'tougher'} than the meta "
                    f"({(observed or 0) * 100:.0f}% raw → {adj:.0f}%).")
             tip = (f"<b>Expected win rate vs today's meta: {adj:.0f}%</b><br>"
-                   f"Your matchups re-weighted by how common each deck is on Limitless.<br>"
-                   f"Likely {meta_adj['low'] * 100:.0f}–{meta_adj['high'] * 100:.0f}%. {mix}<br>"
-                   f"Decks you haven't faced count at your overall rate.")
+                   f"Range {_pct_range(meta_adj['low'], meta_adj['high'])}.<br>"
+                   f"<span style='color:#8A97AA'>Your matchups re-weighted by how common each deck is on Limitless. "
+                   f"{mix} Decks you haven't faced count at your overall rate.</span>")
             top.addWidget(self._create_estimate_card(
                 "VS THE META", f"{adj:.0f}%", self._confidence_accent(meta_adj.get("p_above_even")),
                 meta_adj["low"], meta_adj["mean"], meta_adj["high"],
-                f"faced {meta_adj['coverage'] * 100:.0f}% of the meta", tip, tag="exp.",
+                f"Range {_pct_range(meta_adj['low'], meta_adj['high'])}", tip,
             ), 0, 1)
         else:
             top.addWidget(self._create_estimate_card(
@@ -3920,14 +3973,15 @@ class StatsWindow(QWidget):
         # 3. Verdict
         p_even = post.get("p_above_even", 0.5)
         verdict = verdict_from_probability(p_even) if games else "No games"
-        tip = (f"<b>{p_even * 100:.0f}% sure</b> this deck wins more than it loses.<br>"
-               f"Sample: {analysis.get('confidence_label', 'Low')} ({games} games).")
+        tip = (f"<b>{p_even * 100:.0f}% chance</b> this deck wins more than it loses.<br>"
+               f"<span style='color:#8A97AA'>{analysis.get('confidence_note', '')}</span><br>"
+               + formulas.verdict(p_even))
         if analysis.get("p_beats_limitless") is not None:
-            tip += (f"<br>{analysis['p_beats_limitless'] * 100:.0f}% sure you beat the Limitless average "
+            tip += (f"<br>{analysis['p_beats_limitless'] * 100:.0f}% chance you beat the Limitless average "
                     f"({limitless_wr * 100:.1f}%).")
         top.addWidget(self._create_estimate_card(
             "VERDICT", verdict, self._confidence_accent(p_even if games else None), 0, None, 0,
-            f"{p_even * 100:.0f}% sure it's above 50%" if games else "", tip), 0, 2)
+            f"{p_even * 100:.0f}% chance it's above 50%" if games else "", tip), 0, 2)
         for col in range(3):
             top.setColumnStretch(col, 1)
 
@@ -3935,11 +3989,20 @@ class StatsWindow(QWidget):
         adv = QGridLayout()
         adv.setHorizontalSpacing(8)
         outer.addLayout(adv)
-        rw = rank_summary.get("weighted_winrate", 0.0) * 100.0
-        adv.addWidget(self._create_mini_stat(
-            "RANK-WEIGHTED", f"{rw:.0f}%" if games else "--", self.NEUTRAL,
-            "Win rate where games at higher ranks count more"
-            + (f" (avg rank {rank_summary['avg_rank']:.0f})." if rank_summary.get("avg_rank") is not None else ".")), 0, 0)
+        own = (score or {}).get("own")
+        if own and score.get("eff_games", 0) > 0:
+            own_rank = f" · #{own['rank']}" if own.get("rank") and score.get("qualifies") else ""
+            adv.addWidget(self._create_mini_stat(
+                "OWN GAMES SCORE", f"{own['score'] * 100:.0f}{own_rank}", "#B39DDB",
+                f"<b>Own games only: {own['score'] * 100:.1f}</b> · range {_pct_range(own['low'], own['high'])}"
+                + (f" · would rank #{own['rank']} of {score_info.get('ranked', 0)}" if own_rank else "")
+                + "<br>" + formulas.own_score(own, score_info)), 0, 0)
+        else:
+            rw = rank_summary.get("weighted_winrate", 0.0) * 100.0
+            adv.addWidget(self._create_mini_stat(
+                "RANK-WEIGHTED", f"{rw:.0f}%" if games else "--", self.NEUTRAL,
+                "Win rate where games at higher ranks count more"
+                + (f" (avg rank {rank_summary['avg_rank']:.0f})." if rank_summary.get("avg_rank") is not None else ".")), 0, 0)
         form = analysis.get("recent_form") or {}
         strip = ResultStrip(form.get("games_list", [])) if form.get("games") else None
         adv.addWidget(self._create_mini_stat(
@@ -4066,10 +4129,10 @@ class StatsWindow(QWidget):
         legend = QLabel(
             "<span style='color:#6BB6E8'>━●</span> estimate &nbsp;&nbsp;"
             "<span style='color:#9CC344'>┅</span> actual &nbsp;&nbsp;"
-            "<span style='color:#6BB6E8'>▒</span> likely range"
+            "<span style='color:#6BB6E8'>▒</span> confidence range"
         )
         legend.setToolTip("Estimate: true win rate after each game. Actual: your raw win % so far.<br>"
-                          "Likely range (90%) narrows as games add up; early swings are mostly noise.")
+                          + RANGE_EXPLAINED.format(level=90) + " Early swings are mostly noise.")
         legend.setTextFormat(Qt.TextFormat.RichText)
         legend.setObjectName("deckMetricNote")
         legend.setWordWrap(True)
@@ -4385,7 +4448,7 @@ class StatsWindow(QWidget):
         verdict = verdict_from_probability(post.get("p_above_even", 0.5)).lower()
         if meta_adj:
             parts.append(f"{analysis.get('record')} ({observed:.0f}%). Against today's meta this projects to about "
-                         f"{meta_adj['mean'] * 100:.0f}% (likely {meta_adj['low'] * 100:.0f}-{meta_adj['high'] * 100:.0f}%) - {verdict}.")
+                         f"{meta_adj['mean'] * 100:.0f}% (range {_pct_range(meta_adj['low'], meta_adj['high'])}) - {verdict}.")
             swing = max((r for r in meta_adj["rows"] if r.get("posterior")), key=lambda r: abs(r["impact"]), default=None)
             if swing and abs(swing["impact"]) >= 0.3:
                 parts.append(f"Biggest swing matchup: {swing['deck']} ({float(swing.get('share') or 0):.1f}% of the meta, "
@@ -4412,7 +4475,7 @@ class StatsWindow(QWidget):
         matter stand out.
         """
         table = self._make_meta_table(
-            ["Opponent", "Meta share", "Your record", "Estimate", "Likely range", "Field", "Verdict", "Impact"],
+            ["Opponent", "Meta share", "Your record", "Estimate", "Range", "Field", "Verdict", "Impact"],
             [None, 76, 82, 72, 130, 64, 120, 70],
         )
         # This archetype's matchup records across Limitless online games
@@ -4464,6 +4527,11 @@ class StatsWindow(QWidget):
                 accent = self._confidence_accent(post["p_above_even"])
                 few = games < 3
                 self._set_meta_item(table, i, 3, f"{est:.0f}%", accent=self.NEUTRAL if few else accent)
+                item = table.item(i, 3)
+                if item is not None:
+                    item.setToolTip(f"<b>{est:.0f}%</b> vs {r.get('deck', '')} · range {_pct_range(post['low'], post['high'])}<br>"
+                                    f"{post['p_above_even'] * 100:.0f}% chance you're favored<br>"
+                                    + formulas.pooled_matchup(post, (analysis.get("posterior") or {}).get("mean", 0.5)))
                 bar_wrap = QWidget()
                 bar_layout = QHBoxLayout(bar_wrap)
                 bar_layout.setContentsMargins(6, 0, 6, 0)
@@ -4514,7 +4582,7 @@ class StatsWindow(QWidget):
             "Share of today's Limitless meta.",
             "Your wins-losses vs this deck.",
             "Estimated win rate in this matchup (leans on your overall rate until there are a few games).",
-            "Dot = estimate · band = likely range · white tick = 50%",
+            "Confidence range (90%) · dot = estimate · white tick = 50%",
             "Your archetype vs this deck across Limitless online games (the benchmark).",
             "Needs 3+ games.",
             "▲ lifts / ▼ drags your win rate vs the meta. Bigger = matters more.",
@@ -4755,19 +4823,20 @@ class StatsWindow(QWidget):
         hero_top.addWidget(title_wrap)
         hero_top.addStretch()
 
-        # Pin/star toggle — pinned decks always sort to the front of the tabs.
-        deck_name_for_pin = analysis.get("deck_name", "")
-        is_pinned = deck_name_for_pin in self.pinned_decks
-        pin_btn = QToolButton()
-        pin_btn.setObjectName("deckPinBtn")
-        pin_btn.setText("★" if is_pinned else "☆")
-        pin_btn.setToolTip("Pin this deck to the front of the tab bar" if not is_pinned else "Unpin this deck")
-        pin_btn.setCheckable(True)
-        pin_btn.setChecked(is_pinned)
-        pin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        pin_btn.setFixedSize(32, 30)
-        pin_btn.clicked.connect(lambda checked=False, name=deck_name_for_pin: self._toggle_pin_deck(name))
-        hero_top.addWidget(pin_btn)
+        # Pin (front of the tabs) · Star (Meta analysis) · Ignore (left out of
+        # the dashboard and overall stats).
+        flag_deck = analysis.get("deck_name", "")
+        flag_group = QWidget()
+        flag_row = QHBoxLayout(flag_group)
+        flag_row.setContentsMargins(0, 0, 4, 0)
+        flag_row.setSpacing(0)
+        for kind, active in (("pin", flag_deck in self.pinned_decks),
+                             ("star", flag_deck in self.starred_decks),
+                             ("ignore", flag_deck in self.ignored_decks)):
+            flag_btn = DeckFlagButton(kind, checked=active)
+            flag_btn.toggled.connect(lambda on, k=kind, name=flag_deck: self._set_deck_flag(k, name, on))
+            flag_row.addWidget(flag_btn)
+        hero_top.addWidget(flag_group)
 
         if matched_row.get("deck_url"):
             open_btn = QPushButton("Limitless ↗")
@@ -4813,25 +4882,88 @@ class StatsWindow(QWidget):
         except Exception:
             pass
 
-    def _toggle_pin_deck(self, deck_name):
-        """Pin/unpin a deck. Pinned decks always sort to the front."""
-        if deck_name in self.pinned_decks:
-            self.pinned_decks.remove(deck_name)
+    def _load_deck_flags(self):
+        """(starred, ignored) deck name lists. First run: the decks that were
+        starred under the old single star/pin button start out starred."""
+        try:
+            with open(DECK_FLAGS_FILE, "r", encoding="utf-8") as handle:
+                data = json.load(handle) or {}
+            return ([str(v) for v in data.get("starred", [])],
+                    [str(v) for v in data.get("ignored", [])])
+        except FileNotFoundError:
+            return list(self.pinned_decks), []
+        except Exception:
+            return [], []
+
+    def _save_deck_flags(self):
+        try:
+            with open(DECK_FLAGS_FILE, "w", encoding="utf-8") as handle:
+                json.dump({"starred": self.starred_decks, "ignored": self.ignored_decks},
+                          handle, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _set_deck_flag(self, kind, deck_name, on):
+        """Pin / star / ignore toggled on a deck page. Applied in place (tabs
+        reordered, dashboard refreshed) so the page and its button animation
+        aren't rebuilt."""
+        target = {"pin": self.pinned_decks, "star": self.starred_decks, "ignore": self.ignored_decks}[kind]
+        if on and deck_name not in target:
+            target.insert(0, deck_name)  # newest pin first
+        elif not on and deck_name in target:
+            target.remove(deck_name)
+        if kind == "pin":
+            self._save_pinned_decks()
         else:
-            # Newest pins go first.
-            self.pinned_decks.insert(0, deck_name)
-        self._save_pinned_decks()
-        self._refresh_deck_dashboards()
+            self._save_deck_flags()
+        if kind in ("pin", "ignore"):
+            self._reorder_deck_tabs()
+        if kind == "ignore":
+            self._refresh_dashboard_summary()
+        if kind in ("star", "ignore"):
+            self._meta_tab_dirty = True
+            if hasattr(self, "tab_widget") and self.tab_widget.tabText(self.tab_widget.currentIndex()) == "Meta":
+                self._populate_meta_tab()
+
+    def _reorder_deck_tabs(self):
+        """Move tabs into sort order without rebuilding any page."""
+        if not hasattr(self, "deck_tabs"):
+            return
+        bar = self.deck_tabs.tabBar()
+        order = [a.get("deck_name", "") for a in self._sort_deck_analyses(self.deck_analyses or [])]
+        for target, name in enumerate(order):
+            current = next((i for i in range(bar.count()) if bar.tabToolTip(i) == name), None)
+            if current is not None and current != target:
+                bar.moveTab(current, target)
+        self.deck_tab_lookup = {bar.tabToolTip(i): i for i in range(bar.count())}
+        self._update_deck_tab_flags()
+
+    def _update_deck_tab_flags(self):
+        bar = getattr(self, "deck_tab_bar", None)
+        if bar is not None:
+            bar.set_flags(self.pinned_decks, self.ignored_decks)
+
+    def _refresh_dashboard_summary(self):
+        """Stats tab pieces that depend on which decks are ignored."""
+        try:
+            self._timeline = self._load_timeline()
+            self._update_headline_cards(*self._timeline)
+            self.update_elo_graph()
+            self.update_winrate_graph()
+            self.update_deck_usage(self.deck_analyses)
+            self.update_recent_battles()
+        except Exception as e:
+            print(f"Error refreshing dashboard: {e}")
 
     def _sort_deck_analyses(self, analyses):
-        """Pinned decks first (newest pin first), then by last played."""
+        """Pinned first (newest pin first), ignored last, else by last played."""
         def sort_key(analysis):
             name = analysis.get("deck_name", "")
             if name in self.pinned_decks:
                 return (0, self.pinned_decks.index(name))
             last = analysis.get("last_played") or ""
             # Descending by last_played: invert the string for sort().
-            return (1, _invert_str(last))
+            return (2 if name in self.ignored_decks else 1, _invert_str(last))
         return sorted(analyses, key=sort_key)
 
     def _refresh_deck_dashboards(self, deck_analyses=None):
@@ -4888,13 +5020,11 @@ class StatsWindow(QWidget):
             icon = self._icon_for_deck(analysis.get("deck_name", ""), analysis.get("deck_icons", []), size=18)
             deck_name = analysis.get("deck_name", "")
             label = self._deck_tab_label(deck_name)
-            # Prefix a star for pinned decks so the sort order is visible.
-            if deck_name in self.pinned_decks:
-                label = f"★ {label}"
             idx = self.deck_tabs.addTab(page, icon, label)
             self.deck_tabs.tabBar().setTabToolTip(idx, deck_name)
             self.deck_tab_lookup[deck_name] = idx
 
+        self._update_deck_tab_flags()
         for deck_name, scroll_value in prior_scrolls.items():
             idx = self.deck_tab_lookup.get(deck_name)
             widget = self.deck_tabs.widget(idx) if idx is not None else None
@@ -5310,7 +5440,7 @@ class StatsWindow(QWidget):
         columns.setSpacing(24)
         self._weight_spins = {}
         current = load_weights()
-        for group, title in (("meta", "META DATA"), ("ladder", "YOUR GAMES")):
+        for group, title in (("meta", "META DATA"), ("ladder", "YOUR GAMES"), ("strength", "OPPONENT STRENGTH")):
             col = QGridLayout()
             col.setHorizontalSpacing(10)
             col.setVerticalSpacing(6)
@@ -5321,14 +5451,15 @@ class StatsWindow(QWidget):
                 label = QLabel(label_text)
                 label.setStyleSheet("color: rgba(235,242,250,0.85); font-size: 11px;")
                 spin = QDoubleSpinBox()
-                spin.setRange(0.0, 5.0)
-                spin.setSingleStep(0.05)
-                spin.setDecimals(2)
-                spin.setSuffix("×")
+                is_gap = key in ("ladder_gap", "rank_margin")
+                spin.setRange(1.0 if key == "rank_margin" else 0.0, 30.0 if key == "rank_margin" else 15.0 if is_gap else 5.0)
+                spin.setSingleStep(0.5 if is_gap else 0.05)
+                spin.setDecimals(1 if is_gap else 2)
+                spin.setSuffix(" pts" if is_gap else "×")
                 spin.setFixedWidth(84)
                 spin.setValue(float(current[group][key]))
                 default = DEFAULT_WEIGHTS[group][key]
-                hint = f"Default {default:g}×" + (f" · {tip}" if tip else "")
+                hint = f"Default {default:g}{' pts' if is_gap else '×'}" + (f" · {tip}" if tip else "")
                 label.setToolTip(hint)
                 spin.setToolTip(hint)
                 spin.setStyleSheet(SPIN_STYLE)
@@ -5881,7 +6012,7 @@ class StatsWindow(QWidget):
         painter.end()
         return pixmap
 
-    def _create_deck_cell_widget(self, deck_name, icons=None, subtitle=None, icon_size=24):
+    def _create_deck_cell_widget(self, deck_name, icons=None, subtitle=None, icon_size=24, mine=False):
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         layout = QHBoxLayout(container)
@@ -5918,13 +6049,21 @@ class StatsWindow(QWidget):
         text_col.setSpacing(1)
 
         title = QLabel(deck_name)
-        title.setStyleSheet("color: rgba(242,247,255,0.96); font-size: 11px; font-weight: 600; background: transparent;")
+        title.setStyleSheet(("color: #E4D9FF; font-size: 11px; font-weight: 800;" if mine else
+                             "color: rgba(242,247,255,0.96); font-size: 11px; font-weight: 600;")
+                            + " background: transparent;")
         # Ensure the label reports its full text width so the column is wide
         # enough to show the whole deck name (never cut off).
         title.setMinimumWidth(title.fontMetrics().horizontalAdvance(deck_name) + 4)
         text_col.addWidget(title)
 
-        if subtitle:
+        if mine:
+            badge = QLabel(f"<span style='background:#B39DDB; color:#14101F; font-weight:800;'>&nbsp;YOUR DECK&nbsp;</span>"
+                           f"<span style='color:#B39DDB;'>&nbsp; {subtitle or ''}</span>")
+            badge.setTextFormat(Qt.TextFormat.RichText)
+            badge.setStyleSheet("font-size: 8px; background: transparent;")
+            text_col.addWidget(badge)
+        elif subtitle:
             sub = QLabel(subtitle)
             sub.setStyleSheet("color: rgba(168,182,204,0.78); font-size: 9px; background: transparent;")
             text_col.addWidget(sub)
@@ -5948,7 +6087,8 @@ class StatsWindow(QWidget):
         item.setBackground(bg)
         table.setItem(row, col, item)
 
-    def _set_meta_deck_cell(self, table, row, col, deck_name, icons=None, subtitle=None, *, sort_value=None, link=None):
+    def _set_meta_deck_cell(self, table, row, col, deck_name, icons=None, subtitle=None, *, sort_value=None, link=None,
+                            mine=False):
         self._set_meta_item(
             table,
             row,
@@ -5961,7 +6101,7 @@ class StatsWindow(QWidget):
         table.setCellWidget(
             row,
             col,
-            self._create_deck_cell_widget(deck_name, icons, subtitle=subtitle),
+            self._create_deck_cell_widget(deck_name, icons, subtitle=subtitle, mine=mine),
         )
 
     def _open_table_row_link(self, table, row):
@@ -6074,9 +6214,9 @@ class StatsWindow(QWidget):
         row.addSpacing(8)
         self._in_person_buttons = {}
         for key, text, tip in (
-                ("events", "📍  Event finder", "Find Pokémon TCG events near you (Seagrove TCG)."),
-                ("homies", "👥  Track your homies", "Follow your friends' tournament results (Seagrove TCG)."),
-                ("print", "🖨  Print your decklist", "Tournament decklist sheet (pokedata.ovh), pre-filled with your "
+                ("events", "Event finder", "Find Pokémon TCG events near you (Seagrove TCG)."),
+                ("homies", "Track your homies", "Follow your friends' tournament results (Seagrove TCG)."),
+                ("print", "Print your decklist", "Tournament decklist sheet (pokedata.ovh), pre-filled with your "
                                                    "deck exported from Pokémon TCG Live.")):
             btn = QPushButton(text)
             btn.setObjectName("limitlessBtn")
@@ -6249,13 +6389,26 @@ class StatsWindow(QWidget):
         self.meta_include_jp.toggled.connect(lambda *_: self._populate_meta_tab())
         controls.addWidget(self.meta_include_jp)
 
-        self.meta_include_mine = QCheckBox("★ My decks")
+        self.meta_include_mine = QCheckBox("★ Starred decks")
         self.meta_include_mine.setChecked(True)
-        self.meta_include_mine.setToolTip("Add your own decks as rows (and matrix rows), using your weighted games "
-                                          "vs each meta archetype. Kept separate from the public data.")
+        self.meta_include_mine.setToolTip("Add your starred decks (star button on a deck's page) as rows and matrix "
+                                          "rows, using your weighted games vs each meta archetype. Kept separate "
+                                          "from the public data.")
         self.meta_include_mine.setStyleSheet("color: rgba(255,255,255,0.7); font-size: 11px;")
         self.meta_include_mine.toggled.connect(lambda *_: self._populate_meta_tab())
         controls.addWidget(self.meta_include_mine)
+        self.meta_mine_basis = QComboBox()
+        self.meta_mine_basis.setObjectName("metaCombo")
+        self.meta_mine_basis.setFixedHeight(28)
+        self.meta_mine_basis.addItem("scored with archetype", "blended")
+        self.meta_mine_basis.addItem("scored on own games only", "own")
+        self.meta_mine_basis.setToolTip(
+            "<b>With archetype</b>: your deck counts as a version of the Limitless archetype it matches - "
+            "your games adjust that archetype's measured strength (best for comparing decks).<br>"
+            "<b>Own games only</b>: your games alone, nothing borrowed from Limitless - your results with "
+            "this deck vs the field, still adjusted for sample size.")
+        self.meta_mine_basis.currentIndexChanged.connect(lambda *_: self._populate_meta_tab())
+        controls.addWidget(self.meta_mine_basis)
         controls.addStretch()
 
         refresh = QPushButton("↻ Refresh")
@@ -6264,6 +6417,41 @@ class StatsWindow(QWidget):
         refresh.clicked.connect(self._refresh_meta_tab_data)
         controls.addWidget(refresh)
         vlayout.addLayout(controls)
+
+        # Which data feeds the sheet: sources, and Preferences weights on/off.
+        # Applied to this tab only (deck pages keep the full weighted sheet).
+        view_row = QHBoxLayout()
+        view_row.setSpacing(4)
+        view_row.addWidget(label("Data:", "Which events feed this sheet. Records, Win % and Scores need online "
+                                          "events (in-person and Japan publish placings only)."))
+        self.meta_source_buttons = {}
+        for key, text, tip in (("all", "All sources", "Online + in-person + Japan"),
+                               ("online", "Online", "play.limitlesstcg.com events: shares, records, matchups"),
+                               ("in_person", "In-person", "Regionals / Internationals / Worlds: shares and top cuts"),
+                               ("japan", "Japan", "City Leagues: shares and top cuts")):
+            btn = QPushButton(text)
+            btn.setObjectName("eloScaleBtn")
+            btn.setCheckable(True)
+            btn.setChecked(key == "all")
+            btn.setFixedHeight(24)
+            btn.setToolTip(tip)
+            btn.clicked.connect(lambda _c=False, k=key: self._set_meta_view(source=k))
+            view_row.addWidget(btn)
+            self.meta_source_buttons[key] = btn
+        view_row.addSpacing(14)
+        self.meta_weights_btn = QPushButton("Custom weights")
+        self.meta_weights_btn.setObjectName("eloScaleBtn")
+        self.meta_weights_btn.setCheckable(True)
+        self.meta_weights_btn.setChecked(True)
+        self.meta_weights_btn.setFixedHeight(24)
+        self.meta_weights_btn.setToolTip(
+            "<b>On</b>: weighted by your Preferences (Advanced → Preferences)<br>" + formulas.event_weights()
+            + "<br>" + formulas.game_weights()
+            + "<br><b>Off</b>: every event and game counts once (raw data, same date window).")
+        self.meta_weights_btn.toggled.connect(lambda on: self._set_meta_view(weights=on))
+        view_row.addWidget(self.meta_weights_btn)
+        view_row.addStretch()
+        vlayout.addLayout(view_row)
 
         self.meta_status = QLabel("Loading meta data…")
         self.meta_status.setStyleSheet("color: rgba(255,255,255,0.45); font-size: 10px;")
@@ -6286,22 +6474,29 @@ class StatsWindow(QWidget):
         self.meta_views.setDocumentMode(True)
 
         self.meta_arch_table = self._make_meta_table(
-            ["#", "Deck", "Share ⚖", "Top cut ⚖", "Record ⚖", "Win % ⚖", "Likely range", "Vs field ⚖", "Converts ⚖", "Sources"],
-            [34, None, 72, 80, 126, 70, 120, 80, 86, 74], sortable=True, stretch_last=False)
+            ["#", "Deck", "Score", "Range", "Share ⚖", "Top cut ⚖", "Record ⚖", "Win % ⚖", "Converts ⚖", "Sources"],
+            [40, None, 62, 120, 72, 80, 126, 70, 86, 74], sortable=True, stretch_last=False)
         self.meta_arch_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.meta_arch_table.cellDoubleClicked.connect(lambda row, col: self._open_table_row_link(self.meta_arch_table, row))
+        self._meta_row_delegate = MineRowDelegate(self.meta_arch_table)
+        self.meta_arch_table.setItemDelegate(self._meta_row_delegate)
         for col, tip in enumerate([
-                None, "Double-click to open the archetype on Limitless. ★ rows are your own decks.",
-                "Share of the field · all sources (online, in-person, Japan) · weighted.\n"
-                "English-legal field unless Japan-only decks are shown.",
-                "Share of top finishes · in-person + Japan placings · weighted by event and placement.",
-                "W-L-T · online events only · weighted (expansion era × event size), so not raw counts.\n"
-                "★ rows: your games, weighted by your Preferences.",
-                "Result rate under the selected tie rule · from the weighted record.",
-                "Dot = estimate · band = 90% likely range · white tick = 50%",
-                "Expected win rate vs today's field · matchups from online pairings, each weighted by how common "
-                "that opponent is (mirror = 50%).",
-                "Top 32 conversion · in-person only · 1.0× = as often as its popularity predicts.",
+                "Rank by Score (decks with enough games). ★ = your deck.",
+                "Double-click to open the archetype on Limitless. ★ rows are your own decks.",
+                "<b>Score</b> = expected win rate vs today's meta<br>"
+                + formulas.F + "Score = Σ share × matchup estimate" + formulas.END + "<br>"
+                + formulas.F + "matchup estimate = (k·θ + wins) / (k + games)" + formulas.END + "<br>"
+                + formulas.DIM + "θ = deck strength; k and the typical deck are fitted to all Limitless data. Sample "
+                "size, player clustering and your weights are all included. Hover a score for its numbers."
+                + formulas.END,
+                "Confidence range (90%) of the Score · white tick = 50%",
+                "<b>Share of the field</b> · English-legal unless Japan-only decks are shown<br>"
+                + formulas.SHARE + "<br>" + formulas.event_weights(),
+                "<b>Share of top finishes</b> (in-person + Japan)<br>" + formulas.TOP_CUT,
+                "<b>W-L-T</b> · online events only, weighted (not raw counts)<br>" + formulas.event_weights()
+                + "<br><span style='color:#8A97AA'>★ rows: your games, weighted by your Preferences.</span>",
+                "Raw result rate under the selected tie rule · from the weighted record.",
+                "<b>Top 32 conversion</b> (in-person only)<br>" + formulas.CONVERTS,
                 "● online  ● in-person  ● Japan  ★ you"]):
             if tip and self.meta_arch_table.horizontalHeaderItem(col):
                 self.meta_arch_table.horizontalHeaderItem(col).setToolTip(tip)
@@ -6365,19 +6560,37 @@ class StatsWindow(QWidget):
         n = a + b
         return a / n, math.sqrt(a * b / (n * n * (n + 1.0)))
 
-    def _my_deck_meta_rows(self, meta_rows):
+    def _my_deck_meta_rows(self, meta_rows, starred_only=True, use_weights=True):
         """Your decks as meta rows: weighted record + matchups vs meta archetypes
-        (opponents mapped to Limitless archetypes; unmatched -> 'Other')."""
+        (opponents mapped to Limitless archetypes; unmatched -> 'Other').
+        mirror_id = the archetype the deck itself matches (its mirror)."""
         expansions = cached_expansions("en")
         other_key = next((r["id"] for r in meta_rows if str(r.get("deck", "")).lower() == "other"), None)
+
+        def record(battles):
+            if use_weights:
+                return weighted_record(battles, expansions)
+            kinds = [str(b.get("result", "")).strip().lower() for b in battles]
+            wins = kinds.count("win")
+            ties = sum(1 for k in kinds if k in ("tie", "draw"))
+            return float(wins), float(len(kinds) - wins - ties), float(ties)
         match_cache = {}
         icons_by_deck = {a.get("deck_name"): a.get("deck_icons") or [] for a in (self.deck_analyses or [])}
         mine = []
         for deck_name, games, *_rest in self.db.get_deck_usage_stats(limit=None):
+            if deck_name in self.ignored_decks or (starred_only and deck_name not in self.starred_decks):
+                continue
             detailed = self.db.get_deck_battles_detailed(deck_name)
-            ww, wl, wt = weighted_record(detailed, expansions)
+            ww, wl, wt = record(detailed)
             if ww + wl + wt <= 0:
                 continue
+
+            def ladder_frac(battles):
+                """Share of the (weighted) games that were ladder, not Limitless tournament."""
+                ws = [(battle_weight(b, expansions) if use_weights else 1.0, bool(b.get("is_tournament")))
+                      for b in battles]
+                total = sum(w for w, _t in ws)
+                return sum(w for w, tour in ws if not tour) / total if total > 0 else 1.0
             groups = {}
             for b in detailed:
                 opp = b.get("opponent") or ""
@@ -6390,20 +6603,130 @@ class StatsWindow(QWidget):
             mine.append({
                 "id": f"you:{deck_name}", "deck": deck_name, "icons": icons_by_deck.get(deck_name, []),
                 "is_mine": True, "wins": ww, "losses": wl, "ties": wt, "raw_games": games,
-                "matchups": {k: list(weighted_record(v, expansions)) for k, v in groups.items()},
+                "matchups": {k: list(record(v)) for k, v in groups.items()},
+                "ladder_frac": ladder_frac(detailed),
+                "matchup_ladder_frac": {k: ladder_frac(v) for k, v in groups.items()},
                 "sources": {"you": games}, "deck_url": None,
+                "mirror_id": (match_meta_row(deck_name, meta_rows) or {}).get("row", {}).get("id"),
             })
         return mine
+
+    def _set_meta_view(self, source=None, weights=None):
+        if source is not None:
+            self._meta_source = source
+            for key, btn in getattr(self, "meta_source_buttons", {}).items():
+                btn.setChecked(key == source)
+        if weights is not None:
+            self._meta_use_weights = bool(weights)
+        self._populate_meta_tab()
+
+    def _meta_view_sheet(self):
+        """The sheet for the Meta tab's Data / Custom weights choice. The
+        default view is the regular sheet; others are re-assembled from the
+        cached events (no downloads, ~0.2 s) and kept in memory."""
+        base = self.limitless_standard_meta or {}
+        source = getattr(self, "_meta_source", "all")
+        use_weights = getattr(self, "_meta_use_weights", True)
+        if source == "all" and use_weights:
+            return base
+        key = (base.get("fetched_at"), source, use_weights)
+        cache = getattr(self, "_meta_view_cache", {})
+        if key not in cache:
+            from meta_sources import ALL_SOURCES, rebuild_meta_sheet
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                sheet = rebuild_meta_sheet(use_weights, ALL_SOURCES if source == "all" else (source,))
+            except Exception as e:
+                print(f"Meta view rebuild failed: {e}")
+                sheet = None
+            finally:
+                QApplication.restoreOverrideCursor()
+            if sheet is None:
+                return None
+            sheet["fetched_at"] = base.get("fetched_at")
+            cache = {key: sheet}  # keep only the latest alternative view
+            self._meta_view_cache = cache
+        return cache[key]
+
+    def _deck_scores(self, data=None, use_weights=True):
+        """Deck Scores (deck_score.py) for every archetype and all your
+        non-ignored decks. Cached until the meta sheet, your games, the tie
+        rule, your preferences or the deck flags change."""
+        data = data if data is not None else (self.limitless_standard_meta or {})
+        rows = list(data.get("rows") or [])
+        if not rows:
+            return {}, {}
+        try:
+            signature = self.db.data_signature()
+        except Exception:
+            signature = None
+        try:
+            prefs = os.path.getmtime(os.path.join(BASE_DIR, ".app_settings.json"))
+        except OSError:
+            prefs = None
+        key = (id(data), data.get("fetched_at"), len(rows), signature, tie_mode(), prefs, tuple(self.ignored_decks),
+               use_weights, self.meta_min_games.value() if hasattr(self, "meta_min_games") else 0)
+        caches = getattr(self, "_score_caches", {})
+        if key in caches:
+            return caches[key]
+        mine = self._my_deck_meta_rows(rows, starred_only=False, use_weights=use_weights)
+        try:
+            results, info = compute_scores(rows, mine, pilot_sd=data.get("pilot_sd"), min_meta_games=key[-1],
+                                           strength=load_weights()["strength"] if use_weights else None)
+        except Exception as e:
+            print(f"Deck score error: {e}")
+            results, info = {}, {}
+        info["mine"] = {m["id"]: m for m in mine}
+        # Two entries: the regular sheet (deck pages) and the Meta tab's view.
+        caches = {k: v for k, v in caches.items() if k[0] == id(self.limitless_standard_meta or {})}
+        caches[key] = (results, info)
+        self._score_caches = caches
+        return results, info
+
+    def _score_tooltip(self, name, res, info, is_mine):
+        level = int(round(info.get("level", 0.9) * 100))
+        lines = [f"<b>{name}</b>",
+                 f"Score <b>{res['score'] * 100:.1f}</b> · range {_pct_range(res['low'], res['high'])}"]
+        if res.get("rank"):
+            lines.append(f"{'Would rank' if is_mine else 'Rank'} #{res['rank']} of {info.get('ranked', 0)} meta decks · "
+                         f"{res.get('p_top5', 0) * 100:.0f}% chance it's really top 5"
+                         + (f" · {res['p_first'] * 100:.0f}% #1" if res.get("p_first", 0) >= 0.01 else ""))
+        elif not res.get("qualifies") and info.get("n_needed"):
+            lines.append(f"Not ranked yet: {res['eff_games']:.1f} of {info['n_needed']:.0f} effective games")
+            lines.append(f"{formulas.F}ranked when effective games ≥ (1.645 × 0.5 / {info.get('rank_margin', 15):g}%)² "
+                         f"= {info['n_needed']:.0f}{formulas.END}  {formulas.DIM}(± {info.get('rank_margin', 15):g} pts "
+                         f"precision at 90%; effective = after weighting and opponent strength){formulas.END}")
+        lines.append(f"{res['p_above_even'] * 100:.0f}% chance it beats the field (above 50%) · "
+                     f"{res['eff_games']:.0f} effective games · matchups seen for {res['coverage'] * 100:.0f}% of the field")
+        lines.append("<b>How it's calculated</b> · expected win rate vs today's meta "
+                     f"({level}% range)")
+        rows = (self.limitless_standard_meta or {}).get("rows") or []
+        names = {r["id"]: r.get("deck", r["id"]) for r in rows}
+        archetype = names.get(res.get("mirror_id")) if is_mine else None
+        lines.append(formulas.score(res, info, is_mine, names, archetype))
+        own = res.get("own") if is_mine else None
+        if own:
+            lines.append(f"<b>Own games only</b>: {own['score'] * 100:.1f} · range {_pct_range(own['low'], own['high'])}"
+                         + (f" · would rank #{own['rank']}" if own.get("rank") and res.get("qualifies") else ""))
+            lines.append(formulas.own_score(own, info))
+        if is_mine:
+            lines.append("<span style='color:#8A97AA'>Your games also carry your piloting and ladder opponents; "
+                         "meta rows are an average Limitless player.</span>")
+        return "<br>".join(lines)
 
     def _populate_meta_tab(self):
         if not hasattr(self, "meta_arch_table"):
             return
-        data = self.limitless_standard_meta or {}
+        data = self._meta_view_sheet()
+        if data is None:
+            self.meta_status.setText("This view is built from the event cache - press ↻ Refresh once to create it.")
+            data = self.limitless_standard_meta or {}
         rows = list(data.get("rows") or [])
         self._meta_tab_dirty = False
         if not rows:
             self.meta_status.setText("No meta data yet - press ↻ Refresh.")
             return
+        use_weights = getattr(self, "_meta_use_weights", True)
         include_jp = self.meta_include_jp.isChecked()
         min_games = self.meta_min_games.value()
         share_key = "share" if include_jp else "share_en"
@@ -6415,32 +6738,9 @@ class StatsWindow(QWidget):
         def overall(r):
             return self._meta_rate_posterior(r.get("wins"), r.get("losses"), r.get("ties"))
 
-        mine = self._my_deck_meta_rows(rows) if self.meta_include_mine.isChecked() else []
-
-        def expected_vs_field(r):
-            """Share-weighted matchup rate vs the English-legal field (pooled)."""
-            if not (float(r.get("wins") or 0) + float(r.get("losses") or 0)):
-                return None
-            mg = 1 if r.get("is_mine") else min_games
-            base_mean, base_sd = self._beta_mean_sd(r.get("wins"), r.get("losses"), r.get("ties"))
-            mean = sd_sum = covered = 0.0
-            matchups = r.get("matchups") or {}
-            for opp in rows:
-                s = (opp.get("share_en") or 0) / field_total
-                if s <= 0:
-                    continue
-                if opp["id"] == r["id"]:
-                    p, sd = 0.5, 0.0
-                else:
-                    rec = matchups.get(opp["id"])
-                    if rec and sum(rec) >= mg:
-                        p, sd = self._beta_mean_sd(*rec, prior_mean=base_mean, strength=10.0)
-                        covered += s
-                    else:
-                        p, sd = base_mean, base_sd
-                mean += s * p
-                sd_sum += s * sd
-            return {"mean": mean, "sd": max(sd_sum, 1e-6), "coverage": covered}
+        scores, score_info = self._deck_scores(data, use_weights)
+        mine = ([m for m in score_info.get("mine", {}).values() if m["deck"] in self.starred_decks]
+                if self.meta_include_mine.isChecked() else [])
 
         mode_name = TIE_MODES[tie_mode()][0]
         events = data.get("events") or {}
@@ -6449,70 +6749,102 @@ class StatsWindow(QWidget):
         stamp = datetime.fromtimestamp(fetched).strftime("%b %d %H:%M") if fetched else "?"
         self.meta_status.setText(
             f"{len(rows)} archetypes · {events.get('online', 0)} online · {events.get('in_person', 0)} in-person · "
-            f"{events.get('japan', 0)} Japan events · set: {exp.get('name', '?')} · ties: {mode_name} · updated {stamp}")
+            f"{events.get('japan', 0)} Japan events · set: {exp.get('name', '?')} · ties: {mode_name} · updated {stamp}"
+            + (f" · sorted by Score ({score_info.get('ranked', 0)} ranked)" if score_info.get("ranked") else
+               " · no Score here: in-person and Japan publish placings, not match records")
+            + ("" if use_weights else " · raw data (custom weights off)"))
 
         table = self.meta_arch_table
         sorting = table.isSortingEnabled()
         table.setSortingEnabled(False)
         table.setUpdatesEnabled(False)  # one repaint at the end, not one per cell
-        shown = mine + rows[:80]
+        # Ranked decks by Score first (yours included once they have enough
+        # games), then the rest by share.
+        pool = mine + rows[:80]
+
+        own_basis = (getattr(self, "meta_mine_basis", None) is not None
+                     and self.meta_mine_basis.currentData() == "own")
+
+        def score_for(r):
+            res = scores.get(r["id"]) or {}
+            if r.get("is_mine") and own_basis and res.get("own"):
+                return dict(res["own"], eff_games=res.get("eff_games", 0), qualifies=res.get("qualifies"),
+                            needs=res.get("needs"), mirror_id=res.get("mirror_id"), is_mine=True, own_of=res)
+            return res
+
+        def order(r):
+            res = score_for(r)
+            if res.get("rank"):
+                return (0, res["rank"], 0 if r.get("is_mine") else 1)  # your deck above the one it ties
+            return (1, -(r.get(share_key) or 0), 0)
+        shown = sorted(pool, key=order)
         table.setRowCount(0)
         table.setRowCount(len(shown))
         for i, r in enumerate(shown):
             link = r.get("deck_url")
             is_mine = bool(r.get("is_mine"))
+            res = score_for(r)
             table.setRowHeight(i, 40)
             share = r.get(share_key) or 0.0
-            rank = i + 1 - len(mine)
-            self._set_meta_item(table, i, 0, "★" if is_mine else str(rank), accent="#B39DDB" if is_mine else None,
-                                sort_value=0 if is_mine else rank, link=link)
+            rank = res.get("rank")
+            self._set_meta_item(table, i, 0, (f"★{rank}" if rank else "★") if is_mine else (str(rank) if rank else ""),
+                                accent="#B39DDB" if is_mine else None, muted=not rank and not is_mine,
+                                sort_value=rank or 9999, link=link)
+            table.item(i, 0).setData(MINE_ROLE, is_mine)
+            basis = "own games" if (is_mine and own_basis) else "with archetype"
+            eff = res.get("eff_games", 0)
             self._set_meta_deck_cell(table, i, 1, r.get("deck", ""), r.get("icons", []),
-                                     subtitle=f"your deck · {r.get('raw_games', 0)} games" if is_mine else None,
-                                     sort_value=r.get("deck", "").lower(), link=link)
-            if is_mine:
-                self._set_meta_item(table, i, 2, "", muted=True, sort_value=-1)
-                self._set_meta_item(table, i, 3, "", muted=True, sort_value=-1)
-            else:
-                self._set_meta_item(table, i, 2, f"{share:.1f}%", sort_value=share, link=link)
-                top = r.get("top_share")
-                self._set_meta_item(table, i, 3, f"{top:.1f}%" if top else "", muted=not top, sort_value=top or 0, link=link)
-            w, l, t = (float(r.get(k) or 0) for k in ("wins", "losses", "ties"))
-            games = w + l + t
-            if games < (1 if is_mine else max(1, min_games)):
-                for col in range(4, 8):
-                    self._set_meta_item(table, i, col, "", muted=True, sort_value=-1, link=link)
-            else:
-                post = overall(r)
-                rate = result_rate(w, l, t)
-                accent = self._confidence_accent(post["p_above_even"])
-                self._set_meta_item(table, i, 4, f"{w:,.0f}-{l:,.0f}-{t:,.0f}", sort_value=games, link=link)
-                rec_item = table.item(i, 4)
-                if rec_item is not None:
-                    rec_item.setToolTip(
-                        f"Your games, weighted by your Preferences ({r.get('raw_games', 0)} played)." if is_mine else
-                        f"Online events · weighted by expansion era and event size · {r.get('raw_games', 0):,} raw games.")
-                self._set_meta_item(table, i, 5, f"{rate * 100:.1f}%", accent=accent, sort_value=rate, link=link)
+                                     subtitle=(f"{r.get('raw_games', 0)} games ≈ {eff:.0f} effective · {basis}"
+                                               if is_mine else None),
+                                     sort_value=r.get("deck", "").lower(), link=link, mine=is_mine)
+            # Score + its range
+            if res and res.get("eff_games", 0) > 0:
+                sc = res["score"]
+                sacc = self._confidence_accent(res["p_above_even"])
+                self._set_meta_item(table, i, 2, f"{sc * 100:.1f}", accent=sacc, sort_value=sc, link=link)
+                tip = self._score_tooltip(r.get("deck", ""), res.get("own_of", res), score_info, is_mine)
+                table.item(i, 2).setToolTip(tip)
                 bar_wrap = QWidget()
                 bar_layout = QHBoxLayout(bar_wrap)
                 bar_layout.setContentsMargins(6, 0, 6, 0)
-                bar_layout.addWidget(RangeBar(post["low"], post["mean"], post["high"], accent, height=14))
-                table.setCellWidget(i, 6, bar_wrap)
-                self._set_meta_item(table, i, 6, "", sort_value=post["mean"], link=link)
-                vf = expected_vs_field(r)
-                if vf:
-                    vacc = self.WINNING if vf["mean"] >= 0.52 else self.LOSING if vf["mean"] <= 0.48 else self.UNCLEAR
-                    self._set_meta_item(table, i, 7, f"{vf['mean'] * 100:.1f}%", accent=vacc, sort_value=vf["mean"], link=link)
-                    item = table.item(i, 7)
-                    if item is not None:
-                        item.setToolTip(f"±{vf['sd'] * 100:.1f} pts · matchup data covers {vf['coverage'] * 100:.0f}% "
-                                        "of the field (the rest uses its overall rate)")
-                else:
-                    self._set_meta_item(table, i, 7, "", muted=True, sort_value=-1, link=link)
-            ip = r.get("in_person") or {}
-            conv = ip.get("conversion_top32")
-            if conv is not None and ip.get("top32"):
-                cacc = self.WINNING if conv >= 1.15 else self.LOSING if conv <= 0.85 else self.UNCLEAR
-                self._set_meta_item(table, i, 8, f"{conv:.2f}×", accent=cacc, sort_value=conv, link=link)
+                bar = RangeBar(res["low"], sc, res["high"], sacc, height=14)
+                bar.setToolTip(tip)
+                bar_layout.addWidget(bar)
+                table.setCellWidget(i, 3, bar_wrap)
+                self._set_meta_item(table, i, 3, "", sort_value=res["low"], link=link)
+            else:
+                self._set_meta_item(table, i, 2, "", muted=True, sort_value=-1, link=link)
+                self._set_meta_item(table, i, 3, "", muted=True, sort_value=-1, link=link)
+            if is_mine:
+                self._set_meta_item(table, i, 4, "", muted=True, sort_value=-1)
+                self._set_meta_item(table, i, 5, "", muted=True, sort_value=-1)
+            else:
+                self._set_meta_item(table, i, 4, f"{share:.1f}%", sort_value=share, link=link)
+                top = r.get("top_share")
+                self._set_meta_item(table, i, 5, f"{top:.1f}%" if top else "", muted=not top, sort_value=top or 0, link=link)
+            w, l, t = (float(r.get(k) or 0) for k in ("wins", "losses", "ties"))
+            games = w + l + t
+            if games < (1 if is_mine else max(1, min_games)):
+                for col in (6, 7):
+                    self._set_meta_item(table, i, col, "", muted=True, sort_value=-1, link=link)
+            else:
+                rate = result_rate(w, l, t)
+                self._set_meta_item(table, i, 6, f"{w:,.0f}-{l:,.0f}-{t:,.0f}", sort_value=games, link=link)
+                rec_item = table.item(i, 6)
+                if rec_item is not None:
+                    rec_item.setToolTip(
+                        f"<b>Your games, weighted</b> ({r.get('raw_games', 0)} played)<br>{formulas.game_weights()}"
+                        if is_mine and use_weights else
+                        f"Your games, unweighted ({r.get('raw_games', 0)} played)." if is_mine else
+                        f"<b>Online events, weighted</b><br>{formulas.event_weights()}<br>"
+                        f"{formulas.effective_games(r, data.get('pilot_sd'))}")
+                self._set_meta_item(table, i, 7, f"{rate * 100:.1f}%", sort_value=rate, link=link)
+            conv = (scores.get(r["id"]) or {}).get("conversion")
+            if conv and not is_mine:
+                p1 = conv["p_above_1"]
+                cacc = self.WINNING if p1 >= 0.8 else self.LOSING if p1 <= 0.2 else self.UNCLEAR
+                self._set_meta_item(table, i, 8, f"{conv['mean']:.2f}×", accent=cacc, sort_value=conv["mean"], link=link)
+                table.item(i, 8).setToolTip(f"<b>{r.get('deck', '')}</b> · Top 32 conversion<br>" + formulas.conversion(conv))
             else:
                 self._set_meta_item(table, i, 8, "", muted=True, sort_value=-1, link=link)
             src = r.get("sources") or {}
@@ -6530,6 +6862,7 @@ class StatsWindow(QWidget):
                            f"{src.get('japan', 0)} Japan events")
             table.setCellWidget(i, 9, lbl)
             self._set_meta_item(table, i, 9, "", sort_value=sum(1 for k in ("online", "in_person", "japan") if src.get(k)))
+        table.setSortingEnabled(sorting)
         table.setSortingEnabled(sorting)
         table.setUpdatesEnabled(True)
         # The matrix is built only when its view is opened (lazy).
@@ -6608,8 +6941,8 @@ class StatsWindow(QWidget):
                         item.setForeground(QColor(255, 255, 255, 235 if games >= min_games else 110))
                         w, l, t = rec
                         item.setToolTip(f"<b>{a.get('deck')}</b> vs <b>{b.get('deck')}</b>: {rate * 100:.1f}%<br>"
-                                        f"{w:,.0f}-{l:,.0f}-{t:,.0f} (weighted) · likely {post['low'] * 100:.0f}–"
-                                        f"{post['high'] * 100:.0f}%"
+                                        f"{w:,.0f}-{l:,.0f}-{t:,.0f} (weighted) · range "
+                                        f"{_pct_range(post['low'], post['high'])}"
                                         + ("" if games >= min_games else "<br><i>small sample</i>"))
                 m.setItem(i, j, item)
         m.horizontalHeader().setDefaultSectionSize(46)
@@ -6665,7 +6998,7 @@ class StatsWindow(QWidget):
         vlayout.addWidget(metrics_bar)
 
         # Table
-        cols = ["#", "Deck", "Finishes", "Share", "Wins", "Losses", "Ties", "Raw WR", "Bayes WR", "95% CI", "P>50"]
+        cols = ["#", "Deck", "Finishes", "Share", "Wins", "Losses", "Ties", "Actual", "Estimate", "Range", "Chance >50%"]
         widths = [34, None, 68, 64, 58, 62, 52, 72, 78, 98, 56]
         self.limitless_table = self._make_meta_table(cols, widths, sortable=True, stretch_last=False)
         self.limitless_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -6763,7 +7096,7 @@ class StatsWindow(QWidget):
                 self._set_meta_item(table, i, col, f"{conv:.2f}×", accent=accent, sort_value=conv, link=link)
             best = ip.get("best") or {}
             place = best.get("rank")
-            label = {1: "🏆 1st", 2: "2nd", 3: "3rd"}.get(place, f"{place}th" if place else "--")
+            label = {1: "1st", 2: "2nd", 3: "3rd"}.get(place, f"{place}th" if place else "--")
             self._set_meta_item(table, i, 7, f"{label} · {best.get('event', '')}" if place else "--",
                                 accent="#FFD54F" if place == 1 else None, sort_value=place or 999, link=link)
         table.setSortingEnabled(sorting)
@@ -6967,7 +7300,7 @@ class StatsWindow(QWidget):
             self._set_meta_item(self.limitless_table, i, 7, f"{raw_pct:.1f}%", accent=pct_color, sort_value=raw_pct, link=link)
             bayes_color = "#66BB6A" if bayes_pct >= 55 else "#EF5350" if bayes_pct < 45 else "#F9A825"
             self._set_meta_item(self.limitless_table, i, 8, f"{bayes_pct:.1f}%", accent=bayes_color, sort_value=bayes_pct, link=link)
-            self._set_meta_item(self.limitless_table, i, 9, f"{ci_low:.0f}% - {ci_high:.0f}%", sort_value=(ci_high - ci_low), link=link)
+            self._set_meta_item(self.limitless_table, i, 9, f"{ci_low:.0f}–{ci_high:.0f}%", sort_value=(ci_high - ci_low), link=link)
             prob_color = "#66BB6A" if prob_even >= 65 else "#EF5350" if prob_even < 45 else "#F9A825"
             self._set_meta_item(self.limitless_table, i, 10, f"{prob_even:.0f}%", accent=prob_color, sort_value=prob_even, link=link)
         if sorting_enabled:
@@ -7168,7 +7501,7 @@ class StatsWindow(QWidget):
         vlayout.addWidget(metrics_bar)
 
         # --- Comparable meta table ---
-        cols = ["#", "Deck", "Finishes", "Share", "Wins", "Losses", "Raw WR", "Bayes WR", "95% CI", "P>50"]
+        cols = ["#", "Deck", "Finishes", "Share", "Wins", "Losses", "Actual", "Estimate", "Range", "Chance >50%"]
         widths = [34, None, 68, 64, 58, 62, 72, 78, 98, 56]
         self.japan_table = self._make_meta_table(cols, widths, sortable=True, stretch_last=False)
         self.japan_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -7349,7 +7682,7 @@ class StatsWindow(QWidget):
             self._set_meta_item(self.japan_table, i, 6, f"{raw_pct:.1f}%", accent=pct_color, sort_value=raw_pct)
             bayes_color = "#66BB6A" if bayes_pct >= 55 else "#EF5350" if bayes_pct < 45 else "#F9A825"
             self._set_meta_item(self.japan_table, i, 7, f"{bayes_pct:.1f}%", accent=bayes_color, sort_value=bayes_pct)
-            self._set_meta_item(self.japan_table, i, 8, f"{ci_low:.0f}% - {ci_high:.0f}%", sort_value=(ci_high - ci_low))
+            self._set_meta_item(self.japan_table, i, 8, f"{ci_low:.0f}–{ci_high:.0f}%", sort_value=(ci_high - ci_low))
             prob_color = "#66BB6A" if prob_even >= 65 else "#EF5350" if prob_even < 45 else "#F9A825"
             self._set_meta_item(self.japan_table, i, 9, f"{prob_even:.0f}%", accent=prob_color, sort_value=prob_even)
         if sorting_enabled:
@@ -7834,45 +8167,31 @@ class StatsWindow(QWidget):
             traceback.print_exc()
     
     def create_stats_cards(self):
-        """Create modern stat cards grid"""
+        """Headline cards: the numbers you check first, one row."""
         container = QFrame()
         container.setObjectName("statsGrid")
-        
+
         layout = QGridLayout(container)
         layout.setSpacing(10)
         layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Stat cards data
-        self.total_games_label = QLabel("--")
-        self.win_rate_label = QLabel("--%")
-        self.current_elo_label = QLabel("--")
-        self.best_elo_label = QLabel("--")
-        self.total_wins_label = QLabel("--")
-        self.total_losses_label = QLabel("--")
-        
+
+        self.headline_cards = {}
         cards = [
-            ("TOTAL GAMES", self.total_games_label, "#4A9FD8"),
-            ("WIN RATE", self.win_rate_label, "#9CC344"),
-            ("CURRENT ELO", self.current_elo_label, "#F9A825"),
-            ("BEST ELO", self.best_elo_label, "#7B1FA2"),
-            ("WINS", self.total_wins_label, "#66BB6A"),
-            ("LOSSES", self.total_losses_label, "#EF5350"),
+            ("rank", "CURRENT RANK", "#F9A825"),
+            ("winrate", "WIN RATE", "#9CC344"),
+            ("session", "TODAY", "#4A9FD8"),
+            ("form", "LAST 10", "#B388FF"),
         ]
-        
-        row, col = 0, 0
-        for label_text, value_label, color in cards:
-            card = self.create_stat_card(label_text, value_label, color)
-            layout.addWidget(card, row, col)
-            
-            col += 1
-            if col >= 3:
-                col = 0
-                row += 1
-        
+        for col, (key, title, color) in enumerate(cards):
+            card, title_label, value_label, sub_label = self.create_stat_card(title, color)
+            self.headline_cards[key] = (title_label, value_label, sub_label)
+            layout.addWidget(card, 0, col)
+            layout.setColumnStretch(col, 1)
+
         return container
-    
-    def create_stat_card(self, title, value_label, accent_color):
-        """Create individual modern stat card"""
+
+    def create_stat_card(self, title, accent_color):
+        """Card with a title, a big value and one line of context."""
         card = QFrame()
         card.setObjectName("statCard")
         card.setStyleSheet(f"""
@@ -7885,66 +8204,93 @@ class StatsWindow(QWidget):
                 border-left: 3px solid {accent_color};
             }}
         """)
-        card.setFixedHeight(85)
-        
+        card.setFixedHeight(88)
+
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(4)
-        
-        # Title
+        layout.setContentsMargins(12, 9, 12, 9)
+        layout.setSpacing(2)
+
         title_label = QLabel(title)
         title_label.setObjectName("cardTitle")
         title_label.setStyleSheet(f"color: {accent_color}; font-size: 9px; font-weight: 600; letter-spacing: 1px;")
         layout.addWidget(title_label)
-        
-        # Value
+
+        value_label = QLabel("--")
         value_label.setObjectName("cardValue")
+        value_label.setTextFormat(Qt.TextFormat.RichText)
         value_label.setStyleSheet("color: rgba(255, 255, 255, 0.95); font-size: 28px; font-weight: 700;")
         layout.addWidget(value_label)
-        
+
+        sub_label = QLabel("")
+        sub_label.setObjectName("cardSub")
+        sub_label.setTextFormat(Qt.TextFormat.RichText)
+        sub_label.setStyleSheet("color: rgba(214, 225, 240, 0.62); font-size: 10px;")
+        layout.addWidget(sub_label)
+
         layout.addStretch()
-        
-        return card
-    
+        return card, title_label, value_label, sub_label
+
     def create_graphs_section(self):
-        """Create modern graphs section"""
+        """Rank and win-rate charts with one shared range selector."""
         container = QFrame()
         container.setObjectName("graphsContainer")
-        
-        layout = QHBoxLayout(container)
-        layout.setSpacing(10)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Elo graph
-        self.elo_canvas = MplCanvas(self, width=4.5, height=2.8, dpi=90)
-        elo_frame = self.create_graph_card("ELO PROGRESSION", self.elo_canvas, header_widget=self._create_elo_scale_selector())
-        layout.addWidget(elo_frame)
-        
-        # Win rate graph
-        self.winrate_canvas = MplCanvas(self, width=4.5, height=2.8, dpi=90)
-        winrate_frame = self.create_graph_card("WIN RATE TREND", self.winrate_canvas)
-        layout.addWidget(winrate_frame)
-        
-        return container
-    
-    def _create_elo_scale_selector(self):
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        outer = QVBoxLayout(container)
+        outer.setSpacing(6)
+        outer.setContentsMargins(0, 0, 0, 0)
 
-        self.elo_scale_buttons = {}
-        for key, label in (("all", "All"), ("1y", "1Y"), ("3m", "3M"), ("1m", "1M"), ("1w", "1W")):
+        header = QHBoxLayout()
+        header.setContentsMargins(2, 0, 0, 0)
+        header.setSpacing(4)
+        self.chart_hint_label = QLabel("Hover for details · drag to zoom · double-click to reset")
+        self.chart_hint_label.setObjectName("chartHint")
+        header.addWidget(self.chart_hint_label)
+        header.addStretch()
+        self.chart_range_buttons = {}
+        for key, label, tip in self.CHART_RANGES:
             btn = QPushButton(label)
             btn.setObjectName("eloScaleBtn")
             btn.setCheckable(True)
-            btn.setChecked(key == self.elo_time_scale)
+            btn.setChecked(key == self.chart_range)
             btn.setFixedHeight(22)
-            btn.setMinimumWidth(28)
-            btn.clicked.connect(lambda checked=False, scale_key=key: self._set_elo_time_scale(scale_key))
-            layout.addWidget(btn)
-            self.elo_scale_buttons[key] = btn
+            btn.setMinimumWidth(30)
+            btn.setToolTip(tip)
+            btn.clicked.connect(lambda checked=False, range_key=key: self._set_chart_range(range_key))
+            header.addWidget(btn)
+            self.chart_range_buttons[key] = btn
+        outer.addLayout(header)
 
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.setContentsMargins(0, 0, 0, 0)
+
+        self.elo_chart = SeriesChart("#F9A825")
+        self.elo_chart.y_format = lambda v: f"{v:,.0f}"
+        self.elo_chart.y_min_pad = 6
+        self.elo_chart.y_clamp = (0, float("inf"))
+        self.elo_chart.empty_text = "No rank readings in this range"
+        self.elo_chart.viewChanged.connect(self._update_elo_summary)
+        self.elo_summary_label = QLabel("")
+        row.addWidget(self.create_graph_card("RANK", self.elo_chart, summary_label=self.elo_summary_label), 1)
+
+        self.winrate_chart = SeriesChart("#9CC344")
+        self.winrate_chart.y_format = lambda v: f"{v:.0f}%"
+        self.winrate_chart.y_clamp = (0, 100)
+        self.winrate_chart.y_include = (50,)
+        self.winrate_chart.y_min_pad = 5
+        self.winrate_chart.empty_text = "No games in this range"
+        self.winrate_chart.ref_lines = [(50, "50%", QColor(255, 255, 255, 60))]
+        self.winrate_chart.viewChanged.connect(self._update_winrate_summary)
+        self.winrate_summary_label = QLabel("")
+        window_box = QComboBox()
+        window_box.setObjectName("metaCombo")
+        for size in (5, 10, 20, 50):
+            window_box.addItem(f"Last {size}", size)
+        window_box.setCurrentIndex(max(0, window_box.findData(self.winrate_window)))
+        window_box.setToolTip("Games in the dashed rolling line")
+        window_box.currentIndexChanged.connect(lambda _i, box=window_box: self._set_winrate_window(box.currentData()))
+        row.addWidget(self.create_graph_card("WIN RATE", self.winrate_chart, header_widget=window_box,
+                                             summary_label=self.winrate_summary_label), 1)
+        outer.addLayout(row)
         return container
 
     def _set_replay_tab_visible(self, visible):
@@ -7961,51 +8307,71 @@ class StatsWindow(QWidget):
         except Exception:
             pass
 
-    def _set_elo_time_scale(self, scale_key):
-        if scale_key == self.elo_time_scale:
-            return
-        self.elo_time_scale = scale_key
-        for key, button in getattr(self, "elo_scale_buttons", {}).items():
-            button.setChecked(key == scale_key)
+    # (key, button text, tooltip)
+    CHART_RANGES = (
+        ("auto", "Auto", "Most useful stretch: your current climb / recent games"),
+        ("session", "Session", "Your latest day of play"),
+        ("1w", "1W", "Last 7 days"),
+        ("1m", "1M", "Last 30 days"),
+        ("3m", "3M", "Last 90 days"),
+        ("all", "All", "Everything"),
+    )
+    CHART_RANGE_DAYS = {"1w": 7, "1m": 30, "3m": 90}
+
+    def _set_chart_range(self, range_key):
+        self.chart_range = range_key
+        for key, button in getattr(self, "chart_range_buttons", {}).items():
+            button.setChecked(key == range_key)
+        try:
+            self.app_settings["dashboard_chart_range"] = range_key
+            save_app_settings(self.app_settings)
+        except Exception:
+            pass
         self.update_elo_graph()
+        self.update_winrate_graph()
 
-    def _update_elo_scale_visibility(self, times):
-        buttons = getattr(self, "elo_scale_buttons", {})
-        if not buttons:
+    def _set_winrate_window(self, size):
+        try:
+            self.winrate_window = int(size)
+        except (TypeError, ValueError):
             return
+        try:
+            self.app_settings["dashboard_winrate_window"] = self.winrate_window
+            save_app_settings(self.app_settings)
+        except Exception:
+            pass
+        self.update_winrate_graph()
 
-        available = {"all"}
-        if times:
-            latest = times[-1]
-            earliest = times[0]
-            for key, days in self.elo_time_scale_days.items():
-                cutoff = latest - timedelta(days=days)
-                if earliest <= cutoff:
-                    available.add(key)
+    def _chart_view(self, times, auto_view):
+        """(first, last) indices for the selected range, or None if empty."""
+        n = len(times)
+        if n == 0:
+            return None
+        key = self.chart_range
+        if key == "auto":
+            return auto_view
+        if key == "all":
+            return (0, n - 1)
+        if key == "session":
+            day = times[-1].date()
+            first = next(i for i, t in enumerate(times) if t.date() == day)
+            return (first, n - 1)
+        cutoff = datetime.now() - timedelta(days=self.CHART_RANGE_DAYS.get(key, 7))
+        first = next((i for i, t in enumerate(times) if t >= cutoff), None)
+        return None if first is None else (first, n - 1)
 
-        for key, button in buttons.items():
-            button.setVisible(key in available)
-
-        if self.elo_time_scale not in available:
-            fallback_order = ["all", "1y", "3m", "1m", "1w"]
-            self.elo_time_scale = next((key for key in fallback_order if key in available), "all")
-
-        for key, button in buttons.items():
-            button.setChecked(key == self.elo_time_scale)
-
-    def create_graph_card(self, title, canvas, header_widget=None):
-        """Create modern graph card"""
+    def create_graph_card(self, title, chart, header_widget=None, summary_label=None):
+        """Graph card: title row, one-line summary of the visible range, chart."""
         card = QFrame()
         card.setObjectName("graphCard")
-        
+
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-        
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
+
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(8)
-
         title_label = QLabel(title)
         title_label.setObjectName("graphTitle")
         header_row.addWidget(title_label)
@@ -8013,12 +8379,146 @@ class StatsWindow(QWidget):
         if header_widget is not None:
             header_row.addWidget(header_widget, alignment=Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header_row)
-        
-        # Canvas
-        layout.addWidget(canvas)
-        
+
+        if summary_label is not None:
+            summary_label.setObjectName("chartSummary")
+            summary_label.setTextFormat(Qt.TextFormat.RichText)
+            layout.addWidget(summary_label)
+
+        chart.setMinimumHeight(220)
+        layout.addWidget(chart, 1)
         return card
-    
+
+    def _load_timeline(self):
+        """Battles (oldest first) and de-duplicated rank readings."""
+        battles = []
+        for row in self.db.get_battle_timeline():
+            if (row[1] or "") in self.ignored_decks:
+                continue
+            try:
+                stamp = datetime.fromisoformat(str(row[0]))
+            except (TypeError, ValueError):
+                continue
+            battles.append({
+                "t": stamp, "deck": row[1] or "", "opp": row[2] or "", "result": str(row[3] or ""),
+                # what deck_analytics.battle_weight() reads
+                "raw": {"timestamp": str(row[0]), "my_rank": row[4], "is_tournament": bool(row[5])},
+            })
+        ranks = []
+        for stamp, rank in self.db.get_elo_history(limit=None) or []:
+            try:
+                stamp, rank = datetime.fromisoformat(str(stamp)), int(rank)
+            except (TypeError, ValueError):
+                continue
+            # The OCR re-reads the same value many times; keep each change once.
+            if ranks and ranks[-1][1] == rank:
+                continue
+            ranks.append((stamp, rank))
+        return battles, ranks
+
+    @staticmethod
+    def _result_kind(result):
+        value = (result or "").strip().lower()
+        if value == "win":
+            return "W"
+        if value == "loss":
+            return "L"
+        return "T"
+
+    def _update_headline_cards(self, battles, ranks):
+        cards = getattr(self, "headline_cards", None)
+        if not cards:
+            return
+        win_c, loss_c, tie_c = "#66BB6A", "#EF5350", "#9AA5B1"
+
+        def record(games):
+            w = sum(1 for b in games if self._result_kind(b["result"]) == "W")
+            l = sum(1 for b in games if self._result_kind(b["result"]) == "L")
+            return w, l, len(games) - w - l
+
+        def record_text(w, l, t):
+            return f"{w}-{l}-{t}" if t else f"{w}-{l}"
+
+        # Current rank
+        _title, value, sub = cards["rank"]
+        if ranks:
+            current = ranks[-1][1]
+            peak = max(r for _t, r in ranks)
+            value.setText(f"{current:,}")
+            parts = [league_name(current)]
+            parts.append("at peak" if current >= peak else f"peak {peak:,}")
+            sub.setText(" · ".join(p for p in parts if p))
+        else:
+            value.setText("--")
+            sub.setText("No rank read yet")
+
+        # Win rate (under the chosen tie rule)
+        _title, value, sub = cards["winrate"]
+        w, l, t = record(battles)
+        rate = result_rate(w, l, t)
+        value.setText(f"{rate * 100:.1f}%" if rate is not None else "--")
+        estimate = ""
+        tip = f"<b>Actual win rate</b>: {record_text(w, l, t)} in {len(battles)} games"
+        if t:
+            tip += f" ({TIE_MODES[tie_mode()][0].lower()})"
+        try:
+            expansions = cached_expansions("en")
+            post = win_rate_posterior(*weighted_record([b["raw"] | {"result": b["result"]} for b in battles], expansions))
+            if post["games"] > 0:
+                estimate = f" · est. {post['mean'] * 100:.0f}%"
+                level = int(round(post["level"] * 100))
+                tip += (f"<br><b>Estimated win rate</b>: {post['mean'] * 100:.0f}% · range {_pct_range(post['low'], post['high'])}"
+                        f"<br><span style='color:#8A97AA'>{RANGE_EXPLAINED.format(level=level)} "
+                        f"{post['games']:.1f} effective games.</span><br>" + formulas.estimate(post))
+        except Exception:
+            pass
+        sub.setText(f"{record_text(w, l, t)}{estimate}")
+        sub.parentWidget().setToolTip(tip)
+
+        # Latest session (today, or the last day you played)
+        title, value, sub = cards["session"]
+        if battles:
+            day = battles[-1]["t"].date()
+            session = [b for b in battles if b["t"].date() == day]
+            title.setText("TODAY" if day == datetime.now().date() else f"LAST SESSION · {_short_day(day)}")
+            w, l, t = record(session)
+            value.setText(record_text(w, l, t))
+            details = []
+            day_ranks = [r for stamp, r in ranks if stamp.date() == day]
+            before = [r for stamp, r in ranks if stamp.date() < day]
+            if day_ranks:
+                start = before[-1] if before else day_ranks[0]
+                delta = day_ranks[-1] - start
+                color = win_c if delta > 0 else loss_c if delta < 0 else tie_c
+                details.append(f"<span style='color:{color}'>{delta:+,} pts</span>")
+            rate = result_rate(w, l, t)
+            if rate is not None:
+                details.append(f"{rate * 100:.0f}%")
+            sub.setText(" · ".join(details))
+        else:
+            title.setText("TODAY")
+            value.setText("--")
+            sub.setText("No games yet")
+
+        # Last 10 games: record, form dots, streak
+        _title, value, sub = cards["form"]
+        recent = battles[-10:]
+        if recent:
+            w, l, t = record(recent)
+            value.setText(record_text(w, l, t))
+            colors = {"W": win_c, "L": loss_c, "T": tie_c}
+            dots = "".join(f"<span style='color:{colors[self._result_kind(b['result'])]}'>●</span>" for b in recent)
+            last_kind = self._result_kind(battles[-1]["result"])
+            streak = 0
+            for b in reversed(battles):
+                if self._result_kind(b["result"]) != last_kind:
+                    break
+                streak += 1
+            sub.setText(f"<span style='letter-spacing:1px'>{dots}</span> &nbsp;{last_kind}{streak}")
+        else:
+            value.setText("--")
+            sub.setText("")
+
     def create_deck_section(self):
         """Create modern deck usage section"""
         card = QFrame()
@@ -8122,34 +8622,16 @@ class StatsWindow(QWidget):
                 except Exception:
                     stats_scroll_value = None
 
-            # Get overall stats
-            total, wins, losses, best_elo, worst_elo = self.db.get_all_time_stats()
-            current_elo = self.db.get_current_rank()
-            
-            self.total_games_label.setText(str(total))
-            self.total_wins_label.setText(str(wins))
-            self.total_losses_label.setText(str(losses))
-            
-            if total > 0:
-                win_rate = (wins / total) * 100
-                self.win_rate_label.setText(f"{win_rate:.1f}%")
-            else:
-                self.win_rate_label.setText("0%")
-            
-            self.current_elo_label.setText(str(current_elo) if current_elo else "--")
-            self.best_elo_label.setText(str(best_elo) if best_elo else "--")
-            
-            # Load graphs
-            if MATPLOTLIB_AVAILABLE:
-                try:
-                    self.update_elo_graph()
-                    self.update_winrate_graph()
-                except Exception as graph_error:
-                    print(f"Graph error: {graph_error}")
-                    import traceback
-                    traceback.print_exc()
-            else:
-                print("Warning: matplotlib not available - graphs disabled")
+            # Headline cards + charts share one read of the timeline
+            self._timeline = self._load_timeline()
+            self._update_headline_cards(*self._timeline)
+            try:
+                self.update_elo_graph()
+                self.update_winrate_graph()
+            except Exception as graph_error:
+                print(f"Graph error: {graph_error}")
+                import traceback
+                traceback.print_exc()
             
             deck_rows = self.db.get_deck_usage_stats(limit=None)
             self.deck_analyses = [
@@ -8180,228 +8662,187 @@ class StatsWindow(QWidget):
             traceback.print_exc()
     
     def update_elo_graph(self):
-        """Update Elo progression graph"""
+        """Rank chart: one point per rank change, coloured up/down."""
         try:
-            data = self.db.get_elo_history(limit=None)
-            if not data:
-                return
-            
-            # Parse timestamps and elos
-            times = []
-            elos = []
-            for row in data:
-                try:
-                    times.append(datetime.fromisoformat(row[0]))
-                    elos.append(int(row[1]))
-                except:
-                    continue
-            
-            if not times or not elos:
-                return
+            battles, ranks = getattr(self, "_timeline", None) or self._load_timeline()
+            chart = self.elo_chart
+            points = []
+            b_index = 0
+            for i, (stamp, rank) in enumerate(ranks):
+                # Most recent battle saved before this reading (rank is read
+                # just after the game ends).
+                while b_index < len(battles) and battles[b_index]["t"] <= stamp + timedelta(minutes=2):
+                    b_index += 1
+                battle = battles[b_index - 1] if b_index else None
+                delta = rank - ranks[i - 1][1] if i else 0
+                if delta > 0:
+                    dot, head = "#66BB6A", f"{rank:,}   ▲ {delta:,}"
+                elif delta < 0:
+                    dot, head = "#EF5350", f"{rank:,}   ▼ {-delta:,}"
+                else:
+                    dot, head = None, f"{rank:,}"
+                tip = [head, f"{_short_day(stamp)} · {_clock(stamp)} · {league_name(rank)}"]
+                if battle and stamp - battle["t"] < timedelta(hours=3):
+                    kind = {"W": "Win", "L": "Loss", "T": "Tie"}[self._result_kind(battle["result"])]
+                    tip.append(f"{kind} vs {battle['opp']}" if battle["opp"] else kind)
+                    if battle["deck"]:
+                        tip.append(f"with {battle['deck']}")
+                points.append({"y": rank, "t": stamp, "dot": dot, "tip": tip})
 
-            self._update_elo_scale_visibility(times)
+            # Auto: the current climb - walk back until a league-scale jump
+            # (e.g. ladder points → Master points) or a 3-week break.
+            n = len(points)
+            first = n - 1
+            while first > 0 and first > n - 60:
+                gap = ranks[first][0] - ranks[first - 1][0]
+                if abs(ranks[first][1] - ranks[first - 1][1]) >= 300 or gap > timedelta(days=21):
+                    break
+                first -= 1
+            first = min(first, max(0, n - 3))
+            view = self._chart_view([p["t"] for p in points], (max(0, first), n - 1))
+            if view and view[0] > 0 and self.chart_range in self.CHART_RANGE_DAYS.keys() | {"session"}:
+                # Start from the rank you had going into the window, so the
+                # change matches the Today card (+pts since last session).
+                view = (view[0] - 1, view[1])
 
-            if self.elo_time_scale != "all":
-                days = self.elo_time_scale_days.get(self.elo_time_scale)
-                if days:
-                    cutoff = times[-1] - timedelta(days=days)
-                    filtered = [(time_value, elo_value) for time_value, elo_value in zip(times, elos) if time_value >= cutoff]
-                    if filtered:
-                        times = [time_value for time_value, _ in filtered]
-                        elos = [elo_value for _, elo_value in filtered]
-            
-            # Clear previous plot
-            self.elo_canvas.axes.cla()
-            
-            # Set dark transparent background  
-            self.elo_canvas.axes.set_facecolor((0.04, 0.04, 0.04, 0.3))
-            self.elo_canvas.figure.patch.set_facecolor('none')
-            self.elo_canvas.figure.patch.set_alpha(0)
-            
-            # Plot the main line
-            self.elo_canvas.axes.plot(times, elos, 
-                                     color='#4A9FD8', 
-                                     linewidth=2.5,
-                                     marker='o',
-                                     markersize=5,
-                                     markerfacecolor='#6BB6E8',
-                                     markeredgecolor='#4A9FD8',
-                                     markeredgewidth=1.5)
-            
-            # Fill area under curve
-            self.elo_canvas.axes.fill_between(times, elos, 
-                                             min(elos) - 10,
-                                             alpha=0.2,
-                                             color='#4A9FD8')
-            
-            # Set y limits with padding
-            y_range = max(elos) - min(elos)
-            padding = max(10, y_range * 0.15)
-            self.elo_canvas.axes.set_ylim(min(elos) - padding, max(elos) + padding)
-            
-            # Style the axes
-            self.elo_canvas.axes.tick_params(colors='#666666', labelsize=8)
-            self.elo_canvas.axes.grid(True, alpha=0.1, color='#444444', linewidth=0.5)
-            
-            # Remove spines
-            self.elo_canvas.axes.spines['top'].set_visible(False)
-            self.elo_canvas.axes.spines['right'].set_visible(False)
-            self.elo_canvas.axes.spines['bottom'].set_color('#2a2a2a')
-            self.elo_canvas.axes.spines['left'].set_color('#2a2a2a')
-            self.elo_canvas.axes.spines['bottom'].set_linewidth(0.5)
-            self.elo_canvas.axes.spines['left'].set_linewidth(0.5)
-            
-            # Smart date formatting based on time range
-            time_range = (times[-1] - times[0]).total_seconds()
-            if time_range < 3600:  # Less than 1 hour
-                date_format = '%H:%M'
-            elif time_range < 86400:  # Less than 1 day
-                date_format = '%H:%M'
-            elif time_range < 604800:  # Less than 1 week
-                date_format = '%m/%d %H:%M'
-            else:  # 1 week or more
-                date_format = '%m/%d'
-            
-            # Select evenly spaced tick positions (max 4-5 ticks for better spacing)
-            num_points = len(times)
-            if num_points <= 4:
-                tick_indices = range(num_points)
+            chart.ref_lines = [(threshold, name, QColor(249, 168, 37, 70)) for threshold, _key, name in LEAGUES if threshold > 0]
+            if view is None:
+                chart.set_data([])
             else:
-                # Always include first and last, space out the rest
-                step = max(1, num_points // 4)
-                tick_indices = list(range(0, num_points, step))
-                # Always include the last point
-                if tick_indices[-1] != num_points - 1:
-                    tick_indices.append(num_points - 1)
-            
-            # Format x-axis labels for selected ticks only
-            tick_positions = [times[i] for i in tick_indices]
-            tick_labels = [times[i].strftime(date_format) for i in tick_indices]
-            
-            self.elo_canvas.axes.set_xticks(tick_positions)
-            self.elo_canvas.axes.set_xticklabels(tick_labels, rotation=35, ha='right', fontsize=8)
-            
-            # Manual positioning with more bottom space for rotated labels
-            self.elo_canvas.figure.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.25)
-            
-            # Redraw
-            self.elo_canvas.draw()
-            
+                chart.set_data(points, auto_view=view)
         except Exception as e:
             print(f"Error in Elo graph: {e}")
             import traceback
             traceback.print_exc()
-    
-    def update_winrate_graph(self):
-        """Update win rate graph"""
-        try:
-            # Last 30 days you actually played (not the last 30 calendar
-            # days, which is often a single point after a break).
-            data = (self.db.get_win_rate_over_time(days=3650) or [])[-30:]
-            if not data:
-                return
-            
-            # Parse dates and win rates
-            dates = []
-            win_rates = []
-            ci_lows = []
-            ci_highs = []
-            for row in data:
-                try:
-                    dates.append(datetime.strptime(row[0], '%Y-%m-%d'))
-                    wr = (row[1] / row[3]) * 100 if row[3] > 0 else 0
-                    win_rates.append(wr)
-                    low, high = wilson_interval(int(row[1] or 0), int(row[3] or 0))
-                    ci_lows.append(low * 100)
-                    ci_highs.append(high * 100)
-                except:
-                    continue
-            
-            if not dates or not win_rates:
-                return
-            
-            # Clear previous plot
-            self.winrate_canvas.axes.cla()
-            
-            # Set dark transparent background
-            self.winrate_canvas.axes.set_facecolor((0.04, 0.04, 0.04, 0.3))
-            self.winrate_canvas.figure.patch.set_facecolor('none')
-            self.winrate_canvas.figure.patch.set_alpha(0)
-            
-            # Confidence band for daily estimates
-            self.winrate_canvas.axes.fill_between(
-                dates,
-                ci_lows,
-                ci_highs,
-                alpha=0.14,
-                color="#9CC344",
-            )
 
-            # Plot the main line
-            self.winrate_canvas.axes.plot(dates, win_rates,
-                                         color='#9CC344',
-                                         linewidth=2.5,
-                                         marker='s',
-                                         markersize=5,
-                                         markerfacecolor='#B4D96A',
-                                         markeredgecolor='#9CC344',
-                                         markeredgewidth=1.5)
-            
-            # Fill area under curve
-            self.winrate_canvas.axes.fill_between(dates, win_rates, 0,
-                                                  alpha=0.08,
-                                                  color='#9CC344')
-            
-            # Add 50% reference line
-            self.winrate_canvas.axes.axhline(y=50,
-                                            color='#666666',
-                                            linestyle='--',
-                                            linewidth=1,
-                                            alpha=0.4)
-            
-            # Set y limits
-            self.winrate_canvas.axes.set_ylim(0, 105)
-            
-            # Style the axes
-            self.winrate_canvas.axes.tick_params(colors='#666666', labelsize=8)
-            self.winrate_canvas.axes.grid(True, alpha=0.1, color='#444444', linewidth=0.5)
-            
-            # Remove spines
-            self.winrate_canvas.axes.spines['top'].set_visible(False)
-            self.winrate_canvas.axes.spines['right'].set_visible(False)
-            self.winrate_canvas.axes.spines['bottom'].set_color('#2a2a2a')
-            self.winrate_canvas.axes.spines['left'].set_color('#2a2a2a')
-            self.winrate_canvas.axes.spines['bottom'].set_linewidth(0.5)
-            self.winrate_canvas.axes.spines['left'].set_linewidth(0.5)
-            
-            # Smart date formatting based on date range
-            date_range = (dates[-1] - dates[0]).days
-            if date_range <= 7:  # 1 week or less
-                date_format = '%m/%d'
-            elif date_range <= 30:  # 1 month or less
-                date_format = '%m/%d'
-            else:  # More than 1 month
-                date_format = '%m/%d'
-            
-            # Format x-axis labels
-            formatted_labels = []
-            for d in dates:
-                formatted_labels.append(d.strftime(date_format))
-            
-            self.winrate_canvas.axes.set_xticks(dates)
-            self.winrate_canvas.axes.set_xticklabels(formatted_labels, rotation=45, ha='right')
-            
-            # Manual positioning
-            self.winrate_canvas.figure.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.2)
-            
-            # Redraw
-            self.winrate_canvas.draw()
-            
+    def _update_elo_summary(self, first, last, custom):
+        self._update_chart_hint()
+        points = self.elo_chart.visible_points()
+        if not points:
+            self.elo_summary_label.setText("<span style='color:rgba(214,225,240,0.5)'>No rank changes in this range</span>")
+            return
+        start, end = points[0]["y"], points[-1]["y"]
+        peak = max(p["y"] for p in points)
+        delta = end - start
+        color = "#66BB6A" if delta > 0 else "#EF5350" if delta < 0 else "#9AA5B1"
+        arrow = "▲" if delta > 0 else "▼" if delta < 0 else "■"
+        self.elo_summary_label.setText(
+            f"<span style='color:#F4F9FF;font-size:13px;font-weight:700'>{start:,} → {end:,}</span>"
+            f"&nbsp;&nbsp;<span style='color:{color};font-weight:700'>{arrow} {abs(delta):,}</span>"
+            f"<span style='color:rgba(214,225,240,0.55)'>&nbsp;&nbsp;·&nbsp; {_range_dates(points)}</span>"
+        )
+        low = min(p["y"] for p in points)
+        self.elo_summary_label.setToolTip(
+            f"<b>{start:,} → {end:,}</b> ({delta:+,})<br>Peak {peak:,} · low {low:,} · {len(points)} rank changes<br>"
+            f"<span style='color:#8A97AA'>Dots: green = up, red = down. Dashed lines = league thresholds.</span>")
+
+    def update_winrate_graph(self):
+        """Win-rate chart: weighted Bayesian estimate with its 90% likely range
+        (narrows as games accumulate), rolling last-N dashed, result strip.
+
+        Same maths as the deck pages: each game weighted by era x league /
+        tournament (Advanced → Preferences), record rescaled to Kish's
+        effective sample, Beta(2, 2) posterior under the tie rule.
+        """
+        try:
+            battles, _ranks = getattr(self, "_timeline", None) or self._load_timeline()
+            chart = self.winrate_chart
+            size = self.winrate_window
+            expansions = cached_expansions("en")
+            level = int(round(CREDIBLE_LEVEL * 100))
+            points = []
+            win_c, loss_c, tie_c = "#66BB6A", "#EF5350", "#9AA5B1"
+            kinds = [self._result_kind(b["result"]) for b in battles]
+            total = sq = ws = ls = ts = 0.0
+            for i, battle in enumerate(battles):
+                kind = kinds[i]
+                weight = battle_weight(battle["raw"], expansions)
+                if weight > 0:
+                    total += weight
+                    sq += weight * weight
+                    if kind == "W":
+                        ws += weight
+                    elif kind == "L":
+                        ls += weight
+                    else:
+                        ts += weight
+                scale = total / sq if sq else 0.0  # (sum w)^2 / sum w^2 / sum w
+                post = win_rate_posterior(ws * scale, ls * scale, ts * scale)
+                window = kinds[max(0, i - size + 1):i + 1]
+                w, l, t = window.count("W"), window.count("L"), window.count("T")
+                rolling = result_rate(w, l, t)
+                color = {"W": win_c, "L": loss_c, "T": tie_c}[kind]
+                label = {"W": "Win", "L": "Loss", "T": "Tie"}[kind]
+                record = f"{w}-{l}-{t}" if t else f"{w}-{l}"
+                tip = [
+                    f"{post['mean'] * 100:.0f}%   range {_pct_range(post['low'], post['high'])}",
+                    f"Game {i + 1} · {_short_day(battle['t'])} · {_clock(battle['t'])}",
+                    f"{label} vs {battle['opp']}" if battle["opp"] else label,
+                ]
+                if battle["deck"]:
+                    tip.append(f"with {battle['deck']}")
+                if rolling is not None:
+                    tip.append(f"Last {len(window)}: {rolling * 100:.0f}% ({record})")
+                tip.append(f"Counts ×{weight:.2f} · {post['games']:.1f} effective games"
+                           if weight > 0 else "Older format, not counted")
+                points.append({
+                    "y": post["mean"] * 100,
+                    "lo": post["low"] * 100,
+                    "hi": post["high"] * 100,
+                    "alt": rolling * 100 if rolling is not None else None,
+                    "t": battle["t"],
+                    "dot": color,
+                    "strip": color,
+                    "tip": tip,
+                    "post": post,
+                })
+            self._winrate_level = level
+            n = len(points)
+            # Auto: enough games to watch the range narrow, still readable.
+            view = self._chart_view([p["t"] for p in points], (max(0, n - 100), n - 1))
+            if view is None:
+                chart.set_data([])
+            else:
+                chart.set_data(points, auto_view=view)
         except Exception as e:
             print(f"Error in win rate graph: {e}")
             import traceback
             traceback.print_exc()
-    
+
+    def _update_winrate_summary(self, first, last, custom):
+        self._update_chart_hint()
+        battles = (getattr(self, "_timeline", None) or ([], []))[0]
+        games = battles[first:last + 1] if self.winrate_chart.points else []
+        if not games:
+            self.winrate_summary_label.setText("<span style='color:rgba(214,225,240,0.5)'>No games in this range</span>")
+            return
+        post = self.winrate_chart.points[last]["post"]
+        kinds = [self._result_kind(b["result"]) for b in games]
+        w, l, t = kinds.count("W"), kinds.count("L"), kinds.count("T")
+        record = f"{w}-{l}-{t}" if t else f"{w}-{l}"
+        color = "#66BB6A" if post["low"] > 0.5 else "#EF5350" if post["high"] < 0.5 else "#F4F9FF"
+        level = getattr(self, "_winrate_level", 90)
+        self.winrate_summary_label.setText(
+            f"<span style='color:{color};font-size:13px;font-weight:700'>{post['mean'] * 100:.0f}%</span>"
+            f"<span style='color:rgba(214,225,240,0.75)'>&nbsp; {_pct_range(post['low'], post['high'])}</span>"
+            f"<span style='color:rgba(214,225,240,0.55)'>&nbsp;&nbsp;·&nbsp; {record} &nbsp;·&nbsp; "
+            f"{_range_dates(games, key='t')}</span>"
+        )
+        self.winrate_summary_label.setToolTip(
+            f"<b>Estimated win rate {post['mean'] * 100:.0f}%</b> · range {_pct_range(post['low'], post['high'])}<br>"
+            f"{post['p_above_even'] * 100:.0f}% chance it's above 50% · {post['games']:.1f} effective games<br>"
+            f"<span style='color:#8A97AA'>{RANGE_EXPLAINED.format(level=level)}<br>"
+            f"Solid line = estimate · band = range · dashed = last {self.winrate_window} games · "
+            f"strip = results.</span><br>" + formulas.estimate(post))
+
+    def _update_chart_hint(self):
+        label = getattr(self, "chart_hint_label", None)
+        if label is None:
+            return
+        zoomed = any(getattr(c, "custom", False) for c in (getattr(self, "elo_chart", None), getattr(self, "winrate_chart", None)) if c)
+        label.setText("Zoomed in · double-click a chart to reset" if zoomed
+                      else "Hover for details · drag to zoom · double-click to reset")
+
     def update_deck_usage(self, deck_analyses=None):
         """Update the dashboard deck summary with richer, clickable deck stats."""
         try:
@@ -8412,7 +8853,13 @@ class StatsWindow(QWidget):
                     child.widget().deleteLater()
             
             deck_analyses = deck_analyses if deck_analyses is not None else self.deck_analyses
-            
+            hidden = sum(1 for a in deck_analyses if a.get("deck_name") in self.ignored_decks)
+            deck_analyses = [a for a in deck_analyses if a.get("deck_name") not in self.ignored_decks]
+            if hidden:
+                note = QLabel(f"{hidden} ignored deck{'s' if hidden != 1 else ''} hidden · un-ignore on its Decks page")
+                note.setStyleSheet("color: rgba(214,225,240,0.38); font-size: 10px;")
+                self.deck_list_layout.addWidget(note)
+
             if not deck_analyses:
                 no_data = QLabel("No deck data yet")
                 no_data.setObjectName("noData")
@@ -8457,7 +8904,7 @@ class StatsWindow(QWidget):
                 deck_cell = self._create_deck_cell_widget(
                     analysis.get("deck_name", ""),
                     deck_icons,
-                    subtitle=f"{analysis.get('record')} • {analysis.get('games')} game{'s' if analysis.get('games', 0) != 1 else ''}",
+                    subtitle=f"{analysis.get('record')}",
                 )
                 self._set_mouse_passthrough(deck_cell)
                 top_row.addWidget(deck_cell)
@@ -8467,18 +8914,35 @@ class StatsWindow(QWidget):
                 right_col.setContentsMargins(0, 0, 0, 0)
                 right_col.setSpacing(1)
 
-                wr_label = QLabel(f"{bayes_pct:.1f}% Bayesian WR")
-                wr_label.setStyleSheet(f"color: {self._percent_accent(bayes_pct)}; font-size: 11px; font-weight: 700;")
+                # Same estimate and range as the deck's own page.
+                post = analysis.get("posterior") or {}
+                if post:
+                    bayes_pct = post["mean"] * 100.0
+                    ci_low, ci_high = post["low"] * 100.0, post["high"] * 100.0
+                raw_games = analysis.get("games") or 0
+                actual = (analysis.get("wins", 0) / raw_games * 100.0) if raw_games else 0.0
+                row_tip = (f"<b>{analysis.get('deck_name', '')}</b><br>"
+                           f"Estimated win rate {bayes_pct:.0f}% · range {ci_low:.0f}–{ci_high:.0f}%<br>"
+                           f"Actual {analysis.get('record')} in {raw_games} game{'s' if raw_games != 1 else ''} "
+                           f"({actual:.0f}%)")
+                if post:
+                    row_tip += f"<br>{post['p_above_even'] * 100:.0f}% chance it's above 50%"
+                    if post.get("alpha"):
+                        row_tip += "<br>" + formulas.estimate(post)
+                if matched_meta:
+                    row_tip += f"<br>Limitless archetype: {matched_meta['row'].get('deck')} (#{matched_meta.get('rank')})"
+                row_tip += "<br><span style='color:#8A97AA'>Click to open its page</span>"
+                stale = bool(post) and post.get("games", 0) <= 0  # every game is from an older format
+                if stale:
+                    row_tip += "<br>All games are from an older format, so they don't count toward the estimate."
+                row_button.setToolTip(row_tip)
+                wr_label = QLabel("--" if stale else f"{bayes_pct:.0f}%")
+                wr_label.setStyleSheet(f"color: {'#8A97AA' if stale else self._percent_accent(bayes_pct)}; font-size: 13px; font-weight: 700;")
                 wr_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 wr_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 right_col.addWidget(wr_label)
 
-                meta_text = f"95% CI {ci_low:.0f}% - {ci_high:.0f}%"
-                if matched_meta:
-                    meta_text += f" • Meta #{matched_meta.get('rank')}"
-                else:
-                    meta_text += " • Local sample"
-                meta_label = QLabel(meta_text)
+                meta_label = QLabel("Older format" if stale else f"{ci_low:.0f}–{ci_high:.0f}%")
                 meta_label.setStyleSheet("color: rgba(255,255,255,0.55); font-size: 9px;")
                 meta_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 meta_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -8501,6 +8965,7 @@ class StatsWindow(QWidget):
                 fill_bar = QFrame()
                 fill_bar.setFixedHeight(6)
                 gradient_color = (
+                    "stop:0 #5C6675, stop:1 #6B7585" if stale else
                     "stop:0 #66BB6A, stop:1 #81C784" if bayes_pct >= 55 else
                     "stop:0 #4A9FD8, stop:1 #6BB6E8" if bayes_pct >= 50 else
                     "stop:0 #EF5350, stop:1 #E57373"
@@ -8513,7 +8978,7 @@ class StatsWindow(QWidget):
                 """)
                 bar_container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 fill_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                fill = max(0, min(100, int(round(bayes_pct))))
+                fill = 0 if stale else max(0, min(100, int(round(bayes_pct))))
                 bar_layout.addWidget(fill_bar, fill)
                 bar_layout.addStretch(max(0, 100 - fill))
                 row_layout.addWidget(bar_container)
@@ -8532,7 +8997,8 @@ class StatsWindow(QWidget):
                 if child.widget():
                     child.widget().deleteLater()
             
-            battles = self.db.get_recent_battles(limit=10)
+            battles = [b for b in self.db.get_recent_battles(limit=200)
+                       if (b[1] or "") not in self.ignored_decks][:10]
             
             if not battles:
                 no_data = QLabel("No battles yet")
@@ -9659,6 +10125,15 @@ class StatsWindow(QWidget):
             QPushButton#sizePresetBtn:hover {
                 background: rgba(74,159,216,0.26);
                 border-color: rgba(74,159,216,0.40);
+            }
+
+            QLabel#chartHint {
+                color: rgba(214,225,240,0.42);
+                font-size: 10px;
+            }
+            QLabel#chartSummary {
+                color: rgba(214,225,240,0.75);
+                font-size: 11px;
             }
 
             QPushButton#eloScaleBtn {

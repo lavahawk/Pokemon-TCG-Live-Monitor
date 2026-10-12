@@ -40,6 +40,14 @@ DEFAULT_WEIGHTS = {
         "tournament": 3.0,
         "unranked": 0.5,
     },
+    # Opponent strength (deck_score.adjust_personal): how your games compare
+    # with Limitless tournament games as evidence of deck strength.
+    "strength": {
+        "ladder_evidence": 0.5,
+        "ladder_gap": 4.0,
+        "tournament_evidence": 1.0,
+        "rank_margin": 15.0,
+    },
 }
 
 # Labels + help for the Preferences panel: key -> (label, tooltip)
@@ -61,6 +69,15 @@ LABELS = {
         "quick": ("Quick Ball", None),
         "nest": ("Nest Ball", None),
         "unranked": ("No rank recorded", "Your games where the rank wasn't read."),
+    },
+    "strength": {
+        "ladder_evidence": ("Ladder game worth", "Tournament games one of your ladder games is worth as evidence "
+                                                 "(ladder opponents are weaker, so less informative)."),
+        "ladder_gap": ("Ladder field gap", "Win-% points easier ladder opponents are than a Limitless online field "
+                                           "(at 50%; applied on the log-odds scale)."),
+        "tournament_evidence": ("Your Limitless games worth", "Your own Limitless tournament games, as evidence."),
+        "rank_margin": ("Rank precision", "A deck is ranked once its weighted games give ± this many points at 90%: "
+                                          "n = (1.645 × 0.5 / margin)² effective games (15 pts → 30 games)."),
     },
 }
 
