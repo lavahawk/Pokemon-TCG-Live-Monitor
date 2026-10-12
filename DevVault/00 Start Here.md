@@ -11,7 +11,8 @@ This vault is the shared engineering notebook for **Pokemon TCG Live Monitor** (
 > **Phase 2: v2.4 fixes. CODE DONE (2026-10-11).** 33 bugs + 8 security items fixed and written to the project folder (originals in `Backups/pre-v2.4-code/`). See [[Session Log]].
 > **Phase 3: real-game verification + v2.4 follow-ups. DONE (2026-10-12).** Auto-export, blocker, rank OCR verified in real matches; unified meta sheet, statistics rework, Meta / In Person tabs, preferences.
 > **Phase 3b: dashboard + statistics overhaul. DONE (2026-10-12, afternoon).** Interactive charts, deck pin/star/ignore, hierarchical Bayesian Deck Score ([[deck_score]]), opponent-strength weighting, Meta tab data filters, hover formulas.
-> **Phase 4 (next): restart the overlay and check on the PC, fix the silent-install exit, rebuild the installer, push.** → **[[Handoff 2026-10-12]]** (read this first).
+> **v2.5.0 released (2026-10-12):** installer rebuilt and install-tested, hidden monitor verified, pushed and published.
+> **Phase 4 (next): restart the monitor on the PC and check the new dashboard, then the open items.** → **[[Handoff 2026-10-12]]** (read this first).
 
 ## Map of this vault
 | Area | Note | What's in it |

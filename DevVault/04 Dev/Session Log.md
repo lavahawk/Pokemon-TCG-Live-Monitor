@@ -144,3 +144,8 @@ git push
 - Rebuilt the installer (smoke test all OK). Silent install exit 0.
 - Found and fixed: (1) the installer deleted the dev checkout's auto-start value when auto-start was unticked (restored the user's value; guarded with `RunValueIsOurs`); (2) the headless monitor blocked on the username dialog before the game opened (now deferred to game detection); (3) the idle process scan cost 33% of a core (`psutil.process_iter` ~3 s per scan) → Toolhelp32 snapshot, 16 ms, idle now ~0.3%.
 - Verified: installed hidden monitor (no window, BelowNormal, "Waiting for Pokemon TCG Live..."), and the user's real auto-start command exits cleanly while the manual monitor runs. Details in [[Handoff 2026-10-12]].
+
+## 2026-10-12 — Claude (Release v2.5.0)
+- `version.py` → 2.5.0 (UI shows 2.5; the meta User-Agent now reads the version). README + manifest point to the new `RELEASE_NOTES_v2.5.md`.
+- Installer rebuilt as `PokemonTCGLiveMonitor-2.5.0-Setup.exe` (smoke test 0 failures). Install-tested: silent install exit 0, the user's auto-start value preserved, hidden monitor logs "Monitor v2.5 starting … Waiting for Pokemon TCG Live...".
+- Tagged `v2.5.0`, pushed `main` + tag, published the GitHub release (Latest) with the installer and `.sha256`. The v2.4.0 pre-release was left as is.

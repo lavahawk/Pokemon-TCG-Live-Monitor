@@ -70,7 +70,8 @@ def make_session():
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
     session = requests.Session()
-    session.headers["User-Agent"] = "TCGLiveMonitor/2.4 (+https://github.com/lavahawk/Pokemon-TCG-Live-Monitor)"
+    from version import VERSION
+    session.headers["User-Agent"] = f"TCGLiveMonitor/{VERSION} (+https://github.com/lavahawk/Pokemon-TCG-Live-Monitor)"
     # Short, bounded retries: a slow endpoint must never stall the whole build.
     retry = Retry(total=2, connect=2, read=1, backoff_factor=0.5,
                   status_forcelist=(429, 500, 502, 503, 504), respect_retry_after_header=False)

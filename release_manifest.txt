@@ -47,4 +47,4 @@ button_templates\templates.json?
 # Documents
 LICENSE
 README.md
-RELEASE_NOTES_v2.4.md
+RELEASE_NOTES_v2.5.md

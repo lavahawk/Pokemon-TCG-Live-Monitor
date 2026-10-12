@@ -1,4 +1,4 @@
-# Pokemon TCG Live Monitor v2.4
+# Pokemon TCG Live Monitor v2.5
 **AI-Powered Battle Analysis • OCR Rank Detection • Live Overlay UI • Database Statistics**
 
 ---
@@ -7,9 +7,9 @@
 
 ---
 
-## Quick Install (v2.4)
+## Quick Install (v2.5)
 
-Download **`PokemonTCGLiveMonitor-2.4.0-Setup.exe`** from the [Releases page](https://github.com/lavahawk/Pokemon-TCG-Live-Monitor/releases/latest) and run it.
+Download **`PokemonTCGLiveMonitor-2.5.0-Setup.exe`** from the [Releases page](https://github.com/lavahawk/Pokemon-TCG-Live-Monitor/releases/latest) and run it.
 
 - Everything is included (its own Python runtime, all packages, Tesseract OCR). Nothing is downloaded during setup, and no admin rights are needed.
 - Setup optionally asks for your TCG Live username and an OpenAI API key (leave it empty for Local-Only mode).
@@ -20,7 +20,7 @@ If Windows SmartScreen warns about an unrecognised app, click **More info → Ru
 
 **Debug mode:** Start menu → Pokemon TCG Live Monitor → Tools → *Monitor (debug console)*. Everything is also written to `Logs\monitor.log`. Auto-export events go to `Logs\autoclicker.log`.
 
-See **[RELEASE_NOTES_v2.4.md](RELEASE_NOTES_v2.4.md)** for what changed, and `DevVault/` (open it as an Obsidian vault) for architecture, process maps and the bug register.
+See **[RELEASE_NOTES_v2.5.md](RELEASE_NOTES_v2.5.md)** for what changed, and `DevVault/` (open it as an Obsidian vault) for architecture, process maps and the bug register.
 
 ---
 
