@@ -127,3 +127,6 @@ git push
 - Opponent strength: `deck_score.adjust_personal` (ladder gap on the log-odds scale + evidence factor), new Preferences group **Opponent strength** (`ladder_evidence` 0.5, `ladder_gap` 4 pts, `tournament_evidence` 1.0, `rank_margin` 15 pts). In-person Day 2 → Top 32 enters θ through the fitted logit link β (≈ 0.6 on current data = weak link; reported honestly in hovers).
 - Ranking rule per the user: effective games ≥ (1.645 × 0.5 / margin)² (30 at ±15 pts). Raw-count thresholds removed (`MY_MIN_GAMES` is gone). Same rule for meta decks (plus the Min games filter).
 - Handoff rewritten; committed locally on `main`.
+
+## 2026-10-12 — Claude (Meta order fix)
+- Unranked rows (below the effective-games threshold) were sorted after every ranked row by share, so Gengar 46.1 appeared below decks scoring 41.9. Now every row with a Score is in Score order (unranked rows just show no rank number); placings-only rows come last, by share.

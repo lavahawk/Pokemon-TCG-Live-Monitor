@@ -6773,9 +6773,12 @@ class StatsWindow(QWidget):
             return res
 
         def order(r):
+            # Everything with a Score in Score order (ranked or not - an
+            # unranked deck just shows no rank number); rows without match
+            # records (placings only) last, by share.
             res = score_for(r)
-            if res.get("rank"):
-                return (0, res["rank"], 0 if r.get("is_mine") else 1)  # your deck above the one it ties
+            if res and res.get("eff_games", 0) > 0:
+                return (0, -res["score"], 0 if r.get("is_mine") else 1)
             return (1, -(r.get(share_key) or 0), 0)
         shown = sorted(pool, key=order)
         table.setRowCount(0)
