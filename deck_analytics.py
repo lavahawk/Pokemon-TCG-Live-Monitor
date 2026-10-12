@@ -109,61 +109,36 @@ def bayesian_binomial_summary(wins, losses, ties=0.0, *, alpha=2.0, beta=2.0, z=
     }
 
 
-# ── Rank-weighted Elo win rate ──────────────────────────────────────────────
+# ── Rank-weighted win rate ─────────────────────────────────────────────────
 #
-# In Pokemon TCG Live, the ladder's "Masterball" league is where real skill
-# begins to show. The Elo scale is roughly:
-#   < 1500  : below Masterball — results are heavily discounted
-#   1500    : average (won slightly more than lost)
-#   1600    : above average
-#   1700    : serious players
-#   1800-1900 : professional / top players
+# PTCG Live's ranked ladder uses league thresholds (see leagues.py):
+#   Nest < 30 <= Quick < 110 <= Poke < 230 <= Great < 390 <= Ultra < 550 <= Master
+# A game played higher on the ladder is more informative about real deck
+# strength, so each game is weighted by the league it was played in
+# (0.25 at the bottom, 1.0 from Master Ball up, linear in between).
+# Tournament games (Limitless) get a fixed, larger weight.
 #
-# A win at 1800 is far more informative than a win at 1200. So instead of
-# treating every battle equally, we weight each battle by the rank it was
-# played at. Below Masterball the weight is heavily penalized; above it the
-# weight grows with rank.
+# v2.4: the old curve assumed a 1500-1900 Elo scale, so every real game
+# (ranks 0-600) got the same 0.15 floor weight and the metric did nothing
+# (BUG-007). Effective sample size now uses Kish's formula, which equals the
+# game count when all weights are equal.
 
-# Elo at which we consider a player to have "arrived" at real competition.
-MASTERBALL_ELO = 1500.0
-# Elo at which a battle is worth full weight (1.0).
-FULL_WEIGHT_ELO = 1700.0
-# How steeply weight grows above Masterball (logistic steepness).
-RANK_STEEPNESS = 0.008
-# Weight floor for battles below Masterball (never fully zero, but heavily
-# discounted so a few low-rank games can't dominate the estimate).
-LOW_RANK_FLOOR = 0.15
+from leagues import rank_weight_for
 
-# Tournament games are played by serious, competitive players, so they carry
-# far more signal than ladder games. A tournament game is worth this many
-# times a full-weight (Elo 1700+) ladder game.
 TOURNAMENT_WEIGHT = 3.0
+UNRANKED_WEIGHT = 0.5
 
 
-def rank_weight(elo, is_tournament=False):
-    """Map an Elo (and tournament flag) to a battle weight.
-
-    Below Masterball the weight is heavily penalized (approaching the floor).
-    At Masterball it is ~0.5, and it saturates toward 1.0 as Elo rises past
-    ~1700. Uses a logistic curve so the transition is smooth and monotonic.
-
-    Tournament games bypass the rank penalty entirely and are given a large
-    fixed weight (TOURNAMENT_WEIGHT), since only strong, competitive players
-    enter Limitless tournaments.
-    """
+def rank_weight(rank, is_tournament=False):
+    """Weight of one battle given its ladder rank (and tournament flag)."""
     if is_tournament:
         return TOURNAMENT_WEIGHT
-    if elo is None:
-        # No rank recorded — treat as a neutral, below-average weight so we
-        # don't over-count unranked games, but don't discard them entirely.
-        return 0.5
-    elo = float(elo)
-    # Logistic centered at Masterball, scaled so weight(1500) ≈ 0.5.
-    logistic = 1.0 / (1.0 + math.exp(-RANK_STEEPNESS * (elo - MASTERBALL_ELO)))
-    # Rescale so that at Masterball the weight is exactly 0.5 and it rises to
-    # ~1.0 at FULL_WEIGHT_ELO, while never dropping below the floor.
-    weight = LOW_RANK_FLOOR + (1.0 - LOW_RANK_FLOOR) * logistic
-    return max(LOW_RANK_FLOOR, min(1.0, weight))
+    if rank is None:
+        return UNRANKED_WEIGHT
+    try:
+        return rank_weight_for(float(rank))
+    except (TypeError, ValueError):
+        return UNRANKED_WEIGHT
 
 
 def _battle_outcome_value(result):
@@ -198,6 +173,7 @@ def rank_weighted_winrate(battles, *, z=1.96):
     """
     weighted_wins = 0.0
     weighted_total = 0.0
+    weight_sq_total = 0.0
     wins = losses = ties = 0
     ranks = []
     tournament_games = 0
@@ -211,6 +187,7 @@ def rank_weighted_winrate(battles, *, z=1.96):
         outcome = _battle_outcome_value(result)
 
         weighted_total += weight
+        weight_sq_total += weight * weight
         weighted_wins += weight * outcome
 
         if outcome == 1.0:
@@ -254,15 +231,12 @@ def rank_weighted_winrate(battles, *, z=1.96):
 
     weighted_winrate = weighted_wins / weighted_total
 
-    # Effective sample size: the number of "full-weight" battles the weighted
-    # data is equivalent to. We use the total weight (sum of weights), which
-    # directly reflects that low-rank games carry less information than
-    # high-rank games. E.g. 10 wins at Elo 1200 (weight ~0.22) is equivalent
-    # to only ~2.2 full-weight games, so its confidence interval is wide.
-    effective_n = weighted_total
+    # Kish effective sample size: (sum w)^2 / sum w^2. Equals the number of
+    # games when all weights are equal; shrinks when a few games dominate.
+    effective_n = (weighted_total ** 2) / weight_sq_total if weight_sq_total > 0 else 0.0
 
     # Wilson interval on the weighted win rate using the effective sample size.
-    ci_low, ci_high = wilson_interval(weighted_wins, effective_n, z=z)
+    ci_low, ci_high = wilson_interval(weighted_winrate * effective_n, effective_n, z=z)
     interval_width = ci_high - ci_low
 
     avg_rank = sum(ranks) / len(ranks) if ranks else None

@@ -1,5 +1,17 @@
 # Battle-End Auto-Clicker — Handoff Document
 
+> [!important] v2.4 rework (2026-10-11)
+> The pipeline below was replaced by `BattleEndAutomation.py`. What changed:
+> - **A single trigger.** Only the watcher thread clicks. The clipboard path only *notifies* it (`notify_log_captured`) and never clicks, which removes the "BATTLE LOG re-clicked after a manual export" and "two blockers" bugs.
+> - **Scale-tolerant matching.** `AutoClicker.find_in_frame` uses grayscale multi-scale matching on a frame downscaled to 540 px height. The best scale and the button's on-screen location are cached in `button_templates/scale_cache.json`, so after the first hit a poll searches a small area (~5–8 ms). `SetupAutoClicker.py` now captures from the game window on any monitor and records the window size in `templates.json`.
+> - **Arm/disarm.** Each end screen is handled once. The watcher re-arms when a new battle HUD appears, or after the button has been gone for 60 s.
+> - **User first.** If a battle log reached the clipboard since the battle ended, nothing is clicked. Clicks only happen while the game is the foreground window.
+> - **No pyautogui or mouse hooks.** Clicks use `SetCursorPos` + `mouse_event`, keeping the same Unity-safe 80/60/250 ms timing (lesson 3 below still applies).
+> - **No GDI leaks.** There is one `mss` instance per watcher thread, and HUD checks grab three 12×12 patches.
+> - **Dedupe.** It is now a SHA-256 of the normalized log stored in `battles.log_hash` (UNIQUE), not a 10-minute in-memory window.
+>
+> Lessons 1, 3, 4, 5, 8 and 9 below still hold. Lessons 6 and 7 are superseded by the single-trigger design. Debug with `Logs/autoclicker.log` (rotated at 1 MB) and `Logs/monitor.log`.
+
 **Repo:** lavahawk/Pokemon-TCG-Live-Monitor (branch `main`)
 **Last updated:** 2026-09-09 (commit `2e52099`)
 **Author context:** Built iteratively through live debugging with the user. Read the

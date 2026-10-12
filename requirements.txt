@@ -10,7 +10,6 @@ colorama==0.4.6
 pandas==2.2.0
 pyarrow==22.0.0
 openpyxl==3.1.2
-xlwings==0.30.13
 
 # OpenAI API (>=1.35 required for httpx 0.28+ compatibility; older versions
 # crash with "Client.__init__() got an unexpected keyword argument 'proxies'")
@@ -29,8 +28,8 @@ matplotlib==3.8.2
 pytesseract==0.3.10
 mss==9.0.1
 Pillow==10.2.0
-mouse==0.7.1
 pywin32==306  # For window detection and positioning
+# (v2.4: pyautogui/mouse are no longer needed - clicks use the Win32 API directly)
 
 # UI/Overlay (NEW - for minimal overlay display)
 PySide6==6.10.1  # Qt6 framework for overlay UI (includes WebEngine)

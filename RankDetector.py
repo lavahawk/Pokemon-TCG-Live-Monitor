@@ -11,9 +11,6 @@ import mss
 import pytesseract
 import json
 import os
-import win32gui
-import win32process
-import psutil
 from PIL import Image
 
 # Get the script's directory
@@ -58,7 +55,8 @@ class RankDetector:
     
     def __init__(self):
         self.regions = self.load_regions()
-        self.sct = mss.mss()
+        # No long-lived mss instance: mss holds GDI handles until close()
+        # and is thread-bound (BUG-010). Captures open a short-lived one.
         self.game_window = None
         self.screen_validators = {}  # Cache for screen validation templates
     
@@ -77,67 +75,15 @@ class RankDetector:
     
     def find_game_window(self):
         """
-        Find the Pokemon TCG Live game window
-        
+        Find the Pokemon TCG Live game window (exact title match).
+
         Returns:
-            dict with window bounds: {'left': x, 'top': y, 'width': w, 'height': h}
-            or None if window not found
+            dict {'hwnd','title','left','top','width','height'} or None
         """
-        def callback(hwnd, windows):
-            if win32gui.IsWindowVisible(hwnd):
-                window_title = win32gui.GetWindowText(hwnd)
-                # Check for Pokemon TCG Live window
-                if "Pokémon TCG Live" in window_title or "Pokemon TCG Live" in window_title:
-                    # Get window rectangle
-                    rect = win32gui.GetWindowRect(hwnd)
-                    left, top, right, bottom = rect
-                    
-                    # Store window info
-                    windows.append({
-                        'hwnd': hwnd,
-                        'title': window_title,
-                        'left': left,
-                        'top': top,
-                        'width': right - left,
-                        'height': bottom - top
-                    })
-            return True
-        
-        windows = []
-        win32gui.EnumWindows(callback, windows)
-        
-        if windows:
-            # Return the first matching window
-            self.game_window = windows[0]
-            return self.game_window
-        
-        # Alternative: Find by process name
-        for proc in psutil.process_iter(['name', 'pid']):
-            if proc.info['name'] == "Pokemon TCG Live.exe":
-                # Try to find window by process ID
-                def find_by_pid(hwnd, result):
-                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                    if pid == proc.info['pid'] and win32gui.IsWindowVisible(hwnd):
-                        rect = win32gui.GetWindowRect(hwnd)
-                        left, top, right, bottom = rect
-                        result.append({
-                            'hwnd': hwnd,
-                            'title': win32gui.GetWindowText(hwnd),
-                            'left': left,
-                            'top': top,
-                            'width': right - left,
-                            'height': bottom - top
-                        })
-                    return True
-                
-                result = []
-                win32gui.EnumWindows(find_by_pid, result)
-                if result:
-                    self.game_window = result[0]
-                    return self.game_window
-        
-        return None
-    
+        from game_window import game_rect
+        self.game_window = game_rect()
+        return self.game_window
+
     def get_absolute_region(self, region_name):
         """
         Get absolute screen coordinates for a region
@@ -160,7 +106,6 @@ class RankDetector:
             # Find game window
             window = self.find_game_window()
             if not window:
-                print("Game window not found! Is Pokemon TCG Live running?")
                 return None
             
             # Check if region uses percentage-based positioning (NEW in v2.0)
@@ -214,8 +159,8 @@ class RankDetector:
         if abs_region["width"] <= 0 or abs_region["height"] <= 0:
             return None
         
-        if abs_region["left"] < 0 or abs_region["top"] < 0:
-            return None
+        # Negative coordinates are valid on multi-monitor setups (a monitor
+        # left of / above the primary one), so they are NOT rejected.
         
         # Capture the screen region
         monitor = {
@@ -226,10 +171,11 @@ class RankDetector:
         }
         
         try:
-            screenshot = self.sct.grab(monitor)
+            with mss.mss() as sct:
+                screenshot = sct.grab(monitor)
             img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
             return img
-        except Exception as e:
+        except Exception:
             return None
     
     def check_pixel_colors(self, region_name, expected_colors):
@@ -582,6 +528,48 @@ class RankDetector:
                 time.sleep(delay)
         
         return None
+
+
+def read_rank_confirmed(detector, last_accepted=None, reads=2, delay=1.0, big_jump=100, debug=False):
+    """Read the rank several times and only accept a stable, plausible value.
+
+    OCR occasionally drops or adds a digit (e.g. 151 -> 3, 260 -> 2600). A
+    value is accepted when `reads` consecutive reads agree; a jump of more
+    than `big_jump` from the last accepted rank needs one extra agreeing read.
+    Returns the rank or None.
+    """
+    import time as _time
+    values = []
+    needed = reads
+    for _ in range(reads + 2):
+        value = detector.extract_rank(debug=debug)
+        if value is not None and 0 < value < 5000:
+            values.append(value)
+        if last_accepted is not None and values and abs(values[-1] - last_accepted) > big_jump:
+            needed = reads + 1
+        if len(values) >= needed and len(set(values[-needed:])) == 1:
+            return values[-1]
+        _time.sleep(delay)
+    return None
+
+
+def snap_deck_name(raw_name, known_names, cutoff=0.82):
+    """Map an OCR'd deck name onto an already-known deck name when close.
+
+    OCR turns "Dragapult" into "Oragaputt" now and then, which used to create
+    a brand-new deck in the stats. Returns the best known name with a
+    similarity >= cutoff, otherwise the cleaned raw name.
+    """
+    import difflib
+    cleaned = " ".join((raw_name or "").split())
+    if not cleaned:
+        return None
+    known = [k for k in (known_names or []) if k]
+    if cleaned in known:
+        return cleaned
+    lower_map = {k.casefold(): k for k in known}
+    matches = difflib.get_close_matches(cleaned.casefold(), list(lower_map.keys()), n=1, cutoff=cutoff)
+    return lower_map[matches[0]] if matches else cleaned
 
 
 def test_rank_detection():

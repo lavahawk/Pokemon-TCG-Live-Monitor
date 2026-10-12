@@ -155,26 +155,15 @@ class ContinueBlocker(QWidget):
             pass
 
     def _find_game_rect(self):
-        # RankDetector resolves the real game window (FindWindow alone can
-        # return a stale/shifted rect for the UWP-hosted game).
-        try:
-            from RankDetector import RankDetector
-            gw = RankDetector().find_game_window()
-            if not gw:
-                return None
-            l, t = gw["left"], gw["top"]
-            r, b = l + gw["width"], t + gw["height"]
-        except Exception:
-            hwnd = win32gui.FindWindow(None, "Pokemon TCG Live")
-            if not hwnd or not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
-                return None
-            try:
-                l, t, r, b = win32gui.GetWindowRect(hwnd)
-            except Exception:
-                return None
-        if r - l <= 0 or b - t <= 0:
+        # Cached, exact-title window lookup (no OCR/mss objects per tick).
+        if not hasattr(self, "_window_cache"):
+            from game_window import GameWindowCache
+            self._window_cache = GameWindowCache(refresh_s=2.0)
+        gw = self._window_cache.rect()
+        if not gw:
             return None
-        return l, t, r, b
+        l, t = gw["left"], gw["top"]
+        return l, t, l + gw["width"], t + gw["height"]
 
     def _follow_game(self):
         if time.time() - self.born > BLOCKER_MAX_LIFE:
@@ -313,6 +302,7 @@ def main():
     args = ap.parse_args()
 
     _dbg(f"blocker started rel=({args.x}, {args.y}, {args.w}, {args.h})")
+    # Qt6 already makes the process per-monitor DPI aware.
     app = QApplication.instance() or QApplication(sys.argv)
     blocker = ContinueBlocker({"x": args.x, "y": args.y, "w": args.w, "h": args.h})
     blocker.show()

@@ -3,15 +3,13 @@ import os
 import re
 import sys
 import time
-import tkinter as tk
 import warnings
-from tkinter import simpledialog
 
 import openpyxl
 import pyperclip
 from pydantic import BaseModel
 
-from BattleDatabase import BattleDatabase
+from BattleDatabase import BattleDatabase, log_hash
 from app_settings import (
     is_local_only_mode,
     load_api_key,
@@ -31,8 +29,23 @@ LOG_DIR = os.path.join(BASE_DIR, "Logs")
 # the player is actively in a tournament match. Contains JSON:
 #   {"in_tournament": true, "opponent": "<opponent username>"}
 TOURNAMENT_FLAG_FILE = os.path.join(BASE_DIR, ".in_tournament")
+# Shared capture file written by the Limitless dashboard manager (StatsUI)
+# containing the current match's chat (with round info). Read when saving a
+# battle so the chat can be reviewed alongside the game data.
+CHAT_CAPTURE_FILE = os.path.join(BASE_DIR, ".chat_capture.json")
+
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if _stream is not None:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 db = BattleDatabase()
+
+# A tournament flag older than this is ignored (the Limitless manager may not
+# have cleared it, e.g. if the app was closed mid-tournament).
+TOURNAMENT_FLAG_MAX_AGE_S = 3 * 3600
 
 
 def load_tournament_state():
@@ -44,6 +57,8 @@ def load_tournament_state():
     if not os.path.exists(TOURNAMENT_FLAG_FILE):
         return {}
     try:
+        if time.time() - os.path.getmtime(TOURNAMENT_FLAG_FILE) > TOURNAMENT_FLAG_MAX_AGE_S:
+            return {}
         with open(TOURNAMENT_FLAG_FILE, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
         if isinstance(payload, dict) and payload.get("in_tournament"):
@@ -57,35 +72,31 @@ def load_tournament_state():
 
 
 def parse_opponent_from_log(battlelog, username):
-    """Extract the opponent's username from a battle log.
+    """Return the opponent's username from a battle log (or None).
 
-    The battle log contains both players' usernames (e.g. "PlayerA chose
-    tails...", "PlayerB won the coin toss."). The opponent is the username
-    that is NOT the player's own username.
+    Player names are taken from whole-line turn headers ("<name>'s Turn" /
+    "Turn # N - <name>'s Turn") and the coin-flip lines, so names containing
+    dots, spaces or accented characters work.
     """
     if not battlelog or not username:
         return None
     own = normalize_name(username)
-    # Collect all usernames that appear as actors in the log.
-    candidates = set()
-    # "X chose heads/tails for the opening coin flip."
-    for match in re.findall(r"([A-Za-z0-9_\- ]+?)\s+chose\s+(?:heads|tails)\s+for the opening coin flip", battlelog, flags=re.IGNORECASE):
-        candidates.add(match.strip())
-    # "X won the coin toss."
-    for match in re.findall(r"([A-Za-z0-9_\- ]+?)\s+won the coin toss", battlelog, flags=re.IGNORECASE):
-        candidates.add(match.strip())
-    # "X decided to go first/second."
-    for match in re.findall(r"([A-Za-z0-9_\- ]+?)\s+decided to go (?:first|second)", battlelog, flags=re.IGNORECASE):
-        candidates.add(match.strip())
-    # "X's Turn"
-    for match in re.findall(r"([A-Za-z0-9_\- ]+?)'s\s+Turn", battlelog, flags=re.IGNORECASE):
-        candidates.add(match.strip())
-    # "X wins."
-    for match in re.findall(r"([A-Za-z0-9_\- ]+?)\s+wins\.", battlelog, flags=re.IGNORECASE):
-        candidates.add(match.strip())
-
+    candidates = []
+    text = battlelog.replace("\r\n", "\n")
+    patterns = (
+        r"(?m)^Turn #\s*\d+\s*-\s*(.+?)'s Turn\s*$",
+        r"(?m)^(.{1,40})'s Turn\s*$",
+        r"(?m)^(.{1,40}?) chose (?:heads|tails) for the opening coin flip",
+        r"(?m)^(.{1,40}?) won the coin toss",
+        r"(?m)^(.{1,40}?) decided to go (?:first|second)",
+    )
+    for pattern in patterns:
+        for match in re.findall(pattern, text):
+            name = match.strip()
+            if name and name not in candidates:
+                candidates.append(name)
     for candidate in candidates:
-        if candidate and normalize_name(candidate) != own:
+        if normalize_name(candidate) != own:
             return candidate
     return None
 
@@ -112,8 +123,13 @@ def is_tournament_battle(battlelog, username):
 
 
 def prompt_string(title, prompt, *, secret=False):
-    if sys.stdin.isatty():
+    if _console_available():
         return input(f"{prompt}\n> ").strip()
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+    except Exception:
+        return None
     root = tk.Tk()
     root.withdraw()
     try:
@@ -189,25 +205,49 @@ def normalize_name(value):
     return re.sub(r"\s+", " ", (value or "").strip()).casefold()
 
 
-def parse_winner_from_log(battlelog):
-    if not battlelog:
+RESULT_PREFIXES = (
+    "All Prize cards taken.",
+    "Opponent conceded.",
+    "You conceded.",
+    "Opponent took all of their Prize cards.",
+    "No Benched Pokémon for backup.",
+    "Knocked Out with no Benched Pokémon.",
+    "Opponent was inactive for too long.",
+    "You were inactive for too long.",
+)
+
+
+def _result_line(battlelog):
+    lines = [line.strip() for line in (battlelog or "").replace("\r\n", "\n").split("\n") if line.strip()]
+    for line in reversed(lines):
+        if line.endswith(" wins."):
+            return line
+    return None
+
+
+def parse_winner_from_log(battlelog, username=None):
+    """Return the winner's name from the final '<...>. <name> wins.' line.
+
+    Names may contain dots, spaces or non-ASCII characters (BUG-023), so the
+    known result sentences are stripped instead of guessing name characters.
+    If the player's own username is given and the line ends with it, that
+    name is returned exactly.
+    """
+    line = _result_line(battlelog)
+    if not line:
         return None
-    explicit = re.findall(
-        r"All Prize cards taken\.\s*([A-Za-z0-9_\-]+)\s+wins\.",
-        battlelog,
-        flags=re.IGNORECASE,
-    )
-    if explicit:
-        return explicit[-1].strip()
-    # Capture only the username token immediately before "wins." — a lazy
-    # match from the start of the line would swallow preceding text such as
-    # "Opponent conceded. 22lava44 wins." and misattribute the winner.
-    generic = re.findall(r"([A-Za-z0-9_\-]+)\s+wins\.", battlelog, flags=re.IGNORECASE)
-    return generic[-1].strip() if generic else None
+    body = line[: -len(" wins.")].strip()
+    if username and body.casefold().endswith(username.strip().casefold()):
+        return username.strip()
+    for prefix in RESULT_PREFIXES:
+        if body.startswith(prefix):
+            return body[len(prefix):].strip() or None
+    # Unknown sentence before the name: take the text after the last ". "
+    return body.rsplit(". ", 1)[-1].strip() or None
 
 
 def parse_result_from_log(battlelog, username):
-    winner = parse_winner_from_log(battlelog)
+    winner = parse_winner_from_log(battlelog, username)
     if not winner or not username:
         return None
     return "Win" if normalize_name(winner) == normalize_name(username) else "Loss"
@@ -247,16 +287,20 @@ def latest_log_file():
 def read_battlelog_file(file_path):
     if not file_path:
         return None
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
-            return handle.read().strip()
-    except Exception:
-        return None
+    for encoding in ("utf-8", "cp1252"):
+        try:
+            with open(file_path, "r", encoding=encoding) as handle:
+                return handle.read().strip()
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            return None
+    return None
 
 
 def save_to_excel(my_deck, opponents_deck, win_or_loss):
     workbook = openpyxl.load_workbook(EXCEL_FILE)
-    sheet_name = (my_deck or "Unknown Deck")[:31]
+    sheet_name = re.sub(r"[\\/*?:\[\]]", "-", (my_deck or "Unknown Deck")).strip("'")[:31] or "Unknown Deck"
     sheet = workbook[sheet_name] if sheet_name in workbook.sheetnames else workbook.create_sheet(title=sheet_name)
 
     next_row = 1
@@ -268,8 +312,44 @@ def save_to_excel(my_deck, opponents_deck, win_or_loss):
     workbook.save(EXCEL_FILE)
 
 
-def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_path=None, is_tournament=False):
-    db.add_battle(
+def load_chat_capture():
+    """Read the current match's chat capture written by the Limitless manager.
+
+    Returns a dict {"round": int|None, "opponent": str, "messages": [str]} or
+    an empty dict if no chat capture exists.
+    """
+    if not os.path.exists(CHAT_CAPTURE_FILE):
+        return {}
+    try:
+        with open(CHAT_CAPTURE_FILE, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if isinstance(payload, dict):
+            messages = []
+            for m in (payload.get("messages") or []):
+                if isinstance(m, dict):
+                    text = str(m.get("text") or "").strip()
+                else:
+                    text = str(m).strip()
+                if text:
+                    messages.append(text)
+            return {
+                "round": payload.get("round"),
+                "opponent": str(payload.get("opponent") or "").strip(),
+                "messages": messages,
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_path=None, is_tournament=False, battle_hash=None):
+    # Attach the current match's chat (if any) to the battle record so it can
+    # be reviewed alongside the game data.
+    chat_capture = load_chat_capture()
+    chat_log = None
+    if chat_capture.get("messages"):
+        chat_log = json.dumps(chat_capture, ensure_ascii=False)
+    return db.add_battle(
         my_deck=my_deck,
         opponent_deck=opponents_deck,
         result=win_or_loss,
@@ -278,6 +358,8 @@ def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_
         deck_source="AI" if not is_local_only_mode() and load_api_key() else "Local",
         log_file=os.path.abspath(log_file_path) if log_file_path else latest_log_file(),
         is_tournament=is_tournament,
+        chat_log=chat_log,
+        log_hash=battle_hash,
     )
 
 
@@ -288,9 +370,10 @@ def _console_available():
     TTY and prompting would block forever, silently preventing the battle
     from being saved. Tk dialogs would also hang with no user visible UI.
     """
-    if sys.stdin is None or not sys.stdin.isatty():
+    try:
+        return bool(sys.stdin is not None and sys.stdin.isatty())
+    except Exception:
         return False
-    return True
 
 
 def local_fallback_parse(battlelog, username):
@@ -304,13 +387,13 @@ def local_fallback_parse(battlelog, username):
     # Only prompt when a console is available. In headless mode a prompt
     # would block forever, so fall back to a placeholder instead.
     opponents_deck = None
+    inferred = infer_opponent_deck_from_log(battlelog)
     if _console_available():
         opponents_deck = prompt_string(
             "Enter Opponent Deck",
             "Local-only mode is active.\n\nPlease enter the opponent's deck name for this battle:",
         )
     if not opponents_deck:
-        inferred = infer_opponent_deck_from_log(battlelog)
         opponents_deck = inferred or "Unknown (local mode)"
 
     win_or_loss = parse_result_from_log(battlelog, username)
@@ -435,7 +518,7 @@ AI_MODELS = [
 def ai_parse(battlelog, username, api_key):
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=45.0, max_retries=1)
     possible_decks = load_possible_decks()
     prompt = f"""
 You are identifying Pokemon TCG deck archetypes from an official battle log.
@@ -508,16 +591,21 @@ Battlelog:
 def main():
     username = ensure_username()
     explicit_log_path = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else None
-    battlelog = read_battlelog_file(explicit_log_path)
-    if not battlelog:
+    if explicit_log_path:
+        battlelog = read_battlelog_file(explicit_log_path)
+    else:
+        # Manual run (dashboard button): clipboard first, then newest saved log.
         battlelog = pyperclip.paste()
-    if not battlelog and not explicit_log_path:
-        latest_path = latest_log_file()
-        battlelog = read_battlelog_file(latest_path)
-        explicit_log_path = latest_path
+        if not battlelog:
+            explicit_log_path = latest_log_file()
+            battlelog = read_battlelog_file(explicit_log_path)
     if not battlelog:
-        print("No battle log found in clipboard.")
-        time.sleep(2)
+        print("No battle log found.")
+        return
+
+    battle_hash = log_hash(battlelog)
+    if db.has_log_hash(battle_hash):
+        print("DUPLICATE: this battle log is already in the database.")
         return
 
     settings_local_only = is_local_only_mode()
@@ -581,13 +669,22 @@ def main():
     except Exception as exc:
         print(f"Warning: Could not update workbook: {exc}")
 
+    tournament = False
     try:
-        save_to_database(my_deck, opponents_deck, win_or_loss, confidence, explicit_log_path)
-        print("Battle saved to database.")
+        tournament = is_tournament_battle(battlelog, username)
+    except Exception as exc:
+        print(f"Tournament check failed: {exc}")
+
+    try:
+        battle_id = save_to_database(my_deck, opponents_deck, win_or_loss, confidence, explicit_log_path,
+                                     is_tournament=tournament, battle_hash=battle_hash)
+        if battle_id:
+            print(f"Battle saved to database{' (Limitless tournament)' if tournament else ''}.")
+            print(f"BATTLE_ID={battle_id}")
+        else:
+            print("DUPLICATE: this battle log is already in the database.")
     except Exception as exc:
         print(f"Warning: Could not save to database: {exc}")
-
-    time.sleep(3)
 
 
 if __name__ == "__main__":

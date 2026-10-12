@@ -10,8 +10,8 @@ import sys
 import winreg
 from pathlib import Path
 
-VERSION = "2.3"
-TASK_NAME = "PokemonTCGLiveMonitor_v2.3"
+VERSION = "2.4"
+TASK_NAME = "PokemonTCGLiveMonitor_v2.4"
 REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REG_VALUE = "PokemonTCGLiveMonitor"
 # Old scheduled tasks that should be cleaned up automatically. The registry
@@ -20,6 +20,7 @@ LEGACY_TASK_NAMES = (
     "PokemonTCGLiveMonitor_v2",
     "PokemonTCGLiveMonitor_v2.1",
     "PokemonTCGLiveMonitor_v2.2",
+    "PokemonTCGLiveMonitor_v2.3",
     "StartTCGLiveMonitor",
     "PokemonLiveHelper",
 )
@@ -174,6 +175,8 @@ def add_task(root: str | os.PathLike[str]) -> tuple[bool, str | None]:
     if not script.exists():
         return False, f"{MONITOR_SCRIPT_NAME} was not found."
 
+    # Runs with normal (limited) rights - the monitor never needs admin, and
+    # an elevated task would run the embedded browser as admin (SEC-11).
     result = subprocess.run(
         [
             "schtasks",
@@ -185,7 +188,7 @@ def add_task(root: str | os.PathLike[str]) -> tuple[bool, str | None]:
             "/sc",
             "onlogon",
             "/rl",
-            "highest",
+            "limited",
             "/f",
         ],
         capture_output=True,
@@ -225,10 +228,10 @@ def _delete_task_elevated(task_name: str) -> bool:
         return False
 
 
-def remove_task() -> tuple[bool, list[str], list[str]]:
+def remove_task(include_current: bool = True) -> tuple[bool, list[str], list[str]]:
     removed: list[str] = []
     errors: list[str] = []
-    task_names = (TASK_NAME, *LEGACY_TASK_NAMES)
+    task_names = ((TASK_NAME,) if include_current else ()) + tuple(LEGACY_TASK_NAMES)
 
     for task_name in task_names:
         result = subprocess.run(
@@ -277,7 +280,9 @@ def enable_startup(root: str | os.PathLike[str] | None = None) -> dict:
         task_ok, task_error = add_task(install_root)
 
     # Clean up old/legacy scheduled tasks so they don't spawn duplicates.
-    _, removed_tasks, _ = remove_task()
+    # Keep the current task if it was just created as the fallback (BUG-016);
+    # if the registry worked, the current task is redundant and removed too.
+    _, removed_tasks, _ = remove_task(include_current=reg_ok)
 
     return {
         "root": install_root,

@@ -50,6 +50,9 @@ build/
 venv/
 ENV/
 
+# Database backups made before data migrations/cleanups
+Backups/
+
 # Logs and battle history
 Logs/
 *.log
@@ -107,5 +110,13 @@ Testing New Stuff/
 _Archive/
 Docs_Archive/
 
-# Auto-clicker button templates (user-captured)
-button_templates/
+# Captured match chat (contains other players' names/messages)
+.chat_capture.json
+
+# Screenshots of personal stats / local reference images
+DevVault/Attachments/
+BattleExampleImage.png
+
+# Auto-clicker: button templates ARE shipped (matching is scale-tolerant since
+# v2.4); only the per-machine scale/location cache is ignored.
+button_templates/scale_cache.json

@@ -36,73 +36,74 @@ def ensure_templates_dir():
         print(f"Created templates directory: {TEMPLATES_DIR}")
 
 
-def grab_screen():
-    """Return (bgr ndarray, monitor dict) for the primary screen."""
+def grab_game_window():
+    """Return (bgr ndarray, rect) of the game window (falls back to primary screen)."""
+    rect = None
+    try:
+        from game_window import game_rect
+        rect = game_rect()
+    except Exception:
+        rect = None
     with mss.mss() as sct:
-        monitor = sct.monitors[1]  # primary screen
-        shot = sct.grab(monitor)
+        region = rect or sct.monitors[1]
+        region = {k: region[k] for k in ("left", "top", "width", "height")}
+        shot = sct.grab(region)
         img = np.array(shot)
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR), monitor
+    return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR), rect
 
 
 class RegionSelector:
-    """Fullscreen overlay for dragging a selection rectangle."""
+    """Shows the game screenshot (scaled to fit) and lets you drag a box.
 
-    def __init__(self, screen_bgr):
-        self.screen_bgr = screen_bgr
-        self.start_x = self.start_y = 0
-        self.end_x = self.end_y = 0
-        self.selection = None  # (x, y, w, h) in screen coordinates
+    Works for a game window on ANY monitor (the old version only showed the
+    primary screen). The selection is mapped back to full-resolution pixels.
+    """
+
+    def __init__(self, image_bgr):
+        self.image_bgr = image_bgr
+        self.selection = None
+        self.start = self.end = (0, 0)
+        self.rect_id = None
 
         self.root = tk.Tk()
-        self.root.attributes("-fullscreen", True)
-        self.root.attributes("-alpha", 0.85)
-        self.root.configure(cursor="crosshair", bg="black")
-        self.root.title("Drag a rectangle around the button, then press Enter")
-
-        self.cv_img = cv2.cvtColor(self.screen_bgr, cv2.COLOR_BGR2RGB)
-        self.photo = ImageTk.PhotoImage(Image.fromarray(self.cv_img))
-
-        self.canvas = tk.Canvas(self.root, cursor="crosshair", highlightthickness=0)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.root.title("Drag a tight box around the button, then press ENTER (ESC = cancel)")
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        h, w = image_bgr.shape[:2]
+        self.scale = min(1.0, (screen_w * 0.9) / w, (screen_h * 0.85) / h)
+        disp = cv2.resize(image_bgr, (int(w * self.scale), int(h * self.scale)), interpolation=cv2.INTER_AREA)
+        self.photo = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)))
+        self.canvas = tk.Canvas(self.root, width=disp.shape[1], height=disp.shape[0],
+                                cursor="crosshair", highlightthickness=0)
+        self.canvas.pack()
         self.canvas.create_image(0, 0, image=self.photo, anchor=tk.NW)
-
-        self.rect = None
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.canvas.bind("<ButtonRelease-1>", self.on_drag)
         self.root.bind("<Return>", self.confirm)
         self.root.bind("<Escape>", lambda e: self.root.destroy())
-
-        self.hint = self.canvas.create_text(
-            20, 20, anchor=tk.NW,
-            text="Drag around the BUTTON, release, then press ENTER to save (ESC to cancel)",
-            fill="#FFD54F", font=("Segoe UI", 14, "bold"),
-        )
+        self.root.attributes("-topmost", True)
 
     def on_press(self, event):
-        self.start_x, self.start_y = event.x, event.y
-        if self.rect:
-            self.canvas.delete(self.rect)
-        self.rect = self.canvas.create_rectangle(
-            self.start_x, self.start_y, self.start_x, self.start_y,
-            outline="#FF5252", width=2,
-        )
+        self.start = self.end = (event.x, event.y)
+        if self.rect_id:
+            self.canvas.delete(self.rect_id)
+        self.rect_id = self.canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="#FF5252", width=2)
 
     def on_drag(self, event):
-        if self.rect:
-            self.canvas.coords(self.rect, self.start_x, self.start_y, event.x, event.y)
+        self.end = (event.x, event.y)
+        if self.rect_id:
+            self.canvas.coords(self.rect_id, *self.start, *self.end)
 
-    def on_release(self, event):
-        self.end_x, self.end_y = event.x, event.y
-
-    def confirm(self, event):
-        x1, y1 = min(self.start_x, self.end_x), min(self.start_y, self.end_y)
-        x2, y2 = max(self.start_x, self.end_x), max(self.start_y, self.end_y)
+    def confirm(self, _event=None):
+        (x1, y1), (x2, y2) = self.start, self.end
+        x1, x2 = sorted((x1, x2))
+        y1, y2 = sorted((y1, y2))
         if x2 - x1 < 4 or y2 - y1 < 4:
-            print("Selection too small — try again.")
+            print("Selection too small - try again.")
             return
-        self.selection = (x1, y1, x2 - x1, y2 - y1)
+        s = self.scale
+        self.selection = (int(x1 / s), int(y1 / s), int((x2 - x1) / s), int((y2 - y1) / s))
         self.root.destroy()
 
     def run(self):
@@ -111,30 +112,30 @@ class RegionSelector:
 
 
 def capture_template(name):
-    """Capture a button template interactively and save it."""
+    """Capture a button template interactively and save it (+ window size)."""
     print(f"\nCapturing template: {name}")
-    print("A fullscreen screenshot will appear. Drag a tight rectangle around the button,")
-    print("then press ENTER. Press ESC to cancel.")
+    print("Make sure the button is visible in the game, then press Enter here.")
     input("Press Enter when ready...")
 
-    screen_bgr, monitor = grab_screen()
-    selector = RegionSelector(screen_bgr)
-    sel = selector.run()
+    image, rect = grab_game_window()
+    if rect is None:
+        print("Warning: game window not found - using the primary screen. "
+              "Scaling to other window sizes will be less reliable.")
+    sel = RegionSelector(image).run()
     if not sel:
         print("Cancelled.")
         return False
-
     x, y, w, h = sel
-    # Screen coords are relative to the captured monitor origin.
-    abs_x = monitor["left"] + x
-    abs_y = monitor["top"] + y
-
-    crop = screen_bgr[y:y + h, x:x + w]
+    crop = image[y:y + h, x:x + w]
     ensure_templates_dir()
     path = os.path.join(TEMPLATES_DIR, f"{name}.png")
     cv2.imwrite(path, crop)
-    print(f"✓ Template saved: {path}")
-    print(f"  Screen region: ({abs_x}, {abs_y}) {w}x{h}")
+    try:
+        from AutoClicker import save_template_meta
+        save_template_meta(name, rect or {"width": image.shape[1], "height": image.shape[0]})
+    except Exception as exc:
+        print(f"(Could not save template metadata: {exc})")
+    print(f"✓ Template saved: {path} ({w}x{h}) for a {image.shape[1]}x{image.shape[0]} game window")
     return True
 
 

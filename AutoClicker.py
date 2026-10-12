@@ -1,346 +1,278 @@
 """
-Auto-Clicker Module for Pokemon TCG Live
-Automatically clicks buttons when they appear on screen using template matching
+Template matcher + Unity-safe physical clicker for Pokemon TCG Live.
+
+What changed in v2.4 (see DevVault -> BUG-010/012/014):
+* Multi-scale, grayscale, downscaled matching. Templates captured at one
+  window size now match at others (the old exact-pixel matcher missed the
+  BATTLE LOG button whenever the window size/DPI differed from capture time).
+  The best scale per (template, window height) is cached on disk.
+* No pyautogui dependency: clicks use SetCursorPos + mouse_event via ctypes.
+* No long-lived mss instance (GDI handle leak). Callers pass in frames, or
+  find_on_screen() opens a short-lived mss for one capture.
+* Clicks are refused unless the game window is in the foreground, so the
+  clicker can never click into another application.
+
+Hard-won timing lesson kept from v2.3: Unity processes a UI click one frame
+after mouse-up, so the cursor must stay put ~250 ms before being restored.
 """
+
+import json
+import os
+import time
 
 import cv2
 import numpy as np
-import mss
-import pyautogui
-import time
-import os
-from PIL import Image
-
-# Remove pyautogui's default 0.1s pause after every action — clicks fire as
-# fast as the game animation allows.
-pyautogui.PAUSE = 0
-pyautogui.FAILSAFE = True  # slam mouse to a screen corner to abort
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "button_templates")
+TEMPLATE_META_FILE = os.path.join(TEMPLATES_DIR, "templates.json")
+SCALE_CACHE_FILE = os.path.join(TEMPLATES_DIR, "scale_cache.json")
+
+# Matching works on a frame whose game-window height is normalised to this
+# many pixels. Big enough for the 48x52 export icon to stay recognisable,
+# small enough that a full multi-scale sweep costs a few milliseconds.
+WORK_HEIGHT = 540
+DEFAULT_THRESHOLD = 0.82
+FULL_SWEEP_EVERY = 6
+FULL_SWEEP = [round(s, 3) for s in np.arange(0.45, 1.65, 0.05)]
+
+
+def _load_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_json(path, data):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def to_gray(frame):
+    """BGRA/BGR/gray ndarray -> gray uint8."""
+    if frame.ndim == 2:
+        return frame
+    if frame.shape[2] == 4:
+        return cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+    return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
 class AutoClicker:
-    """Handles automatic button clicking when buttons appear on screen"""
-    
-    def __init__(self, game_window):
-        """
-        Initialize AutoClicker
-        
-        Args:
-            game_window: Dict with game window bounds {'left', 'top', 'width', 'height'}
-        """
+    """Finds button templates in game-window frames and clicks them."""
+
+    def __init__(self, game_window=None):
+        # game_window kept for backwards compatibility with old callers.
         self.game_window = game_window
-        self.sct = mss.mss()
         self.templates = {}
-        self.last_click_time = {}
-        self.click_cooldown = 2.0  # Minimum seconds between clicks on same button
-        
-        # Create templates directory if it doesn't exist
-        if not os.path.exists(TEMPLATES_DIR):
-            os.makedirs(TEMPLATES_DIR)
-            print(f"Created templates directory: {TEMPLATES_DIR}")
-    
-    def load_template(self, template_name, threshold=0.8):
-        """
-        Load a button template image for matching
-        
-        Args:
-            template_name: Name of the template file (without extension)
-            threshold: Match confidence threshold (0.0 to 1.0)
-        
-        Returns:
-            True if template loaded successfully
-        """
-        template_path = os.path.join(TEMPLATES_DIR, f"{template_name}.png")
-        
-        if not os.path.exists(template_path):
-            print(f"Warning: Template not found: {template_path}")
-            print(f"To create a template:")
-            print(f"1. Take a screenshot of the button")
-            print(f"2. Crop just the button area")
-            print(f"3. Save as: {template_path}")
+        self.meta = _load_json(TEMPLATE_META_FILE)
+        self.scale_cache = _load_json(SCALE_CACHE_FILE)
+        self.last_score = {}
+        self._sweep_counter = {}
+        self._tpl_cache = {}      # (name, w, h) -> resized template
+        self._loc_cache = {}      # (name, window_height) -> (cx_rel, cy_rel) in window-relative fractions
+        self._roi_calls = {}
+        os.makedirs(TEMPLATES_DIR, exist_ok=True)
+
+    # ── templates ──────────────────────────────────────────────────────
+    def load_template(self, template_name, threshold=DEFAULT_THRESHOLD):
+        path = os.path.join(TEMPLATES_DIR, f"{template_name}.png")
+        if not os.path.exists(path):
             return False
-        
-        template = cv2.imread(template_path, cv2.IMREAD_COLOR)
-        if template is None:
-            print(f"Error: Could not load template: {template_path}")
+        image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if image is None:
             return False
-        
+        meta = self.meta.get(template_name, {}) if isinstance(self.meta, dict) else {}
         self.templates[template_name] = {
-            'image': template,
-            'threshold': threshold,
-            'width': template.shape[1],
-            'height': template.shape[0]
+            "image": image,
+            "threshold": float(meta.get("threshold", threshold)),
+            "capture_height": int(meta.get("window_height") or 0),
         }
-        
-        print(f"✓ Loaded template: {template_name} ({template.shape[1]}x{template.shape[0]})")
         return True
-    
+
+    def has_template(self, template_name):
+        return template_name in self.templates
+
+    # ── matching ───────────────────────────────────────────────────────
+    def _candidate_scales(self, name, window_height):
+        key = f"{name}@{int(window_height)}"
+        cached = self.scale_cache.get(key)
+        if isinstance(cached, (int, float)) and cached:
+            return [cached * 0.95, cached, cached * 1.05], key
+        capture_h = self.templates[name]["capture_height"]
+        if capture_h:
+            s0 = window_height / float(capture_h)
+            return [s0 * 0.9, s0 * 0.95, s0, s0 * 1.05, s0 * 1.1], key
+        # Unknown capture size: try ~1.0 cheaply, and do the full multi-scale
+        # sweep only on every FULL_SWEEP_EVERY-th call until a scale is cached.
+        count = self._sweep_counter.get(name, 0) + 1
+        self._sweep_counter[name] = count
+        if count % FULL_SWEEP_EVERY == 1:
+            return list(FULL_SWEEP), key
+        return [0.9, 1.0, 1.1], key
+
+    def _resized_template(self, name, tw, th, t_scale):
+        key = (name, tw, th)
+        img = self._tpl_cache.get(key)
+        if img is None:
+            src = self.templates[name]["image"]
+            img = cv2.resize(src, (tw, th), interpolation=cv2.INTER_AREA if t_scale < 1 else cv2.INTER_LINEAR)
+            if len(self._tpl_cache) > 64:
+                self._tpl_cache.clear()
+            self._tpl_cache[key] = img
+        return img
+
+    def _match(self, name, small, scales, factor):
+        best = (-1.0, None, None, None)
+        for scale in scales:
+            t_scale = scale * factor
+            th = int(round(self.templates[name]["image"].shape[0] * t_scale))
+            tw = int(round(self.templates[name]["image"].shape[1] * t_scale))
+            if th < 8 or tw < 8 or th > small.shape[0] or tw > small.shape[1]:
+                continue
+            t_img = self._resized_template(name, tw, th, t_scale)
+            result = cv2.matchTemplate(small, t_img, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            if max_val > best[0]:
+                best = (max_val, scale, max_loc, (tw, th))
+        return best
+
+    def find_in_frame(self, name, frame, origin, window_height, window_origin=None):
+        """Find a template in a captured frame.
+
+        frame          ndarray (BGRA/BGR/gray) of the searched region
+        origin         (left, top) screen coords of the frame's top-left
+        window_height  current game-window height in physical pixels
+        Returns (x, y, score) screen-centre coords or None.
+
+        Speed: after the first hit the button's position (relative to the
+        frame) is remembered and only a small area around it is searched;
+        a full-frame search still runs every 8th call as a safety net.
+        """
+        tpl = self.templates.get(name)
+        if tpl is None or frame is None or frame.size == 0 or window_height <= 0:
+            return None
+        gray = to_gray(frame)
+        factor = min(1.0, WORK_HEIGHT / float(window_height))
+        scales, cache_key = self._candidate_scales(name, window_height)
+
+        roi_key = (name, int(window_height), gray.shape[1], gray.shape[0])
+        roi = self._loc_cache.get(roi_key)
+        if roi is None:
+            saved = self.scale_cache.get(f"roi:{name}@{int(window_height)}@{gray.shape[1]}x{gray.shape[0]}")
+            if isinstance(saved, list) and len(saved) == 2:
+                roi = (saved[0] * gray.shape[1], saved[1] * gray.shape[0])
+        calls = self._roi_calls.get(roi_key, 0) + 1
+        self._roi_calls[roi_key] = calls
+        best = (-1.0, None, None, None)
+        offset = (0, 0)
+        if roi is not None and calls % 8 != 0:
+            cx, cy = roi
+            pad_x = int(tpl["image"].shape[1] * 1.6 * (window_height / max(1, tpl["capture_height"] or window_height)))
+            pad_y = int(tpl["image"].shape[0] * 1.6 * (window_height / max(1, tpl["capture_height"] or window_height)))
+            x0, y0 = max(0, int(cx - pad_x)), max(0, int(cy - pad_y))
+            x1, y1 = min(gray.shape[1], int(cx + pad_x)), min(gray.shape[0], int(cy + pad_y))
+            sub = gray[y0:y1, x0:x1]
+            if sub.size:
+                small = cv2.resize(sub, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA) if factor < 1.0 else sub
+                best = self._match(name, small, scales[:3] if len(scales) > 3 else scales, factor)
+                offset = (x0, y0)
+            if best[0] < tpl["threshold"]:
+                # The button always appears in the same spot, so a miss in
+                # the remembered area means "not on screen" - skip the
+                # expensive full search (it still runs every 8th call).
+                self.last_score[name] = best[0]
+                return None
+        if best[2] is None:
+            small = cv2.resize(gray, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA) if factor < 1.0 else gray
+            best = self._match(name, small, scales, factor)
+            offset = (0, 0)
+
+        score, scale, loc, size = best
+        self.last_score[name] = score
+        if loc is None or score < tpl["threshold"]:
+            if cache_key in self.scale_cache and score < tpl["threshold"] * 0.85:
+                self.scale_cache.pop(cache_key, None)
+            return None
+        if self.scale_cache.get(cache_key) != scale:
+            self.scale_cache[cache_key] = scale
+            _save_json(SCALE_CACHE_FILE, self.scale_cache)
+        fx = offset[0] + (loc[0] + size[0] / 2.0) / factor
+        fy = offset[1] + (loc[1] + size[1] / 2.0) / factor
+        if roi_key not in self._loc_cache:
+            self.scale_cache[f"roi:{name}@{int(window_height)}@{gray.shape[1]}x{gray.shape[0]}"] = [
+                round(fx / gray.shape[1], 4), round(fy / gray.shape[0], 4)]
+            _save_json(SCALE_CACHE_FILE, self.scale_cache)
+        self._loc_cache[roi_key] = (fx, fy)
+        return int(round(origin[0] + fx)), int(round(origin[1] + fy)), float(score)
+
+    def find_on_screen(self, name, region, window_height):
+        """One-shot capture + match. region = {left, top, width, height}."""
+        import mss
+        with mss.mss() as sct:
+            shot = np.asarray(sct.grab(region))
+        return self.find_in_frame(name, shot, (region["left"], region["top"]), window_height)
+
+    # Backwards-compatible API used by older scripts.
     def find_button(self, template_name, region=None):
-        """
-        Find a button on screen using template matching
-        
-        Args:
-            template_name: Name of the loaded template
-            region: Optional region to search {'left', 'top', 'width', 'height'}
-                   If None, searches entire game window
-        
-        Returns:
-            (x, y) center coordinates if found, None otherwise
-        """
-        if template_name not in self.templates:
+        region = region or self.game_window
+        if not region:
             return None
-        
-        template_data = self.templates[template_name]
-        template = template_data['image']
-        threshold = template_data['threshold']
-        
-        # Determine search region
-        if region is None:
-            region = self.game_window
-        
-        # Capture screen region
-        monitor = {
-            'left': region['left'],
-            'top': region['top'],
-            'width': region['width'],
-            'height': region['height']
-        }
-        
-        try:
-            # mss.mss() is NOT thread-safe: an instance created in one thread
-            # raises ThreadSafetyError when reused in another. Create a
-            # per-capture instance here so any thread can use find_button.
-            with mss.mss() as sct:
-                screenshot = sct.grab(monitor)
-            img = np.array(screenshot)
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-            
-            # Perform template matching
-            result = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-            
-            # Check if match is good enough
-            if max_val >= threshold:
-                # Calculate center of button
-                center_x = region['left'] + max_loc[0] + template_data['width'] // 2
-                center_y = region['top'] + max_loc[1] + template_data['height'] // 2
-                
-                return (center_x, center_y)
-            
-        except Exception as e:
-            print(f"Error finding button {template_name}: {e}")
-        
-        return None
-    
+        height = (self.game_window or region).get("height", region["height"])
+        hit = self.find_on_screen(template_name, region, height)
+        return (hit[0], hit[1]) if hit else None
+
+    # ── clicking ───────────────────────────────────────────────────────
     @staticmethod
-    def _background_click(hwnd, x, y):
-        """Click a window via PostMessage without moving the real cursor.
+    def physical_click(x, y, restore=True):
+        """Real cursor click (SendInput-equivalent) with Unity-safe timing."""
+        import ctypes
+        user32 = ctypes.windll.user32
+        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0002, 0x0004
 
-        Sends WM_LBUTTONDOWN/WM_LBUTTONUP directly to the window. Works even
-        when the game is unfocused and never touches the user's mouse. Some
-        games (Unity raw input) ignore posted messages, so callers should
-        verify the click landed and fall back to a physical click.
-        """
-        try:
-            import win32api
-            import win32con
-            lparam = win32api.MAKELONG(x, y)
-            win32api.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
-            time.sleep(0.02)
-            win32api.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, lparam)
-            return True
-        except Exception:
-            return False
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
-    @staticmethod
-    def _screen_to_client(hwnd, x, y):
-        """Convert absolute screen coords to window-client coords."""
-        try:
-            import win32gui
-            return win32gui.ScreenToClient(hwnd, (x, y))
-        except Exception:
-            return (x, y)
+        saved = POINT()
+        have_saved = bool(user32.GetCursorPos(ctypes.byref(saved)))
+        user32.SetCursorPos(int(x), int(y))
+        time.sleep(0.08)
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(0.06)
+        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        time.sleep(0.25)  # Unity reads the click a frame after mouse-up
+        if restore and have_saved:
+            user32.SetCursorPos(saved.x, saved.y)
+        return True
 
-    @staticmethod
-    def _window_from_point(x, y):
-        """Return the top-level window handle at the given screen point."""
-        try:
-            import win32gui
-            return win32gui.WindowFromPoint((x, y))
-        except Exception:
-            return None
-
-    def click_button(self, template_name, region=None, force=False, mode="auto"):
-        """
-        Find and click a button if it's visible
-
-        Args:
-            template_name: Name of the loaded template
-            region: Optional region to search
-            force: If True, ignore click cooldown
-            mode: 'auto'  = background click, falls back to physical if the
-                            window didn't accept it
-                  'physical' = real cursor click (pyautogui)
-
-        Returns:
-            True if button was found and clicked
-        """
-        # Check cooldown
-        if not force:
-            last_click = self.last_click_time.get(template_name, 0)
-            if time.time() - last_click < self.click_cooldown:
-                return False
-
-        # Find button
+    def click_button(self, template_name, region=None, force=False, mode="physical"):
+        """Backwards-compatible: find then physically click."""
         coords = self.find_button(template_name, region)
-
-        if coords:
-            x, y = coords
-
-            clicked = False
-            if mode in ("auto", "background"):
-                hwnd = self._window_from_point(x, y)
-                if hwnd:
-                    cx, cy = self._screen_to_client(hwnd, x, y)
-                    clicked = self._background_click(hwnd, cx, cy)
-                    if clicked:
-                        print(f"✓ Clicked {template_name} at ({x}, {y}) [background]")
-
-            if not clicked and mode in ("auto", "physical"):
-                # Physical fallback: real cursor click. Unity processes UI
-                # clicks a frame after mouse-up — moving the cursor away
-                # instantly cancels the click. Sequence: arrive, settle,
-                # press, hold, release, give the game a moment, then restore.
-                restore_pos = None
-                try:
-                    import win32api
-                    restore_pos = win32api.GetCursorPos()
-                except Exception:
-                    restore_pos = pyautogui.position()
-                pyautogui.moveTo(x, y, _pause=False)
-                time.sleep(0.08)
-                pyautogui.mouseDown(_pause=False)
-                time.sleep(0.06)
-                pyautogui.mouseUp(_pause=False)
-                time.sleep(0.25)
-                if restore_pos:
-                    try:
-                        pyautogui.moveTo(restore_pos[0], restore_pos[1], _pause=False)
-                    except Exception:
-                        pass
-                print(f"✓ Clicked {template_name} at ({x}, {y}) [physical]")
-
-            self.last_click_time[template_name] = time.time()
-            return clicked or mode == "physical"
-
-        return False
-    
-    def watch_and_click(self, buttons, region=None, interval=0.5, duration=30):
-        """
-        Continuously watch for buttons and click them when they appear
-        
-        Args:
-            buttons: List of button template names to watch for
-            region: Optional region to watch
-            interval: Time between checks in seconds
-            duration: Maximum time to watch in seconds (0 = infinite)
-        
-        Returns:
-            List of buttons that were clicked
-        """
-        start_time = time.time()
-        clicked_buttons = []
-        
-        print(f"Watching for buttons: {buttons}")
-        
-        while True:
-            # Check duration
-            if duration > 0 and time.time() - start_time > duration:
-                print(f"Watch timeout after {duration}s")
-                break
-            
-            # Check each button
-            for button_name in buttons:
-                if self.click_button(button_name, region):
-                    clicked_buttons.append(button_name)
-            
-            # Wait before next check
-            time.sleep(interval)
-        
-        return clicked_buttons
-    
-    def create_template_from_screen(self, template_name, x, y, width, height):
-        """
-        Capture a region of the screen and save as a template
-        
-        Args:
-            template_name: Name to save template as
-            x, y: Top-left corner of region (screen coordinates)
-            width, height: Size of region
-        """
-        monitor = {
-            'left': x,
-            'top': y,
-            'width': width,
-            'height': height
-        }
-        
-        try:
-            with mss.mss() as sct:
-                screenshot = sct.grab(monitor)
-            img = np.array(screenshot)
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-            
-            template_path = os.path.join(TEMPLATES_DIR, f"{template_name}.png")
-            cv2.imwrite(template_path, img)
-            
-            print(f"✓ Template saved: {template_path}")
-            print(f"  Region: ({x}, {y}) {width}x{height}")
-            
-            # Automatically load it
-            self.load_template(template_name)
-            
-        except Exception as e:
-            print(f"Error creating template: {e}")
+        if not coords:
+            return False
+        return self.physical_click(*coords)
 
 
-# Example usage
-if __name__ == "__main__":
-    from RankDetector import RankDetector
-    
-    # Find game window
-    detector = RankDetector()
-    game_window = detector.find_game_window()
-    
-    if not game_window:
-        print("Error: Pokemon TCG Live window not found!")
-        print("Please start the game first.")
-        exit(1)
-    
-    print(f"Found game window: {game_window['width']}x{game_window['height']}")
-    
-    # Create AutoClicker
-    clicker = AutoClicker(game_window)
-    
-    # Example: Load and watch for buttons
-    # First, you need to create templates by capturing button images
-    print("\n" + "="*50)
-    print("AutoClicker Setup:")
-    print("="*50)
-    print("1. Take screenshots of the buttons you want to click")
-    print("2. Crop just the button area (as small as possible)")
-    print(f"3. Save them in: {TEMPLATES_DIR}")
-    print("   Example names: continue.png, ok.png, claim.png")
-    print("\nOr use create_template_from_screen() to capture from screen")
-    print("="*50)
-    
-    # Example: If templates exist, watch for them
-    example_buttons = ["continue", "ok"]
-    
-    for button in example_buttons:
-        clicker.load_template(button, threshold=0.8)
-    
-    # Watch for 10 seconds
-    # clicker.watch_and_click(example_buttons, duration=10)
+def save_template_meta(template_name, window_rect, threshold=DEFAULT_THRESHOLD):
+    """Record the game-window size a template was captured at (used for scaling)."""
+    meta = _load_json(TEMPLATE_META_FILE)
+    meta[template_name] = {
+        "window_width": int(window_rect.get("width", 0)) if window_rect else 0,
+        "window_height": int(window_rect.get("height", 0)) if window_rect else 0,
+        "threshold": threshold,
+        "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _save_json(TEMPLATE_META_FILE, meta)
+    # Old scale guesses are invalid for a new template.
+    cache = _load_json(SCALE_CACHE_FILE)
+    cache = {k: v for k, v in cache.items()
+             if not k.startswith(f"{template_name}@") and not k.startswith(f"roi:{template_name}@")}
+    _save_json(SCALE_CACHE_FILE, cache)

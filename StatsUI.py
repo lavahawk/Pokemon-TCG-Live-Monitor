@@ -3,7 +3,7 @@ Stats Dashboard for Pokemon TCG Live Monitor v2.1
 Modern, sleek UI with transparent glass-morphism design
 """
 
-VERSION = "2.1"
+VERSION = "2.4"
 
 import sys
 import os
@@ -121,39 +121,6 @@ class PageScrollArea(QScrollArea):
             super().wheelEvent(event)
 
 
-# Japanese deck name → English translation map (City League Season 4)
-JP_DECK_TRANSLATION = {
-    "ドラパルト": "Dragapult",
-    "メガルカリオ": "Mega Lucario",
-    "タケルライコ": "Raging Bolt",
-    "ゲッコウガ": "Greninja",
-    "ゾロアーク": "N's Zoroark",
-    "フーディン": "Alakazam",
-    "ピッピ": "Clefairy",
-    "ガブリアス": "Cynthia's Garchomp",
-    "ミュウツー": "Rocket's Mewtwo",
-    "リザードン": "Charizard",
-    "カビゴン": "Snorlax",
-    "ルギア": "Lugia",
-    "アルセウス": "Arceus",
-    "パオジアン": "Chien-Pao",
-    "テツノカイナ": "Iron Hands",
-    "サーナイト": "Gardevoir",
-    "ロストバレット": "Lost Box",
-    "ロストギラティナ": "Lost Giratina",
-    "ミライドン": "Miraidon",
-    "コライドン": "Koraidon",
-    "イダイナキバ": "Great Tusk",
-    "ハピナス": "Blissey",
-    "バシャドラパ": "Blaziken Dragapult",
-    "ミュウ": "Mew VMAX",
-    "ディンルー": "Ting-Lu",
-    "カイリュー": "Dragonite",
-    "バンギラス": "Tyranitar",
-    "ハバタクカミ": "Flutter Mane",
-    "テツノブジン": "Iron Valiant",
-}
-
 try:
     import matplotlib
     matplotlib.use('Qt5Agg')
@@ -178,6 +145,10 @@ LIMITLESS_DASHBOARD_STATE_FILE = os.path.join(BASE_DIR, ".limitless_dashboard_st
 # AIParseBattleLog.py so battles played while enrolled in a tournament get
 # tagged and weighted as tournament games.
 LIMITLESS_TOURNAMENT_FLAG_FILE = os.path.join(BASE_DIR, ".in_tournament")
+# Shared capture file written by the Limitless dashboard manager and read by
+# AIParseBattleLog.py so the current match's chat (with round info) can be
+# attached to the battle record for later review.
+LIMITLESS_CHAT_CAPTURE_FILE = os.path.join(BASE_DIR, ".chat_capture.json")
 LIMITLESS_SOUND_FILE = os.path.join(BASE_DIR, "ding.mp3")
 LIMITLESS_CHECK_INTERVAL_MS = 60000
 LIMITLESS_CHECK_DELAY_MS = 12000
@@ -220,7 +191,9 @@ def _sprite_cache_path(sprite_name):
     normalized = _normalize_sprite_name(sprite_name)
     if not normalized:
         return None
-    return os.path.join(META_ICON_CACHE_DIR, f"{normalized.replace('/', '_')}.png")
+    # Only [a-z0-9-] reach the filesystem (names come from remote APIs; SEC-08).
+    safe = re.sub(r"[^a-z0-9-]", "_", normalized)
+    return os.path.join(META_ICON_CACHE_DIR, f"{safe}.png")
 
 
 def _sprite_name_candidates(sprite_name):
@@ -427,6 +400,25 @@ def _play_limitless_notification_sound():
         QApplication.beep()
     except Exception:
         pass
+
+
+def _is_safe_web_url(url):
+    """Only plain https links are opened in the user's browser (SEC-04)."""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return False
+    return parsed.scheme == "https" and bool(parsed.netloc) and "\\" not in str(url)
+
+
+def _is_limitless_url(url):
+    from urllib.parse import urlparse
+    try:
+        host = (urlparse(str(url or "")).hostname or "").lower()
+    except Exception:
+        return False
+    return _is_safe_web_url(url) and (host == "limitlesstcg.com" or host.endswith(".limitlesstcg.com"))
 
 
 class LimitlessCheckInAlert(QWidget):
@@ -697,6 +689,13 @@ class LimitlessDashboardManager(QObject):
         self.poll_timer.setInterval(LIMITLESS_CHECK_INTERVAL_MS)
         self.poll_timer.timeout.connect(self.poll_for_checkin)
 
+        # While enrolled in a tournament, poll the dashboard every 10s so a
+        # new round's match URL (and its check-in button) is picked up immediately —
+        # match check-in windows are short and missing one = auto-loss.
+        self.tournament_poll_timer = QTimer(self)
+        self.tournament_poll_timer.setInterval(10000)
+        self.tournament_poll_timer.timeout.connect(self._tournament_poll)
+
         self.delayed_poll_timer = QTimer(self)
         self.delayed_poll_timer.setSingleShot(True)
         self.delayed_poll_timer.timeout.connect(self.poll_for_checkin)
@@ -708,6 +707,19 @@ class LimitlessDashboardManager(QObject):
         self._load_state()
         if WEBENGINE_AVAILABLE:
             self._ensure_profile()
+
+    def _tournament_poll(self):
+        """Fast poll while in a tournament: reload the dashboard so fresh
+        round pairings appear, then scan for the active match + check-in."""
+        self.poll_for_checkin()
+        # Reload the background dashboard so new-round pairings show up
+        # (the React page may otherwise sit stale).
+        try:
+            if self.background_page is not None:
+                self.background_page.load(QUrl(LIMITLESS_DASHBOARD_URL))
+        except Exception:
+            pass
+
 
     def _load_state(self):
         try:
@@ -733,27 +745,36 @@ class LimitlessDashboardManager(QObject):
         except Exception:
             pass
 
+    def _set_enrolled(self, enrolled):
+        """Fast-poll the dashboard while a tournament match/check-in is live."""
+        try:
+            if enrolled:
+                if not self.tournament_poll_timer.isActive():
+                    self.tournament_poll_timer.start()
+            else:
+                self.tournament_poll_timer.stop()
+        except Exception:
+            pass
+
     def _update_tournament_flag(self, in_tournament, opponent=None):
-        """Persist the current tournament-match state to a shared flag file.
+        """Persist the current tournament-MATCH state for AIParseBattleLog.
 
-        AIParseBattleLog.py reads this file so battles played while the player
-        is actively in a Limitless tournament match get tagged and weighted as
-        tournament games.
-
-        The flag stores the opponent's username (when known) so a battle is
-        only tagged as a tournament game if the battle-log opponent matches
-        the opponent in the tournament chat. This avoids false positives from
-        simply being enrolled in a tournament days in advance.
+        The flag is only written when an active match with a known opponent
+        is open (from the match chat page). The parser tags a battle as a
+        tournament game only if the battle-log opponent matches, and ignores
+        flags older than a few hours. (v2.4: the dashboard-wide "inTournament"
+        heuristic matched almost any page and left a stale flag - BUG-017.)
         """
-        self.in_tournament = bool(in_tournament)
+        opponent = (opponent or "").strip()
+        self.in_tournament = bool(in_tournament and opponent)
         try:
             if self.in_tournament:
-                payload = {"in_tournament": True, "opponent": (opponent or "").strip()}
+                payload = {"in_tournament": True, "opponent": opponent,
+                           "updated_at": datetime.now().isoformat(timespec="seconds")}
                 with open(LIMITLESS_TOURNAMENT_FLAG_FILE, "w", encoding="utf-8") as handle:
                     json.dump(payload, handle)
-            else:
-                if os.path.exists(LIMITLESS_TOURNAMENT_FLAG_FILE):
-                    os.remove(LIMITLESS_TOURNAMENT_FLAG_FILE)
+            elif os.path.exists(LIMITLESS_TOURNAMENT_FLAG_FILE):
+                os.remove(LIMITLESS_TOURNAMENT_FLAG_FILE)
         except Exception:
             pass
 
@@ -911,18 +932,20 @@ class LimitlessDashboardManager(QObject):
                     const rect = el.getBoundingClientRect();
                     return style && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
                 };
-                const clickables = Array.from(document.querySelectorAll('button, a, input[type="button"], input[type="submit"], div[role="button"]'));
+                const clickables = Array.from(document.querySelectorAll('button, a, input[type="button"], input[type="submit"], div[role="button"], [role="button"], span[role="button"]'));
                 const authText = clickables.map(el => ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').trim()).join(' ');
                 const loginForm = !!document.querySelector('input[type="password"]');
+                // Match tournament check-in, match check-in, and late check-in.
+                const checkinRe = /(?:match\\s+)?check[\\s-]?in|checkin|late\\s+check[\\s-]?in/i;
                 const candidates = [];
                 clickables.forEach((el, index) => {
                     const text = ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').replace(/\\s+/g, ' ').trim();
                     const href = el.href || el.getAttribute('href') || '';
                     if (!visible(el)) return;
-                    if (!/check[\\s-]?in/i.test(text) && !/check[\\s-]?in/i.test(href)) return;
+                    if (!checkinRe.test(text) && !checkinRe.test(href)) return;
                     el.setAttribute('data-tcglive-checkin-id', String(index));
                     let context = '';
-                    const container = el.closest('article, section, .card, .event, .tournament, [class*="event"], [class*="tournament"], li, tr, .dashboard-card');
+                    const container = el.closest('article, section, .card, .event, .tournament, [class*="event"], [class*="tournament"], li, tr, .dashboard-card, main');
                     if (container && container.innerText) {
                         context = container.innerText.replace(/\\s+/g, ' ').trim();
                     } else if (document.title) {
@@ -943,14 +966,30 @@ class LimitlessDashboardManager(QObject):
                 // dashboard that mention check-in, "enrolled", "registered",
                 // "round", or a tournament/event heading.
                 const bodyText = (document.body ? document.body.innerText : '').replace(/\\s+/g, ' ').trim();
-                const tournamentHints = /check[\\s-]?in|enrolled|registered|tournament|round \\d+|\\brounds?\\b|\\bstandings\\b|\\bdecklist\\b/i;
+                const tournamentHints = /check[\\s-]?in|enrolled|registered|tournament|round \\d+|\\brounds?\\b|\\bstandings\\b|\\bdecklist\\b|\\bmatch\\b/i;
                 const inTournament = tournamentHints.test(bodyText) && !/\\/login(?:[?#]|$)/i.test(window.location.pathname + window.location.search);
+
+                // Detect the active match link on the dashboard so the app can
+                // navigate to the match page (where match check-in happens).
+                // The dashboard only links to YOUR matches, so any /match/
+                // link is ours. Prefer the one marked "Active Match" or the
+                // current round ("R# vs ..."), else take the first.
+                const cleanText = (t) => (t || '').replace(/\\s+/g, ' ').trim();
+                let activeMatchUrl = '';
+                const matchLinks = Array.from(document.querySelectorAll('a[href*="/match/"]'));
+                const activeLink = matchLinks.find(el => /active match/i.test(cleanText(el.innerText || '')))
+                    || matchLinks.find(el => /^R\\d+\\s+vs/i.test(cleanText(el.innerText || '')))
+                    || matchLinks[0];
+                if (activeLink && activeLink.href) {
+                    activeMatchUrl = activeLink.href;
+                }
 
                 return JSON.stringify({
                     url: window.location.href,
                     title: document.title || '',
                     loggedIn: !/\\/login(?:[?#]|$)/i.test(window.location.pathname + window.location.search) && !loginForm && !/\\blog\\s*in\\b|\\bsign\\s*in\\b/i.test(authText),
                     inTournament,
+                    activeMatchUrl,
                     candidates
                 });
             })();
@@ -975,8 +1014,23 @@ class LimitlessDashboardManager(QObject):
             return
         self.authenticated = bool(result.get("loggedIn"))
         self.auth_state_changed.emit(self.authenticated)
-        # Persist tournament-enrollment state for AIParseBattleLog to read.
-        self._update_tournament_flag(bool(result.get("inTournament")))
+        # Poll faster only while a match or check-in is actually live.
+        self._set_enrolled(bool(result.get("activeMatchUrl")) or bool(result.get("candidates")))
+
+        # If the dashboard shows an active match, navigate the hidden chat
+        # page to it so match check-in (and chat capture) can happen there.
+        active_match_url = result.get("activeMatchUrl") or ""
+        if active_match_url and not _is_limitless_url(active_match_url):
+            active_match_url = ""
+        if active_match_url and self.chat_page is not None:
+            try:
+                current = self.chat_page.url().toString()
+                if current != active_match_url:
+                    self.chat_target_url = active_match_url
+                    self.chat_page.load(QUrl(active_match_url))
+            except Exception:
+                pass
+
         if not self.authenticated:
             self.last_checkin = None
             self.last_status = "Limitless dashboard is waiting for login."
@@ -1027,9 +1081,24 @@ class LimitlessDashboardManager(QObject):
             self.chat_poll_timer.start()
 
     def _chat_extract_js(self):
+        # Inject the player's username so the overlay can tell their messages
+        # apart from the opponent's (for left/right conversation alignment).
+        try:
+            from app_settings import load_username
+            own_name = (load_username() or "").strip()
+        except Exception:
+            own_name = ""
+        own_js = json.dumps(own_name)
         return r"""
             (() => {
+                const ownName = """ + own_js + r""";
                 const clean = (text) => (text || '').replace(/\s+/g, ' ').trim();
+                const visible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                };
                 const drop = new Set(['chat', 'match chat', 'call judge', 'send', 'message', 'type a message']);
                 const unique = (values) => {
                     const out = [];
@@ -1071,31 +1140,161 @@ class LimitlessDashboardManager(QObject):
                 let subtitle = '';
                 let opponent = '';
 
+                // Detect a match check-in button on the match page. The match
+                // page shows a "Check in" button when the round uses match
+                // check-in and the player hasn't checked in yet. The button
+                // is a plain styled element (no button/role semantics), so we
+                // scan ALL elements and match the text loosely.
+                let checkin = false;
+                const checkinRe = /^\\s*check[\\s-]?in\\s*$/i;
+                const checkinEl = Array.from(document.querySelectorAll('*')).find(el => {
+                    // Only leaf-ish elements so we don't match a huge container.
+                    if (el.children.length > 2) return false;
+                    if (!visible(el)) return false;
+                    const t = clean(el.innerText || el.getAttribute('aria-label') || '');
+                    return checkinRe.test(t);
+                });
+                if (checkinEl) {
+                    checkin = true;
+                    checkinEl.setAttribute('data-tcglive-match-checkin', '1');
+                }
+
+                // Detect the "Open as image" button on the match page. This
+                // opens the opponent's decklist as an image — critical during
+                // tournament rounds. We capture its href (if it's a link) so
+                // the app can open it in a front tab automatically; if it's
+                // a JS button with no href, the app clicks it instead.
+                let openAsImageUrl = '';
+                let openAsImagePresent = false;
+                const openImageEl = Array.from(document.querySelectorAll('a, button, [role="button"]')).find(el => {
+                    if (!visible(el)) return false;
+                    const t = clean(el.innerText || el.getAttribute('aria-label') || '');
+                    return /open as image/i.test(t);
+                });
+                if (openImageEl) {
+                    openAsImagePresent = true;
+                    openAsImageUrl = openImageEl.href || openImageEl.getAttribute('href') || '';
+                    openImageEl.setAttribute('data-tcglive-open-image', '1');
+                }
+
                 if (best) {
                     const headerNode = best.node.closest('main, article, section, div')?.querySelector('h1, h2, h3');
                     header = clean(headerNode ? headerNode.innerText : document.title || 'Limitless Match');
 
-                    const siblingText = clean((best.node.closest('main, article, section, div') || best.node).innerText);
-                    const lines = siblingText.split(/\n+/).map(clean).filter(Boolean);
-                    const filtered = [];
-                    for (const line of lines) {
-                        const lower = line.toLowerCase();
-                        if (drop.has(lower)) continue;
-                        if (lower === header.toLowerCase()) continue;
-                        if (line.length < 2) continue;
-                        if (/^round\b/i.test(line) || /\bvs\b/i.test(line) || /\btable\b/i.test(line)) {
-                            if (!subtitle) subtitle = line;
-                            // Extract the opponent username from "Round 1 vs OpponentName"
-                            // or "vs OpponentName" patterns.
-                            const vsMatch = line.match(/\bvs\.?\s+([A-Za-z0-9_\- ]+)/i);
-                            if (vsMatch && vsMatch[1]) {
-                                opponent = clean(vsMatch[1]);
-                            }
-                            continue;
-                        }
-                        filtered.push(line);
+                    // Extract the opponent username from the match header
+                    // ("Round 2 vs OpponentName" or "You are playing against").
+                    const headerText = clean(best.node.closest('main, article, section, div')?.innerText || '');
+                    const vsMatch = headerText.match(/\bvs\.?\s+([A-Za-z0-9_\- ]+)/i);
+                    if (vsMatch && vsMatch[1]) {
+                        opponent = clean(vsMatch[1]);
                     }
-                    messages = unique(filtered).slice(-8);
+                    const roundMatch = headerText.match(/\bround\s+(\d+)\b/i);
+                    if (roundMatch && roundMatch[1]) {
+                        subtitle = 'Round ' + roundMatch[1];
+                    }
+
+                    // Limitless renders each chat message as its own element
+                    // containing a timestamp like "08:31:35 PM". We extract
+                    // each message element individually so messages stay
+                    // separate instead of being concatenated into one blob.
+                    const timeRe = /\\b\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:AM|PM)/i;
+                    const rawMessages = [];
+                    // Collect ALL descendant elements that contain a timestamp
+                    // (message rows). We then keep only the deepest ones so a
+                    // wrapper containing the whole chat doesn't swallow the
+                    // individual messages.
+                    const timed = [];
+                    const walk = (el, depth) => {
+                        if (depth > 6) return;
+                        for (const child of el.children) {
+                            const t = clean(child.innerText || '');
+                            if (!t) continue;
+                            const hasTime = timeRe.test(t);
+                            const hasInput = child.querySelector('textarea, input[type="text"]');
+                            if (hasTime && !hasInput) {
+                                timed.push({ el: child, text: t });
+                            }
+                            walk(child, depth + 1);
+                        }
+                    };
+                    walk(best.node, 0);
+                    // Keep only elements that are not ancestors of another
+                    // timestamped element (i.e. the deepest message rows).
+                    for (const item of timed) {
+                        const isAncestor = timed.some(other => other.el !== item.el && item.el.contains(other.el));
+                        if (!isAncestor) {
+                            rawMessages.push(item.text);
+                        }
+                    }
+
+                    // If the walk found zero or only ONE timestamped element
+                    // (meaning the whole chat is one blob, not per-message
+                    // elements), split the container text on timestamp
+                    // boundaries so each message stays separate.
+                    if (rawMessages.length <= 1) {
+                        rawMessages.length = 0;
+                        const blob = clean(best.node.innerText || '');
+                        const parts = blob.split(/(?<=\\s)(?=\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:AM|PM))/i);
+                        for (const part of parts) {
+                            const cleaned = clean(part);
+                            if (cleaned) rawMessages.push(cleaned);
+                        }
+                    }
+
+                    // Clean each message and extract its sender so the overlay can align
+                    // them like a conversation (mine right, theirs left).
+                    // Two DOM shapes are handled:
+                    //  1. Per-message element: "SenderName 08:35 PM text"
+                    //  2. Blob fallback part: "08:35 PM text SenderNameOfNext"
+                    // System/action messages have no sender.
+                    const actionRe = /(?:has checked in|has reported game|the match has finished|has joined|has left|is now|won the|lost the|has been|check in|checked in)/i;
+                    const knownNames = [ownName, opponent].filter(Boolean);
+                    let pendingSender = '';
+                    for (const raw of rawMessages) {
+                        let sender = '';
+                        let text = '';
+                        let trailingSender = '';
+                        // Shape 1: leading sender before the timestamp.
+                        const lead = raw.match(/^([A-Za-z0-9_\\- ]{1,30}?)\\s+\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:AM|PM)\\s+(.+)$/i);
+                        if (lead) {
+                            sender = clean(lead[1]);
+                            text = clean(lead[2]);
+                        } else {
+                            // Shape 2: timestamp first, possible trailing
+                            // sender (the NEXT message's sender).
+                            let t = raw.replace(timeRe, '').trim();
+                            t = t.replace(/^(Send|Request a judge|Match chat)\\b/i, '').trim();
+                            t = t.replace(/\\s*send$/i, '').trim();
+                            // If the text ends with a known player name, that
+                            // name is the NEXT message's sender.
+                            for (const name of knownNames) {
+                                if (name && t.length > name.length && t.toLowerCase().endsWith(name.toLowerCase())) {
+                                    text = t.slice(0, t.length - name.length).trim();
+                                    trailingSender = name;
+                                    break;
+                                }
+                            }
+                            if (!text) text = t;
+                        }
+                        const effSender = sender || pendingSender;
+                        pendingSender = trailingSender;
+                        // Drop pure UI-chrome leftovers.
+                        if (!text || text.length < 2) continue;
+                        if (drop.has(text.toLowerCase())) continue;
+                        if (/^(send|request a judge|match chat)$/i.test(text)) continue;
+                        const type = actionRe.test(text) ? 'action' : 'chat';
+                        messages.push({ text: text, type: type, sender: effSender });
+                    }
+                    // Dedupe by text, keep the latest.
+                    const seen = new Set();
+                    const deduped = [];
+                    for (const m of messages) {
+                        const key = clean(m.text).toLowerCase();
+                        if (!key || seen.has(key)) continue;
+                        seen.add(key);
+                        deduped.push(m);
+                    }
+                    messages = deduped.slice(-8);
                 }
 
                 return JSON.stringify({
@@ -1106,7 +1305,10 @@ class LimitlessDashboardManager(QObject):
                     subtitle,
                     opponent,
                     messages,
-                    pageTextSnippet: pageText.slice(0, 400)
+                    pageTextSnippet: pageText.slice(0, 400),
+                    checkin,
+                    openAsImageUrl,
+                    openAsImagePresent
                 });
             })();
         """
@@ -1122,6 +1324,24 @@ class LimitlessDashboardManager(QObject):
 
         url_text = result.get("url") or ""
         has_chat = bool(result.get("hasChat"))
+
+        # Auto-check-in: if the match page shows a "Check in" button and
+        # auto-check-in is enabled, click it so the player doesn't get an
+        # automatic loss for not checking in to the round.
+        if self.auto_checkin_enabled and result.get("checkin"):
+            self._attempt_match_checkin(url_text)
+
+        # Auto "Open as image": during a tournament round (before the result
+        # is reported), automatically open the opponent's decklist image in a
+        # new tab brought to the very front. This is critical tournament info.
+        open_image_url = result.get("openAsImageUrl") or ""
+        open_image_present = bool(result.get("openAsImagePresent"))
+        if open_image_present and self._is_tournament_round_active():
+            if open_image_url:
+                self._open_decklist_image_tab(open_image_url)
+            else:
+                # JS button with no href — click it on the page that found it.
+                self._click_open_as_image()
 
         if source == "visible" and has_chat and url_text and "play.limitlesstcg.com" in url_text:
             if url_text != self.chat_target_url:
@@ -1184,7 +1404,23 @@ class LimitlessDashboardManager(QObject):
 
     def _publish_chat_state(self, payload):
         state = payload if isinstance(payload, dict) else {}
-        normalized_messages = [str(msg).strip() for msg in (state.get("messages") or []) if str(msg).strip()]
+        # Each message is either a plain string (legacy) or a dict with
+        # {text, type}. Normalize to dicts and attach a received timestamp so
+        # the overlay can fade messages out over time.
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        normalized_messages = []
+        for msg in (state.get("messages") or []):
+            if isinstance(msg, dict):
+                text = str(msg.get("text") or "").strip()
+                mtype = str(msg.get("type") or "chat")
+                sender = str(msg.get("sender") or "").strip()
+            else:
+                text = str(msg).strip()
+                mtype = "chat"
+                sender = ""
+            if not text:
+                continue
+            normalized_messages.append({"text": text, "type": mtype, "sender": sender, "ts": now_iso})
         normalized = {
             "url": state.get("url") or "",
             "title": state.get("title") or "",
@@ -1198,6 +1434,10 @@ class LimitlessDashboardManager(QObject):
             return
         self.last_chat_state = normalized
         self.chat_state_changed.emit(normalized)
+        # Persist the current match's chat (with round info) to a shared
+        # capture file so AIParseBattleLog can attach it to the battle record
+        # for later review.
+        self._write_chat_capture(normalized)
         # If we have a tournament match with a known opponent, persist it so
         # AIParseBattleLog can match the battle-log opponent against it.
         # If the match chat is gone (no opponent), clear the tournament flag.
@@ -1205,6 +1445,35 @@ class LimitlessDashboardManager(QObject):
             self._update_tournament_flag(True, opponent=normalized["opponent"])
         elif self.in_tournament:
             self._update_tournament_flag(False)
+
+    def _extract_round_number(self, subtitle):
+        """Pull the round number from a subtitle like 'Round 3 vs Opponent'."""
+        if not subtitle:
+            return None
+        match = re.search(r"\bround\s+(\d+)\b", subtitle, flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        return None
+
+    def _write_chat_capture(self, state):
+        """Write the current match chat to a shared capture file.
+
+        The capture includes the round number (if known), the opponent, and
+        the raw messages. AIParseBattleLog.py reads this file when saving a
+        battle so the chat can be reviewed alongside the game data.
+        """
+        try:
+            round_number = self._extract_round_number(state.get("subtitle") or "")
+            payload = {
+                "round": round_number,
+                "opponent": state.get("opponent") or "",
+                "messages": state.get("messages") or [],
+                "captured_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            with open(LIMITLESS_CHAT_CAPTURE_FILE, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def handle_checkin_requested(self):
         overlay = self.get_overlay()
@@ -1249,6 +1518,179 @@ class LimitlessDashboardManager(QObject):
             self._build_checkin_click_js(candidate),
             lambda clicked, context=context: self._handle_auto_checkin_result(bool(clicked), context),
         )
+
+    def _attempt_match_checkin(self, url_text):
+        """Auto-click the match check-in button on the match page.
+
+        The match page shows a "Check in" button when the round uses match
+        check-in and the player hasn't checked in yet. Clicking it prevents an
+        automatic loss for not showing up to the round.
+        """
+        if self.auto_checkin_enabled is False:
+            return
+        # Dedupe: don't spam clicks every poll while the button is present.
+        now = time.time()
+        if getattr(self, "_last_match_checkin_time", 0) and now - self._last_match_checkin_time < 10:
+            return
+        self._last_match_checkin_time = now
+        self.last_status = "Auto Check-In is checking you into the round."
+        self.status_changed.emit(self.last_status)
+        _play_limitless_notification_sound()
+        click_js = """
+            (() => {
+                const clean = (t) => (t || '').replace(/\\s+/g, ' ').trim();
+                const visible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+                };
+                // Prefer the element tagged by the scan; fall back to a
+                // loose text match across ALL elements (the Limitless
+                // check-in button is a plain styled element with no button
+                // semantics).
+                let target = document.querySelector('[data-tcglive-match-checkin]');
+                if (!target || !visible(target)) {
+                    target = Array.from(document.querySelectorAll('*')).find(el => {
+                        if (el.children.length > 2) return false;
+                        if (!visible(el)) return false;
+                        const t = clean(el.innerText || el.getAttribute('aria-label') || '');
+                        return /^\\s*check[\\s-]?in\\s*$/i.test(t);
+                    });
+                }
+                if (target) {
+                    target.click();
+                    return true;
+                }
+                return false;
+            })();
+        """
+        page = None
+        try:
+            # Prefer whichever page is actually ON the match URL — the
+            # check-in button lives on the match page. The visible view is
+            # usually on the dashboard, so clicking there would miss.
+            if self.chat_page is not None:
+                chat_url = self.chat_page.url().toString()
+                if chat_url and "/match/" in chat_url:
+                    page = self.chat_page
+            if page is None and self.visible_view is not None:
+                visible_url = self.visible_view.page().url().toString()
+                if visible_url and "/match/" in visible_url:
+                    page = self.visible_view.page()
+        except Exception:
+            page = None
+        if page is not None:
+            try:
+                page.runJavaScript(click_js)
+            except Exception:
+                pass
+
+    def _is_tournament_round_active(self):
+        """True while a tournament match is in progress (before the result).
+
+        A round is active when the tournament flag says we're in a match AND
+        the match chat still exists (once the result is reported the match
+        ends and the chat/flag clears).
+        """
+        if not self.in_tournament:
+            return False
+        # The chat state's opponent presence signals an active match; once
+        # the round completes the flag is cleared by _publish_chat_state.
+        return bool(self.last_chat_state.get("visible"))
+
+    def _open_decklist_image_tab(self, image_url):
+        """Open the opponent's decklist image in a new front tab.
+
+        During a tournament round this is critical info. We open the image
+        URL in the default browser as a new tab brought to the front. Deduped
+        per match so it only opens once per round.
+        """
+        if not image_url or not _is_safe_web_url(image_url):
+            return
+        # Dedupe: only open once per match URL.
+        if getattr(self, "_last_open_image_match", "") == self.chat_target_url:
+            return
+        self._last_open_image_match = self.chat_target_url
+        self.last_status = "Opening opponent decklist image for the tournament round."
+        self.status_changed.emit(self.last_status)
+        try:
+            import webbrowser
+            webbrowser.open(image_url, new=2, autoraise=True)
+        except Exception as exc:
+            print(f"[Limitless] Could not open decklist image: {exc}")
+
+    def _click_open_as_image(self):
+        """Click the 'Open as image' button on the match page.
+
+        Fallback for when the button is a JS button with no href. We first
+        try to extract the decklist image URL directly from the page and open
+        it in the browser (visible to the player); if that fails we click the
+        button on the page that has it.
+        """
+        # Dedupe: only open once per match URL.
+        if getattr(self, "_last_open_image_match", "") == self.chat_target_url:
+            return
+        self._last_open_image_match = self.chat_target_url
+
+        # Prefer extracting the decklist image URL and opening it in the
+        # player's browser (front tab) — clicking on the hidden chat page
+        # would open the image where the player can't see it.
+        extract_js = """
+            (() => {
+                // The decklist section usually contains an <img> or a link
+                // to the rendered decklist image.
+                const decklist = document.querySelector('#decklist, [id*="decklist"], [class*="decklist"]');
+                if (decklist) {
+                    const img = decklist.querySelector('img');
+                    if (img && img.src) return img.src;
+                    const link = decklist.querySelector('a[href*="image"], a[href*=".png"], a[href*=".jpg"], a[href*=".webp"]');
+                    if (link && link.href) return link.href;
+                }
+                // Fall back to any image link on the page.
+                const anyLink = document.querySelector('a[href*=".png"], a[href*=".jpg"], a[href*=".webp"]');
+                if (anyLink && anyLink.href) return anyLink.href;
+                return '';
+            })();
+        """
+
+        def _handle_image_url(url, page_ref):
+            url = str(url or "").strip()
+            if url:
+                self._open_decklist_image_tab(url)
+                return
+            # No URL found — click the button on the page as a last resort.
+            click_js = """
+                (() => {
+                    const el = document.querySelector('[data-tcglive-open-image]') ||
+                        Array.from(document.querySelectorAll('a, button, [role="button"]'))
+                            .find(e => /open as image/i.test((e.innerText || '') + (e.getAttribute('aria-label') || '')));
+                    if (el) { el.click(); return true; }
+                    return false;
+                })();
+            """
+            try:
+                page_ref.runJavaScript(click_js)
+            except Exception:
+                pass
+
+        page = None
+        try:
+            if self.chat_page is not None:
+                chat_url = self.chat_page.url().toString()
+                if chat_url and "/match/" in chat_url:
+                    page = self.chat_page
+            if page is None and self.visible_view is not None:
+                visible_url = self.visible_view.page().url().toString()
+                if visible_url and "/match/" in visible_url:
+                    page = self.visible_view.page()
+        except Exception:
+            page = None
+        if page is not None:
+            try:
+                page.runJavaScript(extract_js, lambda url, p=page: _handle_image_url(url, p))
+            except Exception:
+                pass
 
     def _handle_auto_checkin_result(self, clicked, context):
         if clicked:
@@ -1810,6 +2252,31 @@ class MetaTableItem(QTableWidgetItem):
                 except Exception:
                     return str(left) < str(right)
         return super().__lt__(other)
+
+
+def _console_python():
+    """python.exe (not pythonw.exe) so debug tools get a visible console."""
+    exe = sys.executable or "python"
+    if exe.lower().endswith("pythonw.exe"):
+        candidate = exe[: -len("pythonw.exe")] + "python.exe"
+        if os.path.exists(candidate):
+            return candidate
+    return exe
+
+
+_RUNNING_THREADS = set()
+
+
+def _start_thread(thread):
+    """Start a QThread and keep a strong reference until it finishes.
+
+    Fetchers used to live only on the StatsWindow; closing the window
+    mid-fetch destroyed a running QThread and aborted the process (BUG-022).
+    """
+    _RUNNING_THREADS.add(thread)
+    thread.finished.connect(lambda t=thread: _RUNNING_THREADS.discard(t))
+    thread.start()
+    return thread
 
 
 class MetaFetcher(QThread):
@@ -2646,13 +3113,23 @@ class StatsWindow(QWidget):
 
         self.setGeometry(new_left, new_top, new_right - new_left, new_bottom - new_top)
 
+    def _schedule_geometry_save(self):
+        """Debounced: write geometry once movement/resizing pauses (BUG-028)."""
+        timer = getattr(self, "_geometry_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self.save_window_geometry)
+            self._geometry_timer = timer
+        timer.start(400)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.save_window_geometry()
+        self._schedule_geometry_save()
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        self.save_window_geometry()
+        self._schedule_geometry_save()
 
     def closeEvent(self, event):
         try:
@@ -3738,7 +4215,7 @@ class StatsWindow(QWidget):
             open_btn = QPushButton("Limitless ↗")
             open_btn.setObjectName("limitlessBtn")
             open_btn.setFixedHeight(30)
-            open_btn.clicked.connect(lambda checked=False, url=matched_row.get("deck_url"): webbrowser.open(url))
+            open_btn.clicked.connect(lambda checked=False, url=matched_row.get("deck_url"): _is_safe_web_url(url) and webbrowser.open(url))
             hero_top.addWidget(open_btn)
         hero_layout.addLayout(hero_top)
 
@@ -3893,7 +4370,7 @@ class StatsWindow(QWidget):
         self._decks_meta_fetcher = MetaFetcher("limitless_standard")
         self._decks_meta_fetcher.data_ready.connect(self._on_decks_meta_data)
         self._decks_meta_fetcher.error.connect(self._on_decks_meta_error)
-        self._decks_meta_fetcher.start()
+        _start_thread(self._decks_meta_fetcher)
 
     def _on_decks_meta_data(self, source, data):
         self.limitless_standard_meta = data
@@ -4327,6 +4804,16 @@ class StatsWindow(QWidget):
         self.local_only_checkbox.toggled.connect(lambda checked: self.refresh_parser_mode_status())
         parser_layout.addWidget(self.local_only_checkbox)
 
+        self.auto_export_checkbox = QCheckBox("Auto-export the battle log at the end of each battle")
+        self.auto_export_checkbox.setObjectName("settingsCheck")
+        self.auto_export_checkbox.setToolTip(
+            "Clicks BATTLE LOG and export for you when a battle ends (only while the game window is focused). "
+            "Takes effect within a few seconds - no restart needed."
+        )
+        self.auto_export_checkbox.setChecked(bool(self.app_settings.get("auto_export_battle_log", True)))
+        self.auto_export_checkbox.toggled.connect(self._save_auto_export_setting)
+        parser_layout.addWidget(self.auto_export_checkbox)
+
         parser_btn_row = QHBoxLayout()
         parser_btn_row.setSpacing(8)
 
@@ -4741,7 +5228,8 @@ class StatsWindow(QWidget):
                 continue
             link = item.data(Qt.ItemDataRole.UserRole + 1)
             if link:
-                webbrowser.open(link)
+                if _is_safe_web_url(link):
+                    webbrowser.open(link)
                 return
 
     def _trend_display(self, trend):
@@ -4752,7 +5240,7 @@ class StatsWindow(QWidget):
         return "EVEN", "#F9A825"
 
     def _open_row_link(self, links, row):
-        if 0 <= row < len(links) and links[row]:
+        if 0 <= row < len(links) and links[row] and _is_safe_web_url(links[row]):
             webbrowser.open(links[row])
 
     def handle_tab_changed(self, index):
@@ -4979,7 +5467,7 @@ class StatsWindow(QWidget):
         self._limitless_fetcher = MetaFetcher(source)
         self._limitless_fetcher.data_ready.connect(self._on_limitless_data)
         self._limitless_fetcher.error.connect(self._on_limitless_error)
-        self._limitless_fetcher.start()
+        _start_thread(self._limitless_fetcher)
 
     def _on_limitless_data(self, source, data):
         self.limitless_refresh_btn.setEnabled(True)
@@ -5111,7 +5599,7 @@ class StatsWindow(QWidget):
         self._trainerhill_fetcher = MetaFetcher('trainerhill')
         self._trainerhill_fetcher.data_ready.connect(self._on_trainerhill_data)
         self._trainerhill_fetcher.error.connect(self._on_trainerhill_error)
-        self._trainerhill_fetcher.start()
+        _start_thread(self._trainerhill_fetcher)
 
     def _on_trainerhill_data(self, source, data):
         self.trainerhill_refresh_btn.setEnabled(True)
@@ -5326,7 +5814,7 @@ class StatsWindow(QWidget):
         self._japan_fetcher = JapanFetcher(ai_enabled=ai_enabled, api_key=api_key, force=False)
         self._japan_fetcher.data_ready.connect(self._on_japan_data)
         self._japan_fetcher.error.connect(self._on_japan_error)
-        self._japan_fetcher.start()
+        _start_thread(self._japan_fetcher)
 
     def _japan_hard_refresh(self):
         """Force a full re-fetch AND re-run the AI translation."""
@@ -5347,7 +5835,7 @@ class StatsWindow(QWidget):
         self._japan_fetcher = JapanFetcher(ai_enabled=ai_enabled, api_key=api_key, force=True)
         self._japan_fetcher.data_ready.connect(self._on_japan_data)
         self._japan_fetcher.error.connect(self._on_japan_error)
-        self._japan_fetcher.start()
+        _start_thread(self._japan_fetcher)
 
     def _on_japan_data(self, source, data):
         self.japan_refresh_btn.setEnabled(True)
@@ -5393,6 +5881,9 @@ class StatsWindow(QWidget):
             self.japan_table.setSortingEnabled(False)
         self.japan_table.setRowCount(0)
         for i, row in enumerate(rows[:50]):
+            # Japanese sources report top finishes, not match records, so
+            # win-rate columns would be meaningless (they showed 100%).
+            has_record = (row.get("losses") or 0) > 0 or (row.get("ties") or 0) > 0
             summary = self._summarize_meta_record(row)
             wins = float(row.get("wins", 0) or 0)
             losses = float(row.get("losses", 0) or 0)
@@ -5411,11 +5902,16 @@ class StatsWindow(QWidget):
                 1,
                 row.get("deck", ""),
                 row.get("icons", []),
-                subtitle=f"{int(row.get('count', 0) or 0)} finishes • {summary.get('confidence_label', 'n/a')}",
+                subtitle=(f"{int(row.get('count', 0) or 0)} finishes • {summary.get('confidence_label', 'n/a')}"
+                          if has_record else f"{row.get('count', 0)} weighted top finishes"),
                 sort_value=(row.get("deck", "") or "").lower(),
             )
             self._set_meta_item(self.japan_table, i, 2, str(row.get('count', 0)), sort_value=int(row.get('count', 0) or 0))
             self._set_meta_item(self.japan_table, i, 3, f"{row.get('share', 0):.1f}%", sort_value=float(row.get('share', 0) or 0))
+            if not has_record:
+                for col in range(4, 10):
+                    self._set_meta_item(self.japan_table, i, col, "—", muted=True, sort_value=-1)
+                continue
             self._set_meta_item(self.japan_table, i, 4, str(int(wins)), accent="#66BB6A", sort_value=wins)
             self._set_meta_item(self.japan_table, i, 5, str(int(losses)), accent="#EF5350", sort_value=losses)
             pct_color = "#66BB6A" if raw_pct >= 55 else "#EF5350" if raw_pct < 45 else "#F9A825"
@@ -5721,7 +6217,7 @@ class StatsWindow(QWidget):
             kwargs = {}
             if sys.platform == "win32":
                 kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
-            subprocess.Popen([sys.executable, os.path.join(BASE_DIR, "TCGLiveMonitor.py"), "--ocr-test"], **kwargs)
+            subprocess.Popen([_console_python(), os.path.join(BASE_DIR, "TCGLiveMonitor.py"), "--ocr-test"], cwd=BASE_DIR, **kwargs)
         except Exception as e:
             print(f"Error launching OCR test: {e}")
     
@@ -5732,7 +6228,7 @@ class StatsWindow(QWidget):
             kwargs = {}
             if sys.platform == "win32":
                 kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
-            subprocess.Popen([sys.executable, os.path.join(BASE_DIR, "AIParseBattleLog.py")], **kwargs)
+            subprocess.Popen([_console_python(), os.path.join(BASE_DIR, "AIParseBattleLog.py")], cwd=BASE_DIR, **kwargs)
         except Exception as e:
             print(f"Error launching AI parser: {e}")
 
@@ -5761,8 +6257,14 @@ class StatsWindow(QWidget):
         if hasattr(self, "parser_mode_status_label"):
             self.parser_mode_status_label.setText(text)
 
+    def _save_auto_export_setting(self, checked):
+        self.app_settings = load_app_settings()
+        self.app_settings["auto_export_battle_log"] = bool(checked)
+        save_app_settings(self.app_settings)
+
     def save_parser_settings(self):
         key_value = (self.api_key_input.text() if hasattr(self, "api_key_input") else "").strip()
+        self.app_settings = {**load_app_settings(), **self.app_settings}
         self.app_settings["local_only_mode"] = bool(
             self.local_only_checkbox.isChecked() if hasattr(self, "local_only_checkbox") else False
         )
@@ -6337,7 +6839,9 @@ class StatsWindow(QWidget):
     def update_winrate_graph(self):
         """Update win rate graph"""
         try:
-            data = self.db.get_win_rate_over_time(days=30)
+            # Last 30 days you actually played (not the last 30 calendar
+            # days, which is often a single point after a break).
+            data = (self.db.get_win_rate_over_time(days=3650) or [])[-30:]
             if not data:
                 return
             

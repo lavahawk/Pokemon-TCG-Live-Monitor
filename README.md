@@ -1,4 +1,4 @@
-# Pokemon TCG Live Monitor v2.3
+# Pokemon TCG Live Monitor v2.4
 **AI-Powered Battle Analysis • OCR Rank Detection • Live Overlay UI • Database Statistics**
 
 ---
@@ -7,40 +7,29 @@
 
 ---
 
-## Quick Install (v2.3)
+## Quick Install (v2.4)
 
-**For first-time setup or upgrade from v2.x:**
+**Option A: installer:** run `Pokemon-TCG-Live-Monitor-v2.4.0-Setup.exe` from the Releases page. No admin rights are needed.
 
-1. **Right-click** `Installers\INSTALL_COMPLETE_v2.3.bat`
-2. Select **"Run as Administrator"**
-3. Follow prompts (Python + Tesseract auto-install if needed)
-4. Enter your OpenAI API key when prompted — **or choose Local-Only mode** (no API key needed)
-5. **Done!** Auto-starts on login with no console window
+**Option B: from the source folder:** double-click `Installers\INSTALL_COMPLETE_v2.4.bat`. You don't need to run it as Administrator.
 
-See **[Installers/README.md](Installers/README.md)** for full installation guide.
+Either way, setup:
+1. Finds Python 3.10–3.12, or installs Python 3.12 for your user if none is found.
+2. Creates `.venv` and installs the packages, then downloads Tesseract OCR if needed.
+3. Asks for an optional OpenAI API key. Leave it empty for Local-Only mode.
+4. Registers auto-start: the monitor starts hidden at login, waits quietly until Pokemon TCG Live opens, then shows the overlay.
 
----
+**Debug mode:** run `Run_TCGLiveMonitor_Command_Prompt.bat` to see live output in a console. Everything is also written to `Logs\monitor.log`. Auto-export events go to `Logs\autoclicker.log`.
 
-## What's New in v2.3
+**After pulling new code** that changes `requirements.txt`, run `Install_Dependencies.bat`.
 
-### Performance
-- **Faster deck icon menus** — Sprite icons are cached in memory, so the deck icon picker and deck dashboards load instantly.
-- **Cached icon choices** — The Pokemon icon list is computed once and reused.
-
-### Reliability
-- **Fixed numpy/OpenCV crash** — New installs no longer hit the `numpy.dtype size changed` binary incompatibility error during rank detection. numpy is pinned to `1.26.4`.
-- **Complete dependency set** — The installer now also installs the meta-analysis packages.
-
-### Local-Only Mode (No API Key Required)
-- **Works out of the box** — Full monitor, OCR rank/deck detection, overlay, and stats database all work without an OpenAI API key.
-- **Clear guidance** — When no API key is present, the app explains local-only mode and guides you through manual deck entry.
+See **[RELEASE_NOTES_v2.4.md](RELEASE_NOTES_v2.4.md)** for what changed, and `DevVault/` (open it as an Obsidian vault) for architecture, process maps and the bug register.
 
 ---
 
 ## Features
 - **Integrated Overlay UI** - Auto-starts with monitoring, follows game window  
 - **League Pokeball Icons** - 8-bit icons change based on Elo tier (Nest/Quick/Poke/Great/Ultra/Master)  
-- **Click-Through Overlay** - Won't block gameplay, completely transparent to clicks  
 - **OCR Rank Detection** - Auto-detects Elo from screen (zero false positives!)  
 - **Max Rank Tracking** - Tracks your highest rank achieved  
 - **OCR Deck Detection** - Detects actual deck name from screen  
@@ -103,16 +92,18 @@ Or add to Windows startup using `AutoRun_Add.py`
 - `startup_utils.py` - Startup/launch helpers
 
 ### Installers & Launchers
-- `Installers\INSTALL_COMPLETE_v2.3.bat` - Main installer
-- `Installers\Start_GUI_Mode_v2.3.bat` - GUI mode launcher
-- `Installers\Remove_AutoStart_v2.3.bat` - Remove from startup
+- `Installers\INSTALL_COMPLETE_v2.4.bat` - Main installer (calls `bootstrap_setup.ps1`)
+- `Installers\Start_GUI_Mode_v2.4.bat` - Debug console launcher
+- `Installers\Remove_AutoStart_v2.4.bat` - Remove from startup
 - `Run_Headless.bat` - Headless launcher
 - `Run_TCGLiveMonitor_Command_Prompt.bat` - Console mode
 
 ### Utilities
 - `AutoRun_Add.py` - Add to Windows startup
 - `AutoRun_Remove.py` - Remove from startup
-- `AutoClicker.py` - Button automation (beta)
+- `BattleEndAutomation.py` + `AutoClicker.py` - Battle-end auto-export (BATTLE LOG → export)
+- `game_window.py` - Shared game-window lookup
+- `leagues.py` - Ladder league thresholds
 - `SetupStartup.py` - Startup manager GUI
 
 ### Configuration Files

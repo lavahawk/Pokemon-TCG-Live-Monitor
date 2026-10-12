@@ -3,7 +3,7 @@ Minimal Game Overlay for Pokemon TCG Live Monitor v2.1
 Ultra-compact, professional overlay that follows the game and allows click-through
 """
 
-VERSION = "2.1"
+VERSION = "2.4"
 
 import sys
 import os
@@ -15,8 +15,8 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize
-from PySide6.QtGui import QPixmap, QPainter, QColor
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize, QRectF
+from PySide6.QtGui import QPixmap, QPainter, QColor, QFont
 from BattleDatabase import BattleDatabase
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,10 +25,19 @@ LOG_DIR = os.path.join(BASE_DIR, "Logs")
 # --- DEBUG LOGGING (internal only) ---
 import datetime as _dt
 _DBG_FILE = os.path.join(BASE_DIR, ".overlay_debug.log")
+_DBG_MAX_BYTES = 1_000_000
+
+
 def _dbg(msg):
-    line = f"[{_dt.datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {msg}\n"
-    with open(_DBG_FILE, "a", encoding="utf-8") as _f:
-        _f.write(line)
+    """Small rotating debug log (was unbounded: 11 MB+, BUG-019)."""
+    try:
+        if os.path.exists(_DBG_FILE) and os.path.getsize(_DBG_FILE) > _DBG_MAX_BYTES:
+            os.replace(_DBG_FILE, _DBG_FILE + ".1")
+        line = f"[{_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}] {msg}\n"
+        with open(_DBG_FILE, "a", encoding="utf-8") as _f:
+            _f.write(line)
+    except Exception:
+        pass
 # --- END DEBUG ---
 
 
@@ -85,23 +94,178 @@ def create_pokeball_icon(ball_type="poke"):
 
 
 def get_league_from_elo(elo):
-    """Determine which league ball to show based on Elo"""
-    try:
-        elo_num = int(elo)
-        if elo_num >= 550:
-            return "master"
-        elif elo_num >= 390:
-            return "ultra"
-        elif elo_num >= 230:
-            return "great"
-        elif elo_num >= 110:
-            return "poke"
-        elif elo_num >= 30:
-            return "quick"
+    """Which league ball to show for a ladder rank (thresholds in leagues.py)."""
+    from leagues import league_for_rank
+    return league_for_rank(elo)
+
+
+class LimitlessChatWindow(QWidget):
+    """Standalone floating chat window for Limitless match chat.
+
+    Completely transparent and click-through (WS_EX_TRANSPARENT |
+    WS_EX_LAYERED), positioned above the mini stats GUI. Messages are painted
+    directly (no child widgets) so there is no opaque box. Text fades:
+      - with HEIGHT: messages higher up (older) are dimmer
+      - with TIME: messages older than 10s fade to invisible over 5s
+    Action/system messages (check-ins, game reports) are italicized.
+    """
+
+    FADE_AFTER_S = 25.0    # full visibility for this long
+    FADE_DURATION_S = 10.0   # then fade out over this many seconds
+    MAX_MESSAGES = 8
+    WIDTH = 300
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("LimitlessChat")
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowTransparentForInput
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.messages = []  # [{text, type, ts(datetime)}]
+        self._hovered = False
+        # Repaint regularly so time-based fading animates smoothly.
+        self._fade_timer = QTimer(self)
+        self._fade_timer.setInterval(100)
+        self._fade_timer.timeout.connect(self.update)
+        self._fade_timer.start()
+
+    # --- click-through -----------------------------------------------------
+    def showEvent(self, event):
+        super().showEvent(event)
+        try:
+            import win32gui, win32con, win32api
+            hwnd = int(self.winId())
+            style = win32api.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            win32api.SetWindowLong(
+                hwnd, win32con.GWL_EXSTYLE,
+                style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT,
+            )
+        except Exception:
+            pass
+
+    # --- data --------------------------------------------------------------
+    def set_messages(self, messages, own_name=""):
+        """Replace the message list.
+
+        Each item: {text, type, sender, ts(ISO str)}. Messages whose sender
+        matches own_name are right-aligned (yours); others left-aligned
+        (opponent's); actions centered.
+        """
+        now = datetime.now()
+        self.own_name = (own_name or "").strip().lower()
+        self.messages = []
+        for msg in messages[-self.MAX_MESSAGES:]:
+            text = str(msg.get("text") or "").strip()
+            if not text:
+                continue
+            mtype = str(msg.get("type") or "chat")
+            sender = str(msg.get("sender") or "").strip()
+            try:
+                ts = datetime.fromisoformat(str(msg.get("ts") or ""))
+            except Exception:
+                ts = now
+            self.messages.append({"text": text, "type": mtype, "sender": sender, "ts": ts})
+        self._relayout()
+        if self.messages:
+            self.show()
         else:
-            return "nest"
-    except:
-        return "poke"  # Default
+            self.hide()
+
+    def _is_own(self, msg):
+        """True if the message was sent by the player (right-aligned)."""
+        sender = (msg.get("sender") or "").strip().lower()
+        return bool(sender) and bool(self.own_name) and sender == self.own_name
+
+    def _relayout(self):
+        """Compute required height from wrapped text and resize the window."""
+        if not self.messages:
+            self.hide()
+            return
+        fm = self.fontMetrics()
+        font = self.font()
+        line_h = fm.height() + 2
+        total_h = 0
+        for msg in self.messages:
+            f = QFont(font)
+            f.setItalic(msg["type"] == "action")
+            lines = 0
+            remaining = msg["text"]
+            # Simple greedy word-wrap to count lines.
+            words = remaining.split()
+            cur = ""
+            for word in words:
+                trial = (cur + " " + word).strip()
+                if fm.horizontalAdvance(trial) > self.WIDTH - 16 and cur:
+                    lines += 1
+                    cur = word
+                else:
+                    cur = trial
+            lines += 1
+            msg["lines"] = lines
+            total_h += lines * line_h + 4
+        self.setFixedSize(self.WIDTH, total_h + 8)
+        self.update()
+
+    # --- painting ----------------------------------------------------------
+    def paintEvent(self, event):
+        if not self.messages:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = self.font()
+        base_font_size = 9
+        line_h = base_font_size + 6
+        now = datetime.now()
+        total = len(self.messages)
+        y = 4.0
+        for index, msg in enumerate(self.messages):
+            # Height fade: newest (bottom) = 1.0, oldest (top) = 0.35.
+            height_alpha = 1.0 - (index / max(1, total)) * 0.65
+            # Time fade: full for 10s, then fade out over 5s.
+            age = (now - msg["ts"]).total_seconds()
+            if age <= self.FADE_AFTER_S:
+                time_alpha = 1.0
+            else:
+                time_alpha = max(0.0, 1.0 - (age - self.FADE_AFTER_S) / self.FADE_DURATION_S)
+            alpha = height_alpha * time_alpha
+            lines = msg.get("lines", 1)
+            if alpha <= 0.01:
+                y += lines * line_h + 4
+                continue
+            f = QFont(font)
+            f.setPixelSize(base_font_size)
+            f.setItalic(msg["type"] == "action")
+            painter.setFont(f)
+            # Conversation alignment: yours right, opponent's left,
+            # actions centered — like a normal chat.
+            if msg["type"] == "action":
+                align = Qt.AlignmentFlag.AlignHCenter
+                x = 4
+            elif self._is_own(msg):
+                align = Qt.AlignmentFlag.AlignRight
+                x = 4
+            else:
+                align = Qt.AlignmentFlag.AlignLeft
+                x = 4
+            # Slight color tint for your own messages.
+            if self._is_own(msg):
+                color = QColor(190, 214, 255, int(255 * alpha))
+            else:
+                color = QColor(228, 238, 245, int(255 * alpha))
+            painter.setPen(color)
+            rect = QRectF(x, y, self.WIDTH - 8, lines * line_h)
+            painter.drawText(
+                rect,
+                int(align | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
+                msg["text"],
+            )
+            y += lines * line_h + 4
+        painter.end()
 
 
 class MinimalOverlay(QWidget):
@@ -167,7 +331,7 @@ class MinimalOverlay(QWidget):
                 with open(pid_file, 'r') as f:
                     content = f.read().strip()
                 pid = int(content.split()[0]) if content else 0
-                monitor_running = psutil.pid_exists(pid) if pid else False
+                monitor_running = self._is_monitor_pid(pid) if pid else False
 
             if not monitor_running and self.parent_monitor_running:
                 _dbg("Monitor PID gone - quitting overlay")
@@ -177,6 +341,20 @@ class MinimalOverlay(QWidget):
             self.parent_monitor_running = monitor_running
         except Exception:
             pass  # never block the event loop
+
+    @staticmethod
+    def _is_monitor_pid(pid):
+        """True only if pid is alive AND is our monitor (PIDs get recycled)."""
+        try:
+            proc = psutil.Process(pid)
+            cmd = " ".join(proc.cmdline() or [])
+            return proc.is_running() and ("TCGLiveMonitor" in cmd)
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return False
+        except psutil.AccessDenied:
+            return True  # alive but not inspectable; assume ours
+        except Exception:
+            return psutil.pid_exists(pid)
 
     @staticmethod
     def _is_game_title(title):
@@ -281,10 +459,15 @@ class MinimalOverlay(QWidget):
             x = game_right - phys_w - margin
             y = game_bottom - phys_h - margin
 
-            _dbg(f"pos: game=({game_right},{game_bottom}) dpr={dpr} phys={phys_w}x{phys_h} -> ({x},{y})")
+            if (x, y) != getattr(self, "_last_pos", None):
+                _dbg(f"pos: game=({game_right},{game_bottom}) dpr={dpr} phys={phys_w}x{phys_h} -> ({x},{y})")
+                self._last_pos = (x, y)
 
             if not self.isVisible():
                 self.show()
+
+            # Keep the standalone chat window glued above the mini GUI.
+            self._position_chat_window()
 
             overlay_hwnd = int(self.winId())
             # If stats dashboard is open, leave z-order alone while the popup is in use.
@@ -324,32 +507,11 @@ class MinimalOverlay(QWidget):
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(2)
 
-        self.chat_frame = QFrame()
-        self.chat_frame.setObjectName("chatPanel")
-        self.chat_frame.hide()
+        # The Limitless match chat lives in its own standalone window
+        # (LimitlessChatWindow) positioned ABOVE this mini GUI — it is fully
+        # transparent, click-through, and fades with height and time.
+        self.chat_window = None
 
-        chat_layout = QVBoxLayout(self.chat_frame)
-        chat_layout.setContentsMargins(8, 7, 8, 7)
-        chat_layout.setSpacing(4)
-
-        self.chat_title_label = QLabel("Limitless Match")
-        self.chat_title_label.setObjectName("chatTitle")
-        chat_layout.addWidget(self.chat_title_label)
-
-        self.chat_subtitle_label = QLabel("")
-        self.chat_subtitle_label.setObjectName("chatSubtitle")
-        self.chat_subtitle_label.setWordWrap(True)
-        self.chat_subtitle_label.hide()
-        chat_layout.addWidget(self.chat_subtitle_label)
-
-        self.chat_messages_label = QLabel("")
-        self.chat_messages_label.setObjectName("chatMessages")
-        self.chat_messages_label.setWordWrap(True)
-        self.chat_messages_label.setTextFormat(Qt.TextFormat.PlainText)
-        chat_layout.addWidget(self.chat_messages_label)
-
-        layout.addWidget(self.chat_frame)
-        
         # Stats display with pokeball icon
         stats_layout = QHBoxLayout()
         stats_layout.setContentsMargins(0, 0, 0, 0)
@@ -393,36 +555,11 @@ class MinimalOverlay(QWidget):
                 border: 1px solid #505050;
                 border-radius: 4px;
             }
-            QFrame#chatPanel {
-                background-color: rgba(18, 18, 18, 0.92);
-                border: 1px solid #3E4A52;
-                border-radius: 6px;
-            }
             QLabel#stats {
                 color: #DCDCDC;
                 font-family: 'Segoe UI', Arial;
                 font-size: 11px;
                 font-weight: 500;
-                background-color: transparent;
-            }
-            QLabel#chatTitle {
-                color: #E9F3FF;
-                font-family: 'Segoe UI', Arial;
-                font-size: 10px;
-                font-weight: 700;
-                background-color: transparent;
-            }
-            QLabel#chatSubtitle {
-                color: #9FB2C0;
-                font-family: 'Segoe UI', Arial;
-                font-size: 9px;
-                background-color: transparent;
-            }
-            QLabel#chatMessages {
-                color: #D9E3EA;
-                font-family: 'Segoe UI', Arial;
-                font-size: 9px;
-                line-height: 1.25;
                 background-color: transparent;
             }
             QLabel#arrow {
@@ -635,29 +772,72 @@ class MinimalOverlay(QWidget):
     def update_limitless_chat(self, payload):
         try:
             state = payload if isinstance(payload, dict) else {}
-            messages = [str(msg).strip() for msg in (state.get("messages") or []) if str(msg).strip()]
+            # Messages are dicts: {text, type, sender, ts}. Normalize legacy strings.
+            messages = []
+            for msg in (state.get("messages") or []):
+                if isinstance(msg, dict):
+                    text = str(msg.get("text") or "").strip()
+                    mtype = str(msg.get("type") or "chat")
+                    sender = str(msg.get("sender") or "").strip()
+                    ts = msg.get("ts") or ""
+                else:
+                    text = str(msg).strip()
+                    mtype = "chat"
+                    sender = ""
+                    ts = ""
+                if text:
+                    messages.append({"text": text, "type": mtype, "sender": sender, "ts": ts})
             if not messages:
                 self.limitless_chat_state = {}
-                self.chat_frame.hide()
-                self.adjustSize()
+                if self.chat_window is not None:
+                    self.chat_window.hide()
                 return
 
             self.limitless_chat_state = state
-            self.chat_title_label.setText((state.get("header") or "Limitless Match")[:64])
-            subtitle = (state.get("subtitle") or "").strip()
-            if subtitle:
-                self.chat_subtitle_label.setText(subtitle[:96])
-                self.chat_subtitle_label.show()
-            else:
-                self.chat_subtitle_label.hide()
-            self.chat_messages_label.setText("\n".join(messages[-6:]))
-            self.chat_frame.setFixedWidth(280)
-            self.chat_frame.show()
-            self.adjustSize()
-            self.follow_game_window()
+            # Lazily create the standalone chat window (fully transparent,
+            # click-through, fades with height and time) and position it
+            # directly above this mini GUI.
+            if self.chat_window is None:
+                self.chat_window = LimitlessChatWindow()
+            # Pass the player's username so their own messages are
+            # right-aligned like a normal conversation.
+            try:
+                from app_settings import load_username
+                own_name = load_username() or ""
+            except Exception:
+                own_name = ""
+            self.chat_window.set_messages(messages, own_name=own_name)
+            self._position_chat_window()
         except Exception as exc:
             _dbg(f"update_limitless_chat error: {exc}")
-    
+
+    def _position_chat_window(self):
+        """Place the chat window above the mini stats GUI, right-aligned.
+
+        The chat window's RIGHT edge lines up with the mini GUI's right edge,
+        so the chat extends LEFT (up to double the mini GUI width) and never
+        runs off the right side of the screen.
+        """
+        if self.chat_window is None or not self.isVisible():
+            return
+        try:
+            geo = self.geometry()
+            chat_w = self.chat_window.width()
+            # Right-align: chat's right edge = mini GUI's right edge.
+            x = geo.x() + geo.width() - chat_w
+            # Allow extending up to double the mini GUI width to the left.
+            min_x = geo.x() + geo.width() - (self.width() * 2)
+            if x < min_x:
+                x = min_x
+            if x < 0:
+                x = 0
+            y = geo.y() - self.chat_window.height() - 8
+            if y < 0:
+                y = 0
+            self.chat_window.move(x, y)
+        except Exception as exc:
+            _dbg(f"_position_chat_window error: {exc}")
+
     def toggle_stats_dashboard(self):
         """Toggle stats dashboard open/close with smooth arrow animation"""
         if self.stats_window is None or not self.stats_window.isVisible():
@@ -728,56 +908,6 @@ class MinimalOverlay(QWidget):
         league = get_league_from_elo(self.current_rank)
         pokeball = create_pokeball_icon(league)
         self.ball_icon.setPixmap(pokeball)
-    
-    def calculate_session_stats(self):
-        """Calculate wins/losses from today's logs"""
-        try:
-            # Look for TCGExampleSheet.xlsx or battle_results*.xlsx
-            results_file = os.path.join(BASE_DIR, "TCGExampleSheet.xlsx")
-            
-            if not os.path.exists(results_file):
-                # Fallback: search for battle_results*.xlsx
-                for file in os.listdir(BASE_DIR):
-                    if file.startswith("battle_results") and file.endswith(".xlsx"):
-                        results_file = os.path.join(BASE_DIR, file)
-                        break
-            
-            if not os.path.exists(results_file):
-                print("Excel file not found")
-                return 0, 0
-            
-            # Read all sheets and count wins/losses
-            import pandas as pd
-            xl_file = pd.ExcelFile(results_file)
-            
-            total_wins = 0
-            total_losses = 0
-            
-            # Read all sheets (each deck has its own sheet)
-            for sheet_name in xl_file.sheet_names:
-                if sheet_name == "Limitless Meta":  # Skip the meta sheet
-                    continue
-                
-                try:
-                    df = pd.read_excel(results_file, sheet_name=sheet_name)
-                    
-                    # Count wins/losses in this sheet
-                    if 'Result' in df.columns:
-                        wins = len(df[df['Result'].str.upper().str.contains('WIN', na=False)])
-                        losses = len(df[df['Result'].str.upper().str.contains('LOSS', na=False)])
-                        total_wins += wins
-                        total_losses += losses
-                except Exception as e:
-                    print(f"Error reading sheet {sheet_name}: {e}")
-                    continue
-            
-            return total_wins, total_losses
-            
-        except Exception as e:
-            print(f"Error calculating stats: {e}")
-            import traceback
-            traceback.print_exc()
-            return 0, 0
 
 
 def main():

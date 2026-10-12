@@ -1,5 +1,5 @@
 """
-Pokemon TCG Live Monitor v2.3.0 - Professional Installer Creator
+Pokemon TCG Live Monitor v2.4.0 - Professional Installer Creator
 Wizard pages:
   1 - Welcome
   2 - License Agreement
@@ -28,7 +28,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-VERSION     = "2.3.0"
+VERSION     = "2.4.0"
 APP_NAME    = f"Pokemon TCG Live Monitor v{VERSION}"
 DEFAULT_DIR = os.path.join(os.environ.get("USERPROFILE", "C:\\"), "PokemonTCGLiveMonitor")
 
@@ -435,22 +435,20 @@ class Wizard(tk.Tk):
             else:
                 self._log_write("      Skipped — add key later in Stats Dashboard", "warn")
 
-            # Step 4 – Run INSTALL_COMPLETE bat
+            # Step 4 – Run the setup bootstrap (finds/installs Python 3.12, venv,
+            # packages, Tesseract, auto-start). No admin needed.
             self._set_pct(72, "Running setup script...")
-            self._log_write("[4/5] Running INSTALL_COMPLETE_v2.3.bat...", "info")
-            bat = install_path / "Installers" / "INSTALL_COMPLETE_v2.3.bat"
-            if not bat.exists():
-                cands = list(install_path.rglob("INSTALL_COMPLETE*.bat"))
-                bat = cands[0] if cands else None
-            if bat:
-                if ctypes.windll.shell32.IsUserAnAdmin():
-                    subprocess.Popen([str(bat)], shell=True, cwd=str(install_path))
-                else:
-                    ctypes.windll.shell32.ShellExecuteW(None, "runas", str(bat), "", str(install_path), 1)
-                self._log_write(f"      Launched: {bat.name}", "ok")
-                self._log_write("      (running in a separate window)", "plain")
+            self._log_write("[4/5] Running bootstrap_setup.ps1 (opens a console window)...", "info")
+            ps1 = install_path / "bootstrap_setup.ps1"
+            if ps1.exists():
+                subprocess.Popen(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1), "-AutoStart", "-Launch"],
+                    cwd=str(install_path),
+                    creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                )
+                self._log_write("      Setup is running in a separate window (several minutes).", "ok")
             else:
-                self._log_write("      [WARN] INSTALL_COMPLETE bat not found", "warn")
+                self._log_write("      [WARN] bootstrap_setup.ps1 not found in the package", "warn")
 
             # Step 5 – Done
             self._set_pct(100, "Installation complete!")
@@ -516,53 +514,46 @@ if __name__ == "__main__":
 '''
 
 # ── Builder ─────────────────────────────────────────────────────────────────
-VERSION   = "2.3.0"
+VERSION   = "2.4.0"
 BUILD_DIR = Path("Installers/Build")
 ZIP_NAME  = f"Pokemon-TCG-Live-Monitor-v{VERSION}.zip"
 EXE_NAME  = f"Pokemon-TCG-Live-Monitor-v{VERSION}-Installer"
 
 
+def read_manifest(path=Path("release_manifest.txt")):
+    """(required, optional) file lists from release_manifest.txt."""
+    required, optional = [], []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        (optional if line.endswith("?") else required).append(line.rstrip("?").replace("\\", "/"))
+    return required, optional
+
+
 def _build_zip_python(zip_path: Path):
-    """Fallback ZIP builder when Build_Release_Package.bat is unavailable."""
-    files = [
-        "TCGLiveMonitor.py", "AIParseBattleLog.py", "BattleDatabase.py",
-        "RankDetector.py", "OverlayUI.py", "StatsUI.py",
-        "app_settings.py", "deck_analytics.py", "startup_utils.py",
-        "AutoRun_Add.py", "AutoRun_Remove.py", "Run_Headless.py", "AutoClicker.py",
-        "Run_Headless.bat", "Run_TCGLiveMonitor_Command_Prompt.bat",
-        "Install_Dependencies.bat", "requirements.txt", "screen_regions.json",
-        "README.md", "QUICK_START_v2.0.md", "GITHUB_RELEASE_NOTES.md",
-        f"RELEASE_NOTES_v{VERSION[:3]}.md",
-    ]
-    optional = ["icon.ico", "ding.mp3", ".gitignore"]
-    installer_files = [
-        f"Installers/INSTALL_COMPLETE_v{VERSION[:3]}.bat",
-        f"Installers/Start_GUI_Mode_v{VERSION[:3]}.bat",
-        f"Installers/Remove_AutoStart_v{VERSION[:3]}.bat",
-        "Installers/README.md",
-    ]
+    """Build the release ZIP from release_manifest.txt (single source of truth)."""
+    required, optional = read_manifest()
+    missing = [name for name in required if not Path(name).exists()]
+    if missing:
+        raise FileNotFoundError("Release manifest files missing: " + ", ".join(missing))
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name in files + optional + installer_files:
+        for name in required + optional:
             p = Path(name)
             if p.exists():
                 zf.write(p, name)
                 print(f"      + {name}")
             else:
-                print(f"      - SKIP (not found): {name}")
+                print(f"      - optional, not found: {name}")
 
 
 def build_zip() -> Path:
     zip_path = BUILD_DIR / ZIP_NAME
     print("[1/5] Building release ZIP...")
     if zip_path.exists():
-        print(f"      [OK] Reusing existing ZIP  ({zip_path.stat().st_size // 1024} KB)")
-        return zip_path
+        zip_path.unlink()  # always rebuild - a stale ZIP shipped old code before
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    import subprocess
-    r = subprocess.run(["cmd", "/c", "Build_Release_Package.bat"], capture_output=True)
-    if r.returncode != 0 or not zip_path.exists():
-        print("      Build_Release_Package.bat unavailable — building ZIP from Python")
-        _build_zip_python(zip_path)
+    _build_zip_python(zip_path)
     if not zip_path.exists():
         raise FileNotFoundError(f"ZIP not created: {zip_path}")
     print(f"      [OK] {zip_path.stat().st_size // 1024} KB")
@@ -659,6 +650,10 @@ def create_installer():
 
 
 if __name__ == "__main__":
+    if "--zip-only" in sys.argv:
+        BUILD_DIR.mkdir(parents=True, exist_ok=True)
+        print(build_zip())
+        sys.exit(0)
     try:
         ok = create_installer()
         input("\nPress ENTER to exit...")

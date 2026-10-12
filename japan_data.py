@@ -58,7 +58,7 @@ JP_DECK_TRANSLATION = {
     "ゾロアーク": "N's Zoroark",
     "フーディン": "Alakazam",
     "ピッピ": "Clefairy",
-    "ガブリアス": "Cynthia's Garchomp",
+    "ガブリアス": "Garchomp",
     "ミュウツー": "Rocket's Mewtwo",
     "リザードン": "Charizard",
     "カビゴン": "Snorlax",
@@ -82,7 +82,7 @@ JP_DECK_TRANSLATION = {
     "ガルーラボックス": "Kangaskhan Box",
     "ガルーラバレット": "Kangaskhan Bullet",
     "プリズムバレット": "Prism Bullet",
-    "カミツオロチ": "Iron Thorns ex",
+    "カミツオロチ": "Hydrapple",
     "メガニウム": "Meganium",
     "オーロット": "Trevenant",
     "ヤドキング": "Slowking",
@@ -98,20 +98,16 @@ JP_DECK_TRANSLATION = {
     "おまつりおんど": "Festival Ground",
     "テツノイバラ": "Iron Thorns",
     "テツノイバラex": "Iron Thorns ex",
-    "ドデカバシ": "Dondozo",
-    "ばけがくれ": "Bakegakure",
+    "ドデカバシ": "Toucannon",
     "アブソル": "Absol",
-    "イワパレス": "Garganacl",
+    "イワパレス": "Crustle",
     "ノココッチ": "Dudunsparce",
-    "フーディン": "Alakazam",
-    "ガブリアス": "Garchomp",
     "ミロカロス": "Milotic",
     "サーフゴー": "Gholdengo",
     "バチュル": "Joltik",
     "ヒバニー": "Scorbunny",
     "ニンジャスピナー": "Ninja Spinner",
     "ストームエメラルダ": "Storm Emerald",
-    "ニンジャスピナー環境": "Ninja Spinner format",
     # Additional archetypes from recent tournament/tier data
     "ジュナイパー": "Decidueye",
     "フシギバナ": "Venusaur",
@@ -119,8 +115,8 @@ JP_DECK_TRANSLATION = {
     "オリーヴァ": "Arboliva",
     "バクフーン": "Typhlosion",
     "ライボルト": "Manectric",
-    "パンプジン": "Pumpkaboo",
-    "イイネイヌ": "Fidough",
+    "パンプジン": "Gourgeist",
+    "イイネイヌ": "Okidogi",
     "マリィのオーロンゲ": "Marnie's Grimmsnarl",
     "シロナのガブリアス": "Cynthia's Garchomp",
     "メガゲッコウガ": "Mega Greninja",
@@ -128,22 +124,19 @@ JP_DECK_TRANSLATION = {
     "タケルライコex": "Raging Bolt ex",
     "メガルカリオex": "Mega Lucario ex",
     "メガレックウザex": "Mega Rayquaza ex",
-    "カミツオロチex": "Iron Thorns ex",
+    "カミツオロチex": "Hydrapple ex",
     "ドラパルトexデッキ": "Dragapult ex",
     "ヤドキングデッキ": "Slowking",
     "バシャーモex＋ドラパルトex": "Blaziken ex Dragapult ex",
-    "ガルーラボックス": "Kangaskhan Box",
-    "タケルライコ": "Raging Bolt",
     "ドラゴン": "Dragon",
     "メガニウムex": "Meganium ex",
-    "ドデカバシ": "Dondozo",
     "ミミッキュ": "Mimikyu",
     "ドラメシヤ": "Dreepy",
     "テツノブジンex": "Iron Valiant ex",
     "エンペルト": "Empoleon",
     "リザードンex": "Charizard ex",
     "セグレイブ": "Baxcalibur",
-    "ガラルファイヤー": "Galarian Articuno",
+    "ガラルファイヤー": "Galarian Moltres",
     "ラティアス": "Latias",
     "ラティオス": "Latios",
     "ライコウ": "Raikou",
@@ -153,12 +146,9 @@ JP_DECK_TRANSLATION = {
     "ソウブレイズ": "Ceruledge",
     "メガミミロップ": "Mega Lopunny",
     "ブリジュラス": "Archaludon",
-    "タイジキングダム": "Tai Kingdom",
     "スターミー": "Starmie",
     "ファイアロー": "Talonflame",
     "メタング": "Metang",
-    "バテレン追放令": "Fan of Waves",
-    "ハンバリー": "Hambly",
     "ソルロック": "Solrock",
     "ルナトーン": "Lunatone",
     "ルガルガン": "Lycanroc",
@@ -166,12 +156,10 @@ JP_DECK_TRANSLATION = {
     "Nのゾロアークex": "N's Zoroark ex",
     "エースバーン": "Cinderace",
     "ダイケンキ": "Samurott",
-    "マッギヨ": "Mabostiff",
     "ウミトリオ": "Wugtrio",
     "ドオー": "Clodsire",
-    "イトマル": "Nymble",
-    "ベラカス": "Pawmo",
-    "オリガミ": "Origami",
+    "イトマル": "Spinarak",
+    "ベラカス": "Rabsca",
     "ユキメノコ": "Froslass",
     "ミミロップ": "Lopunny",
     "ブイズバレット": "Eeveelution Bullet",
@@ -182,41 +170,32 @@ JP_DECK_TRANSLATION = {
     "ゲノセクト": "Genesect",
     "ミュウex": "Mew ex",
     "マシマシラ": "Munkidori",
-    "オーリム": "Future Booster",
-    "ヒガナ": "Hibana",
+    "ヒガナ": "Zinnia",
     "テラパゴス": "Terapagos",
     "ガラルマタドガス": "Galarian Weezing",
     "ヨクバリス": "Greedent",
-    "アカツキex": "Akatsuki ex",
     "グランブル": "Granbull",
     "シンオウの化石": "Hisuian Fossil",
     "マリィ": "Marnie",
-    "ネス": "N",
     "グソクムシャ": "Golisopod",
-    "ミジュ": "Miju",
     "メガジガルデ": "Mega Zygarde",
     "シャンデラ": "Chandelure",
-    "マンデー": "Monday",
     "シャリタツ": "Tatsugiri",
-    "ガチゴラス": "Bangura",
+    "ガチゴラス": "Tyrantrum",
     "コントロール": "Control",
     "ホウオウ": "Ho-Oh",
-    "キノノタミ": "Kinanotami",
-    "メガシンヤ": "Mega Shin",
     "メガヤンマ": "Mega Yanma",
     "テラスタルバレット": "Terastal Bullet",
-    "しんちょう警備隊": "Shinchou Guard",
-    "ご幸非": "Gokou",
     "ニンフィア": "Sylveon",
     "メガシャンデラ": "Mega Chandelure",
-    "メガヤンマ": "Mega Yanma",
     "シェイミ": "Shaymin",
     "ガラガラ": "Marowak",
     "フライゴン": "Flygon",
     "ガチグマ": "Ursaluna",
-    "ダイオウドウ": "Donphan",
+    "ダイオウドウ": "Copperajah",
     "ブーピッグ": "Grumpig",
     "ウソッキー": "Sudowoodo",
+    "マッギョ": "Stunfisk",
 }
 
 def _load_limitless_deck_names(limit=60):
@@ -333,10 +312,14 @@ def translate_deck_name(jp_name, ai_enabled=False, api_key=None, force=False):
         if cand in JP_DECK_TRANSLATION:
             return JP_DECK_TRANSLATION[cand]
 
-    # 1b. Static map (substring / token match) on the stripped core first.
-    for jp_key, en_val in JP_DECK_TRANSLATION.items():
-        if jp_key and jp_key in core:
-            return en_val
+    # 1b. Static map substring match: LONGEST key wins, so
+    #     "メガゲッコウガex" -> "Mega Greninja" (not "Greninja") (BUG-027).
+    best_key = ""
+    for jp_key in JP_DECK_TRANSLATION:
+        if jp_key and jp_key in core and len(jp_key) > len(best_key):
+            best_key = jp_key
+    if best_key:
+        return JP_DECK_TRANSLATION[best_key]
 
     # 2. AI translation cache
     cache = _load_translation_cache()
@@ -344,15 +327,13 @@ def translate_deck_name(jp_name, ai_enabled=False, api_key=None, force=False):
         if cand in cache:
             return cache[cand]
 
-    # 3. AI live call (only on hard pull)
-    if ai_enabled and api_key and force:
-        en = _ai_translate(candidates, api_key).get(jp_name) or _ai_translate(candidates, api_key).get(core)
-        if en:
-            cache[jp_name] = en
-            _save_translation_cache(cache)
-            return en
-
+    # 3. Untranslated: fetch_japan_data() batches these into ONE AI call on a
+    #    hard refresh (it used to make two API calls per name).
     return jp_name
+
+
+def _looks_untranslated(text):
+    return bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]", text or ""))
 
 
 def _ai_translate(jp_names, api_key):
@@ -362,7 +343,7 @@ def _ai_translate(jp_names, api_key):
     """
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=60.0, max_retries=1)
     limitless_names = _load_limitless_deck_names(60)
     names_json = json.dumps(jp_names, ensure_ascii=False)
     align_json = json.dumps(limitless_names, ensure_ascii=False)
@@ -757,6 +738,47 @@ def _datalab_placings_to_decks(datalab_reports):
     return decks
 
 
+_FALLBACK_DATALAB = [
+    "taikairesult-m6-3w", "taikairesult-m6-2w", "taikairesult-m6-1w", "taikairesult-m5-10w", "taikairesult-m5-9w",
+]
+_FALLBACK_TOURNAMENTS = [
+    "pokemontaikaiwin20260816", "pokemontaikaiwin20260814", "pokemontaikaiwin20260809",
+    "pokemontaikaiwin20260807", "pokemontaikaiwin20260802",
+]
+
+
+def _discover_slugs(session=None, limit=5):
+    """Find the newest data-lab and daily-winner pages from the sitemap.
+
+    The slugs used to be hard-coded, so the Japan tab froze in Aug 2026
+    (BUG-027). Falls back to the old list if the sitemap can't be read.
+    """
+    datalab, tournaments = [], []
+    try:
+        index = _fetch_html(SITEMAP_URL, session)
+        sitemaps = re.findall(r"<loc>([^<]+)</loc>", index)
+        post_maps = [u for u in sitemaps if "post" in u] or sitemaps[:3]
+        urls = []
+        for sm in post_maps[:6]:
+            xml = _fetch_html(sm, session) if sm.endswith(".xml") else ""
+            urls.extend(re.findall(r"<loc>([^<]+)</loc>", xml))
+        if not post_maps:
+            urls = sitemaps
+        win = sorted({m for u in urls for m in re.findall(r"/(pokemontaikaiwin(\d{8}))/?", u)},
+                     key=lambda x: x[1], reverse=True)
+        tournaments = [slug for slug, _date in win[:limit]]
+        # Sitemaps are roughly oldest-first, so sort by (series, week) newest-first.
+        labs = {}
+        for u in urls:
+            m = re.search(r"/(taikairesult-m(\d+)-(\d+)w)/?$", u)
+            if m:
+                labs[m.group(1)] = (int(m.group(2)), int(m.group(3)))
+        datalab = [slug for slug, _key in sorted(labs.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
+    except Exception:
+        pass
+    return (datalab or list(_FALLBACK_DATALAB)), (tournaments or list(_FALLBACK_TOURNAMENTS))
+
+
 def _datalab_slugs():
     """Return a list of recent data lab report slugs (taikairesult-*)."""
     # These are the most recent weekly reports for the current environment.
@@ -797,16 +819,17 @@ def fetch_japan_data(ai_enabled=False, api_key=None, force=False, use_cache=True
     session = _get_session()
     tier_html = _fetch_html(TIER_LIST_URL, session)
     tier_decks = _extract_tier_decks(tier_html)
+    datalab_slugs, tournament_slugs = _discover_slugs(session)
 
     # Also pull recent tournament pages for more deck variety.
     tournament_decks = []
-    for slug in _tournament_slugs():
+    for slug in tournament_slugs:
         html = _fetch_html(POKEKAMESHI_BASE + "/" + slug + "/", session)
         tournament_decks.extend(_extract_tournament_decks(html))
 
     # Pull data lab weekly reports for point-weighted meta data.
     datalab_reports = []
-    for slug in _datalab_slugs():
+    for slug in datalab_slugs:
         html = _fetch_html(POKEKAMESHI_BASE + "/" + slug + "/", session)
         report = _extract_datalab_report(html)
         if report:
@@ -822,9 +845,25 @@ def fetch_japan_data(ai_enabled=False, api_key=None, force=False, use_cache=True
     datalab_decks = _datalab_placings_to_decks(datalab_reports)
     all_decks.extend(datalab_decks)
 
-    # Translation: use static map + cache; only call AI on hard pull.
+    # Translation: static map + cache. On a hard refresh with AI enabled, all
+    # still-untranslated names are sent in a single batched request.
+    if ai_enabled and api_key and force:
+        pending = sorted({
+            _clean_deck_name(d.get("deck_jp", ""))
+            for d in all_decks
+            if d.get("deck_jp") and _looks_untranslated(translate_deck_name(_clean_deck_name(d.get("deck_jp", ""))))
+        } - {""})
+        if pending:
+            try:
+                translated = _ai_translate(pending, api_key)
+                cache = _load_translation_cache()
+                cache.update({k: v for k, v in translated.items() if isinstance(v, str) and v.strip()})
+                _save_translation_cache(cache)
+            except Exception as exc:
+                print(f"[Japan] AI translation failed: {exc}")
+
     def translate_fn(jp):
-        return translate_deck_name(jp, ai_enabled=ai_enabled, api_key=api_key, force=force)
+        return translate_deck_name(jp)
 
     rows = _consolidate_rows(all_decks, translate_fn)
 
@@ -837,6 +876,7 @@ def fetch_japan_data(ai_enabled=False, api_key=None, force=False, use_cache=True
         "source": "japan",
         "timeframe": "recent",
         "datalab_reports": datalab_reports,
+        "sources": {"datalab": datalab_slugs, "tournaments": tournament_slugs},
     }
     _save_cache(data)
     return data

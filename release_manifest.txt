@@ -1,0 +1,43 @@
+# Files shipped in every release (zip, Inno Setup, portable wizard).
+# One path per line, relative to the repo root. Lines starting with # are ignored.
+# Optional files end with "?" (skipped when missing, e.g. user-captured templates).
+TCGLiveMonitor.py
+AIParseBattleLog.py
+BattleDatabase.py
+BattleEndAutomation.py
+BattleState.py
+AutoClicker.py
+ContinueBlocker.py
+SetupAutoClicker.py
+RankDetector.py
+game_window.py
+leagues.py
+OverlayUI.py
+StatsUI.py
+app_settings.py
+deck_analytics.py
+japan_data.py
+startup_utils.py
+setup_install.py
+SetupStartup.py
+AutoRun_Add.py
+AutoRun_Remove.py
+Run_Headless.py
+Run_Headless.bat
+Run_TCGLiveMonitor_Command_Prompt.bat
+Install_Dependencies.bat
+Installers\INSTALL_COMPLETE_v2.4.bat
+Installers\Start_GUI_Mode_v2.4.bat
+Installers\Remove_AutoStart_v2.4.bat
+Installers\README.md
+requirements.txt
+screen_regions.json
+icon.ico
+ding.mp3
+LICENSE
+README.md
+QUICK_START_v2.0.md
+RELEASE_NOTES_v2.4.md
+button_templates\battle_log.png?
+button_templates\battle_log_export.png?
+button_templates\templates.json?

@@ -1,9 +1,9 @@
 @echo off
 setlocal
-title Build Inno Setup Installer - Pokemon TCG Live Monitor v2.3.0
+title Build Inno Setup Installer - Pokemon TCG Live Monitor v2.4.0
 
 echo ================================================================
-echo     Pokemon TCG Live Monitor v2.3.0
+echo     Pokemon TCG Live Monitor v2.4.0
 echo          Inno Setup Installer Builder
 echo ================================================================
 echo.
@@ -52,12 +52,12 @@ echo                 BUILD COMPLETE!
 echo ================================================================
 echo.
 echo Installer created:
-echo   Installers\Build\Pokemon-TCG-Live-Monitor-v2.3.0-Setup.exe
+echo   Installers\Build\Pokemon-TCG-Live-Monitor-v2.4.0-Setup.exe
 echo.
 echo Upload to GitHub Release:
-echo   - Installers\Build\Pokemon-TCG-Live-Monitor-v2.3.0.zip
-echo   - Installers\Build\Pokemon-TCG-Live-Monitor-v2.3.0-Setup.exe
+echo   - Installers\Build\Pokemon-TCG-Live-Monitor-v2.4.0.zip
+echo   - Installers\Build\Pokemon-TCG-Live-Monitor-v2.4.0-Setup.exe
 echo.
 echo ================================================================
 echo.
-pause
+pause
