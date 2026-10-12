@@ -636,6 +636,7 @@ class Monitor:
                 running = is_game_process_running()
                 if running and not game_running:
                     log("Pokemon TCG Live detected.")
+                    ensure_username()  # no-op once saved; first run asks now, not at sign-in
                     set_low_priority(False)
                     self.ensure_overlay()
                     self.ensure_automation()
@@ -732,7 +733,10 @@ def main():
         except Exception:
             pass
     log(f"Monitor v{VERSION} starting (pid {os.getpid()}, {'console' if has_console() else 'headless'}).")
-    ensure_username()
+    if has_console() and not args.headless:
+        ensure_username()
+    # Headless (auto-start at sign-in): never block on a dialog before the game
+    # is even open - the username is asked when Pokemon TCG Live is detected.
 
     try:
         Monitor(args).run()

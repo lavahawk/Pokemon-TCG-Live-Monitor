@@ -23,3 +23,9 @@ files: [startup_utils.py, SetupStartup.py, Run_Headless.*, AutoRun_*.py, setup_i
 - `Build_Release_Package.bat`, `Build_Inno_Installer.bat`.
 
 Recommendation: one `release_manifest.txt` used by all builders, plus a smoke test that imports every module from the built folder.
+
+## 2026-10-12 release build (current)
+The offline Inno installer (`installer\build_installer.ps1` → `installer\PokemonTCGLiveMonitor.iss`) replaces the old installers above.
+- Silent install verified (exit 0). Auto-start `Run` value is only removed when it points at the install folder being changed (`RunValueIsOurs`).
+- Hidden monitor: `runtime\pythonw.exe TCGLiveMonitor.py --headless`. No dialogs before the game is detected. Idle cost ~0.3% CPU (Toolhelp32 process snapshot in `game_window.py`).
+- Single instance: a second `--headless` launch logs "Another monitor instance is already running - exiting." and exits 0.

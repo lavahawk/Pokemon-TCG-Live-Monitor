@@ -52,8 +52,50 @@ def is_game_title(title):
     return (title or "").strip().casefold() in GAME_TITLES
 
 
+def _process_names_toolhelp():
+    """Executable names of every process via CreateToolhelp32Snapshot - one
+    kernel snapshot, a few milliseconds. (psutil's per-process name lookup
+    cost ~3 s of CPU for ~600 processes, every 5 s while idle.)"""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_void_p),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snap = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        raise OSError("snapshot failed")
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        names = []
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            names.append(entry.szExeFile)
+            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+        return names
+    finally:
+        kernel32.CloseHandle(snap)
+
+
+def _is_game_name(name):
+    name = (name or "").casefold()
+    return name in GAME_PROCESS_NAMES or "pokemon tcg live" in name or "pokémon tcg live" in name
+
+
 def is_game_process_running():
-    """Cheap-ish process scan for the game executable."""
+    """Is the game running? Fast Windows snapshot; psutil as a fallback."""
+    if os.name == "nt":
+        try:
+            return any(_is_game_name(n) for n in _process_names_toolhelp())
+        except Exception:
+            pass
     try:
         import psutil
     except Exception:

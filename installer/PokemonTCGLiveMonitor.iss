@@ -104,7 +104,7 @@ Name: "{autoprograms}\{#AppName}\Uninstall {#AppName}"; Filename: "{uninstallexe
 Name: "{autodesktop}\Pokemon TCG Live Stats"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\StatsUI.py"""; WorkingDir: "{app}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#RunValue}"; ValueData: """{app}\runtime\pythonw.exe"" ""{app}\TCGLiveMonitor.py"" --headless"; Tasks: autostart; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#RunValue}"; ValueData: """{app}\runtime\pythonw.exe"" ""{app}\TCGLiveMonitor.py"" --headless"; Tasks: autostart
 
 [Run]
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\TCGLiveMonitor.py"" --headless"; WorkingDir: "{app}"; Description: "Start the monitor now"; Flags: postinstall nowait skipifsilent
@@ -143,6 +143,16 @@ begin
     'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
   Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(800);
+end;
+
+// The auto-start value is shared by every copy (a dev checkout, another
+// install folder). Only touch it when it points at THIS install.
+function RunValueIsOurs(Dir: String): Boolean;
+var
+  Value: String;
+begin
+  Result := RegQueryStringValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}', Value)
+    and (Pos(Lowercase(AddBackslash(Dir)), Lowercase(Value)) > 0);
 end;
 
 function ReadTextFile(Path: String): String;
@@ -207,8 +217,9 @@ begin
   end;
   if not FileExists(Dir + '\.openai_key') and not FileExists(Dir + '\.app_settings.json') then
     SaveStringToFile(Dir + '\.app_settings.json', '{"local_only_mode": true}', False);
-  // Unticked on this run: make sure an earlier auto-start entry is gone.
-  if not WizardIsTaskSelected('autostart') then
+  // Unticked on this run: remove an earlier auto-start entry of THIS install
+  // (never one that launches another copy, e.g. a dev checkout).
+  if not WizardIsTaskSelected('autostart') and RunValueIsOurs(Dir) then
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}');
 end;
 
@@ -220,7 +231,8 @@ begin
   if CurUninstallStep = usUninstall then
   begin
     StopRunningCopies(Dir);
-    RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}');
+    if RunValueIsOurs(Dir) then
+      RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}');
   end
   else if CurUninstallStep = usPostUninstall then
   begin

@@ -139,3 +139,8 @@ git push
 
 ## 2026-10-12 — Claude (Low-confidence marker, Meta tab only)
 - Reverted the italic/asterisk formatting on the deck page (META SCORE card, OWN GAMES SCORE tile are plain again). Meta tab only: a single asterisk (no italics) when the Score's 90% range is wider than +/- 6.5 pts (`StatsWindow.SCORE_FLAG_PTS`; meta ranges are capped near +/- 7 by the prior, so this means "still mostly the starting assumption"). Hover header: "* Low confidence · 90% range 38–55% (+/- 8.6 pts, wider than +/- 6.5)". Flags 20 of 82 rows on current data. Rank column keeps "~" for predicted ranks.
+
+## 2026-10-12 — Claude (Installer rebuild + hidden monitor)
+- Rebuilt the installer (smoke test all OK). Silent install exit 0.
+- Found and fixed: (1) the installer deleted the dev checkout's auto-start value when auto-start was unticked (restored the user's value; guarded with `RunValueIsOurs`); (2) the headless monitor blocked on the username dialog before the game opened (now deferred to game detection); (3) the idle process scan cost 33% of a core (`psutil.process_iter` ~3 s per scan) → Toolhelp32 snapshot, 16 ms, idle now ~0.3%.
+- Verified: installed hidden monitor (no window, BelowNormal, "Waiting for Pokemon TCG Live..."), and the user's real auto-start command exits cleanly while the manual monitor runs. Details in [[Handoff 2026-10-12]].
