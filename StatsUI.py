@@ -3941,9 +3941,8 @@ class StatsWindow(QWidget):
         if score and score.get("eff_games", 0) > 0:
             sc = score["score"] * 100.0
             ranked = score_info.get("ranked", 0)
-            caption = (f"Would rank #{score['rank']} of {ranked} · range {_pct_range(score['low'], score['high'])}" if score.get("rank")
-                       else f"{score.get('eff_games', 0):.0f} of {score_info.get('n_needed', 0):.0f} effective games to rank · "
-                            f"range {_pct_range(score['low'], score['high'])}")
+            caption = (f"{'Would rank' if score.get('ranked') else 'Predicted'} {self._rank_text(score)} of {ranked}"
+                       if score.get("rank") else f"range {_pct_range(score['low'], score['high'])}")
             top.addWidget(self._create_estimate_card(
                 "META SCORE", f"{sc:.0f}", self._confidence_accent(score["p_above_even"]),
                 score["low"], score["score"], score["high"], caption,
@@ -3991,11 +3990,12 @@ class StatsWindow(QWidget):
         outer.addLayout(adv)
         own = (score or {}).get("own")
         if own and score.get("eff_games", 0) > 0:
-            own_rank = f" · #{own['rank']}" if own.get("rank") and score.get("qualifies") else ""
+            own_rank = f" · {self._rank_text(own, with_range=False)}" if own.get("rank") else ""
             adv.addWidget(self._create_mini_stat(
                 "OWN GAMES SCORE", f"{own['score'] * 100:.0f}{own_rank}", "#B39DDB",
                 f"<b>Own games only: {own['score'] * 100:.1f}</b> · range {_pct_range(own['low'], own['high'])}"
-                + (f" · would rank #{own['rank']} of {score_info.get('ranked', 0)}" if own_rank else "")
+                + (f" · {'would rank' if own.get('ranked') else 'predicted'} {self._rank_text(own)} of "
+                   f"{score_info.get('ranked', 0)}" if own_rank else "")
                 + "<br>" + formulas.own_score(own, score_info)), 0, 0)
         else:
             rw = rank_summary.get("weighted_winrate", 0.0) * 100.0
@@ -6683,17 +6683,32 @@ class StatsWindow(QWidget):
         self._score_caches = caches
         return results, info
 
+    @staticmethod
+    def _rank_text(res, with_range=True):
+        """'#28' when firmly ranked, '~#28' when predicted; '(#12–#40)' range."""
+        if not res.get("rank"):
+            return ""
+        text = f"{'' if res.get('ranked') else '~'}#{res['rank']}"
+        if with_range and res.get("rank_low") is not None:
+            text += f" (#{res['rank_low']}–#{res['rank_high']})"
+        return text
+
     def _score_tooltip(self, name, res, info, is_mine):
         level = int(round(info.get("level", 0.9) * 100))
         lines = [f"<b>{name}</b>",
                  f"Score <b>{res['score'] * 100:.1f}</b> · range {_pct_range(res['low'], res['high'])}"]
         if res.get("rank"):
-            lines.append(f"{'Would rank' if is_mine else 'Rank'} #{res['rank']} of {info.get('ranked', 0)} meta decks · "
-                         f"{res.get('p_top5', 0) * 100:.0f}% chance it's really top 5"
-                         + (f" · {res['p_first'] * 100:.0f}% #1" if res.get("p_first", 0) >= 0.01 else ""))
-        elif not res.get("qualifies") and info.get("n_needed"):
-            lines.append(f"Not ranked yet: {res['eff_games']:.1f} of {info['n_needed']:.0f} effective games")
-            lines.append(f"{formulas.F}ranked when effective games ≥ (1.645 × 0.5 / {info.get('rank_margin', 15):g}%)² "
+            label = ("Rank" if res.get("ranked") else "Predicted rank") if not is_mine else \
+                ("Would rank" if res.get("ranked") else "Predicted to rank")
+            lines.append(f"{label} #{res['rank']} of {info.get('ranked', 0)} meta decks · 90% range "
+                         f"#{res.get('rank_low')}–#{res.get('rank_high')} · {res.get('p_top5', 0) * 100:.0f}% chance it's "
+                         f"really top 5" + (f" · {res['p_first'] * 100:.0f}% #1" if res.get("p_first", 0) >= 0.01 else ""))
+            lines.append(f"{formulas.DIM}Rank range: the score is re-drawn {4000:,} times from its uncertainty against "
+                         f"every ranked deck; position = 1 + decks scoring higher; range = 5th–95th percentile."
+                         f"{formulas.END}")
+        if not res.get("ranked") and info.get("n_needed"):
+            lines.append(f"Predicted, not firm: {res['eff_games']:.1f} of {info['n_needed']:.0f} effective games")
+            lines.append(f"{formulas.F}firm rank when effective games ≥ (1.645 × 0.5 / {info.get('rank_margin', 15):g}%)² "
                          f"= {info['n_needed']:.0f}{formulas.END}  {formulas.DIM}(± {info.get('rank_margin', 15):g} pts "
                          f"precision at 90%; effective = after weighting and opponent strength){formulas.END}")
         lines.append(f"{res['p_above_even'] * 100:.0f}% chance it beats the field (above 50%) · "
@@ -6707,7 +6722,8 @@ class StatsWindow(QWidget):
         own = res.get("own") if is_mine else None
         if own:
             lines.append(f"<b>Own games only</b>: {own['score'] * 100:.1f} · range {_pct_range(own['low'], own['high'])}"
-                         + (f" · would rank #{own['rank']}" if own.get("rank") and res.get("qualifies") else ""))
+                         + (f" · {'would rank' if own.get('ranked') else 'predicted'} {self._rank_text(own)}"
+                            if own.get("rank") else ""))
             lines.append(formulas.own_score(own, info))
         if is_mine:
             lines.append("<span style='color:#8A97AA'>Your games also carry your piloting and ladder opponents; "
@@ -6790,9 +6806,17 @@ class StatsWindow(QWidget):
             table.setRowHeight(i, 40)
             share = r.get(share_key) or 0.0
             rank = res.get("rank")
-            self._set_meta_item(table, i, 0, (f"★{rank}" if rank else "★") if is_mine else (str(rank) if rank else ""),
-                                accent="#B39DDB" if is_mine else None, muted=not rank and not is_mine,
+            rank_label = (("" if res.get("ranked") else "~") + str(rank)) if rank else ""
+            self._set_meta_item(table, i, 0, f"★{rank_label}" if is_mine else rank_label,
+                                accent="#B39DDB" if is_mine else None, muted=not res.get("ranked") and not is_mine,
                                 sort_value=rank or 9999, link=link)
+            if rank:
+                table.item(i, 0).setToolTip(
+                    f"{'Rank' if res.get('ranked') else 'Predicted rank'} #{rank} · 90% range "
+                    f"#{res.get('rank_low')}–#{res.get('rank_high')}"
+                    + ("" if res.get("ranked") else
+                       f"<br>~ = predicted: {res.get('eff_games', 0):.1f} of {score_info.get('n_needed', 0):.0f} "
+                       f"effective games for a firm rank"))
             table.item(i, 0).setData(MINE_ROLE, is_mine)
             basis = "own games" if (is_mine and own_basis) else "with archetype"
             eff = res.get("eff_games", 0)

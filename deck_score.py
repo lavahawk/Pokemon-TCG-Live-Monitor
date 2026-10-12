@@ -375,40 +375,42 @@ def compute_scores(meta_rows, my_decks=(), *, pilot_sd=None, min_meta_games=0,
                 "low": beta_ppf(0.05, a, b) / q0, "high": beta_ppf(0.95, a, b) / q0,
             }
 
-    # Meta archetypes are ranked among themselves. Each of your decks gets the
-    # rank it WOULD have among them (so your decks never shift the meta
-    # ranks or each other). P(#1) / P(top 5) by joint simulation.
+    # Meta archetypes with enough effective games form the ranking. EVERY deck
+    # (ranked, below the precision threshold, yours, own-games) gets a rank
+    # position from joint simulation: in each of `draws` draws, its position =
+    # 1 + number of ranked decks scoring higher. rank = position at its Score
+    # (point estimate), rank_low/high = 5th/95th percentile of the simulated
+    # position, plus P(#1) and P(top 5). "ranked" = enough data for a firm rank.
     ranked = sorted((k for k, v in results.items() if v["qualifies"] and not v["is_mine"]),
                     key=lambda k: -results[k]["score"])
-    for i, k in enumerate(ranked):
-        results[k]["rank"] = i + 1
+    tail = (1.0 - level) / 2.0
     if ranked:
         rng = np.random.default_rng(7)
         a = np.array([results[k]["_ab"][0] for k in ranked])
         b = np.array([results[k]["_ab"][1] for k in ranked])
         sims = rng.beta(a[:, None], b[:, None], size=(len(ranked), draws))
-        place = (sims[None, :, :] > sims[:, None, :]).sum(axis=1)  # decks beating each one, per draw
-        for i, k in enumerate(ranked):
-            results[k]["p_first"] = float((place[i] == 0).mean())
-            results[k]["p_top5"] = float((place[i] < 5).mean())
+        ranked_scores = np.array([results[k]["score"] for k in ranked])
+
+        def place(v, positions):
+            v["rank_low"] = int(np.quantile(positions, tail))
+            v["rank_high"] = int(np.quantile(positions, 1.0 - tail))
+            v["p_first"] = float((positions == 1).mean())
+            v["p_top5"] = float((positions <= 5).mean())
+
+        beaten = (sims[None, :, :] > sims[:, None, :]).sum(axis=1)  # ranked decks beating each one, per draw
+        index = {k: i for i, k in enumerate(ranked)}
         for k, v in results.items():
-            if not (v["is_mine"] and v["qualifies"]):
-                continue
-            v["rank"] = 1 + sum(1 for m in ranked if results[m]["score"] > v["score"])
-            mine_sims = rng.beta(v["_ab"][0], v["_ab"][1], size=draws)
-            beaten_by = (sims > mine_sims[None, :]).sum(axis=0)
-            v["p_first"] = float((beaten_by == 0).mean())
-            v["p_top5"] = float((beaten_by < 5).mean())
-        # Own-games scores get a would-be rank too.
-        for k, v in results.items():
-            own = v.get("own")
-            if not (own and v["qualifies"]):
-                continue
-            own["rank"] = 1 + sum(1 for m in ranked if results[m]["score"] > own["score"])
-            own_sims = rng.beta(own["_ab"][0], own["_ab"][1], size=draws)
-            beaten_by = (sims > own_sims[None, :]).sum(axis=0)
-            own["p_first"] = float((beaten_by == 0).mean())
-            own["p_top5"] = float((beaten_by < 5).mean())
+            targets = [v] + ([v["own"]] if v.get("own") else [])
+            for target in targets:
+                if k in index and target is v:
+                    target["rank"] = index[k] + 1
+                    positions = beaten[index[k]] + 1
+                else:
+                    target["rank"] = 1 + int((ranked_scores > target["score"]).sum())
+                    own_sims = rng.beta(target["_ab"][0], target["_ab"][1], size=draws)
+                    positions = (sims > own_sims[None, :]).sum(axis=0) + 1
+                target["ranked"] = bool(v["qualifies"])
+                place(target, positions)
 
     for v in results.values():
         v.pop("_ab", None)

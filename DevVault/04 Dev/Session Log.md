@@ -130,3 +130,6 @@ git push
 
 ## 2026-10-12 — Claude (Meta order fix)
 - Unranked rows (below the effective-games threshold) were sorted after every ranked row by share, so Gengar 46.1 appeared below decks scoring 41.9. Now every row with a Score is in Score order (unranked rows just show no rank number); placings-only rows come last, by share.
+
+## 2026-10-12 — Claude (Predicted ranks with ranges)
+- Every deck now gets a simulated rank position: per draw, position = 1 + ranked decks scoring higher. `rank` = point estimate at its Score, `rank_low`/`rank_high` = 5th/95th percentile, `ranked` = firm (effective games >= threshold). Below the threshold the # column shows "~28" (predicted) with the range on hover; the deck page says "Predicted ~#28 (#1–#62) of 64". Ranked decks show their rank range too. Gengar Testing: ~#28, 90% range #1–#62 (7 of 30 effective games).
