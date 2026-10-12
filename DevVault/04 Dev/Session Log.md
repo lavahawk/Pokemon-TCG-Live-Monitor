@@ -133,3 +133,6 @@ git push
 
 ## 2026-10-12 — Claude (Predicted ranks with ranges)
 - Every deck now gets a simulated rank position: per draw, position = 1 + ranked decks scoring higher. `rank` = point estimate at its Score, `rank_low`/`rank_high` = 5th/95th percentile, `ranked` = firm (effective games >= threshold). Below the threshold the # column shows "~28" (predicted) with the range on hover; the deck page says "Predicted ~#28 (#1–#62) of 64". Ranked decks show their rank range too. Gengar Testing: ~#28, 90% range #1–#62 (7 of 30 effective games).
+
+## 2026-10-12 — Claude (Predicted scores marked *)
+- Scores below the firm-rank threshold show italic with an asterisk ("46.1*" in the Meta tab, "46*" on the deck page META SCORE card and OWN GAMES SCORE tile). The hover starts with "* Predicted score · range 38–55% · 7.0 of 30 effective games for a firm rank" (`StatsWindow._predicted_note`).
