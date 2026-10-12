@@ -626,19 +626,21 @@ def _consolidate_rows(decks, translate_fn):
     total = sum(counts.values()) or 1
     rows = []
     for en, count in counts.items():
-        summary = bayesian_binomial_summary(count, 0, 0)
+        # pokekameshi lists placing decks, not match records, so there is no
+        # win rate here. (This used to set wins=count, losses=0, which showed
+        # every Japanese deck at ~100% - BUG-027.) Share/count only.
         rows.append({
             "deck": en,
             "count": count,
             "share": round(count / total * 100, 1),
-            "wins": count,
+            "wins": 0,
             "losses": 0,
             "ties": 0,
-            "win_pct": round(summary.get("observed", 0.0) * 100.0, 1),
-            "bayes_win_pct": round(summary.get("bayes_mean", 0.0) * 100.0, 1),
-            "ci_low_pct": round(summary.get("ci_low", 0.0) * 100.0, 1),
-            "ci_high_pct": round(summary.get("ci_high", 0.0) * 100.0, 1),
-            "confidence_label": summary.get("confidence_label"),
+            "win_pct": None,
+            "bayes_win_pct": None,
+            "ci_low_pct": None,
+            "ci_high_pct": None,
+            "confidence_label": None,
             "icons": [],
             "deck_url": None,
             "source": "japan",

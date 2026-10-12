@@ -279,20 +279,49 @@ class BattleDatabase:
             conn.close()
         return row[0] if row else None
 
-    def get_max_rank(self):
-        """Best rank, ignoring values OCR'd only once (one-off misreads)."""
+    def data_signature(self):
+        """Cheap fingerprint of everything the dashboard displays.
+
+        Changes whenever a battle or rank reading is added, edited or
+        deleted, so the dashboard can skip its 15 s refresh when nothing
+        changed (that refresh rebuilt every deck analysis and graph).
+        """
         conn = self._connect()
         try:
-            row = conn.execute("""
-                SELECT MAX(r) FROM (
-                    SELECT rank AS r FROM rank_history GROUP BY rank HAVING COUNT(*) >= 2
-                    UNION ALL
-                    SELECT my_rank AS r FROM battles WHERE my_rank IS NOT NULL
-                )
-            """).fetchone()
+            battles = conn.execute(
+                "SELECT COUNT(*), group_concat(id || '|' || COALESCE(timestamp,'') || '|' || COALESCE(my_deck,'') || '|' || "
+                "COALESCE(opponent_deck,'') || '|' || COALESCE(result,'') || '|' || COALESCE(my_rank,'') || '|' || "
+                "COALESCE(is_tournament,''), ';') FROM battles").fetchone()
+            ranks = conn.execute("SELECT COUNT(*), MAX(id), SUM(rank) FROM rank_history").fetchone()
         finally:
             conn.close()
-        return row[0] if row and row[0] else None
+        return (battles[0], hash(battles[1] or ""), tuple(ranks))
+
+    def get_max_rank(self, near=150):
+        """Best rank, ignoring isolated one-off misreads.
+
+        A rank counts when it was read at least twice, or when another
+        reading lies within `near` of it. (Requiring two identical reads
+        froze the max in Master league, where the points change after
+        every game and the same value rarely repeats.)
+        """
+        conn = self._connect()
+        try:
+            values = [r[0] for r in conn.execute(
+                "SELECT rank FROM rank_history WHERE rank IS NOT NULL UNION ALL "
+                "SELECT my_rank FROM battles WHERE my_rank IS NOT NULL")]
+        finally:
+            conn.close()
+        from collections import Counter
+        counts = Counter(values)
+        distinct = sorted(counts)
+        best = None
+        for i, v in enumerate(distinct):
+            supported = counts[v] >= 2 or any(
+                abs(v - w) <= near for w in distinct[max(0, i - 1):i + 2] if w != v)
+            if supported and (best is None or v > best):
+                best = v
+        return best
 
     def get_elo_history(self, limit=None):
         conn = self._connect()
@@ -474,6 +503,14 @@ class BattleDatabase:
     def get_deck_battles_with_rank(self, deck_name):
         rows = self._fetchall("SELECT result, my_rank, is_tournament FROM battles WHERE my_deck = ? ORDER BY timestamp ASC", (deck_name,))
         return [{"result": str(r or "").strip(), "my_rank": rank, "is_tournament": bool(t)} for r, rank, t in rows]
+
+    def get_deck_battles_detailed(self, deck_name):
+        """Every game with this deck: result, rank, tournament flag, date, opponent."""
+        rows = self._fetchall(
+            "SELECT result, my_rank, is_tournament, timestamp, opponent_deck FROM battles "
+            "WHERE my_deck = ? ORDER BY timestamp ASC", (deck_name,))
+        return [{"result": str(r or "").strip(), "my_rank": rank, "is_tournament": bool(t),
+                 "timestamp": ts, "opponent": opp} for r, rank, t, ts, opp in rows]
 
     def get_all_battles_with_rank(self):
         rows = self._fetchall("SELECT my_deck, result, my_rank, is_tournament FROM battles ORDER BY timestamp ASC")

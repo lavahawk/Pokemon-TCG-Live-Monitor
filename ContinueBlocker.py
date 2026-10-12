@@ -30,6 +30,9 @@ import win32gui
 
 BLOCKER_MAX_LIFE = 30  # failsafe: never linger longer than this
 DISMISS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Logs", ".blocker_dismiss")
+READY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Logs", ".blocker_ready")
+SHOW_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Logs", ".blocker_show")
+STANDBY_MAX_LIFE = 3 * 3600  # a hidden standby copy never outlives a long session
 
 # Default Continue-button region, relative to the game window.
 # Centered directly below the BATTLE LOG button (~50% x, ~81% y).
@@ -67,10 +70,11 @@ def _make_pokeball_pixmap(size=14):
 
 
 class ContinueBlocker(QWidget):
-    def __init__(self, rel):
+    def __init__(self, rel, standby=False, parent_pid=None):
         super().__init__()
         self.rel = rel
         self.born = time.time()
+        self.parent_pid = parent_pid
         self._dash_offset = 0.0  # animated border phase
         self._opacity = 0.0      # current window opacity (fade state)
         self._fade_target = 0.0
@@ -125,26 +129,74 @@ class ContinueBlocker(QWidget):
         # Follow the game window; animate the border + opacity; failsafe exit.
         self.follow_timer = QTimer(self)
         self.follow_timer.timeout.connect(self._follow_game)
-        self.follow_timer.start(200)
-
         self.border_timer = QTimer(self)
         self.border_timer.timeout.connect(self._border_tick)
-        self.border_timer.start(33)  # ~30fps: smooth, low CPU
-
         self.fade_timer = QTimer(self)
         self.fade_timer.timeout.connect(self._fade_tick)
-        self.fade_timer.start(16)
-
         # Watch for the monitor's dismiss signal (export hit the clipboard).
         self.dismiss_timer = QTimer(self)
         self.dismiss_timer.timeout.connect(self._check_dismiss_signal)
-        self.dismiss_timer.start(100)
-
         self.life_timer = QTimer(self)
         self.life_timer.timeout.connect(lambda: self.dismiss(close_after=True))
-        self.life_timer.start(int(BLOCKER_MAX_LIFE * 1000))
 
+        if standby:
+            # Pre-warmed during a battle: Qt is already loaded, so showing
+            # takes one poll (<= 30 ms) instead of a 1-2 s process start.
+            _dbg("standby: waiting for show signal")
+            # Pay the one-time costs now: game-window lookup, and the first
+            # show() (~320 ms of Qt window/paint setup; later shows ~10 ms),
+            # done fully transparent and off-screen.
+            self._find_game_rect()
+            QTimer.singleShot(0, self._warm_up)
+            self.show_timer = QTimer(self)
+            self.show_timer.timeout.connect(self._check_show_signal)
+            self.show_timer.start(30)
+            self.parent_timer = QTimer(self)
+            self.parent_timer.timeout.connect(self._check_parent)
+            self.parent_timer.start(5000)
+        else:
+            self.activate()
+
+    def activate(self):
+        self.born = time.time()
+        self.follow_timer.start(200)
+        self.border_timer.start(33)  # ~30fps: smooth, low CPU
+        self.fade_timer.start(16)
+        self.dismiss_timer.start(100)
+        self.life_timer.start(int(BLOCKER_MAX_LIFE * 1000))
         self._follow_game()
+        self._begin_fade_in()
+
+    def _warm_up(self):
+        self.setWindowOpacity(0.0)
+        self.move(-20000, -20000)
+        self.show()
+        self.hide()
+
+    def _check_show_signal(self):
+        if os.path.exists(SHOW_FILE):
+            self.show_timer.stop()
+            try:
+                os.remove(SHOW_FILE)
+            except Exception:
+                pass
+            _dbg("standby: show signal received")
+            self.activate()
+        elif time.time() - self.born > STANDBY_MAX_LIFE:
+            _dbg("standby: max life reached - exit")
+            os._exit(0)
+
+    def _check_parent(self):
+        """Standby copies exit when the monitor that started them is gone."""
+        if not self.parent_pid or not self.show_timer.isActive():
+            return
+        try:
+            import psutil
+            if not psutil.pid_exists(self.parent_pid):
+                _dbg("standby: monitor gone - exit")
+                os._exit(0)
+        except Exception:
+            pass
 
     def _check_dismiss_signal(self):
         """Fade out the moment the monitor signals the export happened."""
@@ -208,6 +260,15 @@ class ContinueBlocker(QWidget):
                     x, y, w, h, win32con.SWP_NOACTIVATE,
                 )
                 self._last_geom = new_geom
+                if not getattr(self, "_ready_signalled", False):
+                    # The monitor waits for this before clicking anything,
+                    # so the Continue button is covered before the sequence.
+                    self._ready_signalled = True
+                    try:
+                        with open(READY_FILE, "w", encoding="utf-8") as f:
+                            f.write(str(time.time()))
+                    except Exception:
+                        pass
             except Exception as exc:
                 _dbg(f"SetWindowPos failed: {exc}")
         if not self.isVisible() and not self._closing:
@@ -232,8 +293,9 @@ class ContinueBlocker(QWidget):
         if abs(target - cur) < 0.01:
             self._opacity = target
         else:
-            # exponential ease: fast start, gentle settle
-            self._opacity = cur + (target - cur) * 0.18
+            # exponential ease: fast start, gentle settle (snappier fade-in so
+            # the Continue button is covered almost immediately)
+            self._opacity = cur + (target - cur) * (0.4 if target > cur else 0.18)
         self.setWindowOpacity(self._opacity)
         if target == 0.0 and self._opacity <= 0.01:
             if self._closing:
@@ -299,13 +361,17 @@ def main():
     ap.add_argument("--y", type=float, default=DEFAULT_REL["y"])
     ap.add_argument("--w", type=float, default=DEFAULT_REL["w"])
     ap.add_argument("--h", type=float, default=DEFAULT_REL["h"])
+    ap.add_argument("--standby", action="store_true", help="start hidden; show on the monitor's signal")
+    ap.add_argument("--parent", type=int, default=None, help="monitor PID (standby exits when it is gone)")
     args = ap.parse_args()
 
-    _dbg(f"blocker started rel=({args.x}, {args.y}, {args.w}, {args.h})")
+    _dbg(f"blocker started rel=({args.x}, {args.y}, {args.w}, {args.h}) standby={args.standby}")
     # Qt6 already makes the process per-monitor DPI aware.
     app = QApplication.instance() or QApplication(sys.argv)
-    blocker = ContinueBlocker({"x": args.x, "y": args.y, "w": args.w, "h": args.h})
-    blocker.show()
+    blocker = ContinueBlocker({"x": args.x, "y": args.y, "w": args.w, "h": args.h},
+                              standby=args.standby, parent_pid=args.parent)
+    if not args.standby:
+        blocker.show()
     app.exec()
     _dbg("blocker exited")
 

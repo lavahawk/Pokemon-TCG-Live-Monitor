@@ -13,7 +13,7 @@ State machine (one daemon thread, runs only while the game is running):
   HOT              HUD lost < 3 min   -> look for BATTLE LOG every 0.25 s
   COLD             otherwise          -> look for BATTLE LOG every 1.5 s
                                          (catches arenas where the HUD check fails)
-  BATTLE LOG seen on 2 consecutive frames ->
+  BATTLE LOG seen (template + OCR "BATTLE LOG") ->
      * a battle log hit the clipboard in the last 25 s?  -> user did it, done
      * wait (<=20 s) for the game to be the foreground window (never click
        into another app)
@@ -70,7 +70,7 @@ def reads_battle_log(gray_crop):
 HOT_WINDOW_S = 180
 HOT_POLL_S = 0.25
 COLD_POLL_S = 1.5
-HUD_POLL_S = 1.5
+HUD_POLL_S = 0.5
 USER_EXPORT_GRACE_S = 25
 FOREGROUND_WAIT_S = 20
 EXPORT_SEARCH_S = 6.0
@@ -80,11 +80,13 @@ REARM_ABSENT_S = 60
 
 
 class BattleEndAutomation(threading.Thread):
-    def __init__(self, log_fn, launch_blocker, close_blocker, enabled_fn=lambda: True):
+    def __init__(self, log_fn, launch_blocker, close_blocker, enabled_fn=lambda: True,
+                 prewarm_blocker=lambda: None):
         super().__init__(daemon=True, name="BattleEndAutomation")
         self.log = log_fn
         self.launch_blocker = launch_blocker
         self.close_blocker = close_blocker
+        self.prewarm_blocker = prewarm_blocker
         self.enabled_fn = enabled_fn
         self.clicker = AutoClicker()
         self.window = GameWindowCache(refresh_s=5.0)
@@ -164,6 +166,9 @@ class BattleEndAutomation(threading.Thread):
                     if hud:
                         if not in_battle:
                             self.log(f"Battle HUD detected ({details[0]}).")
+                            # Load the Continue blocker now (hidden) so it can
+                            # cover Continue the instant the end screen shows.
+                            self.prewarm_blocker()
                         in_battle, last_hud, armed = True, now, True
                     elif in_battle:
                         in_battle = False
@@ -180,7 +185,9 @@ class BattleEndAutomation(threading.Thread):
                     else:
                         absent_since = now
                         streak += 1
-                    if armed and streak >= 2:
+                    # One OCR-verified frame is proof enough (no second frame:
+                    # every 0.25 s counts before the user can press Continue).
+                    if armed and streak >= 1:
                         self._handle_end_screen(hwnd, sct, rect, hit, last_hud)
                         armed, streak, last_hud = False, 0, 0.0
                         absent_since = time.time()
@@ -207,7 +214,9 @@ class BattleEndAutomation(threading.Thread):
             self.log("Battle log already on clipboard - nothing to click.")
             return
 
-        # Never click into another app: wait for the game to be focused.
+        # The blocker is always-on-top, so only show it while the game is the
+        # focused window (it used to sit over other apps while the game was in
+        # the background). Never click into another app either.
         deadline = time.time() + FOREGROUND_WAIT_S
         while not is_foreground(hwnd):
             if time.time() > deadline or self._stop.is_set():
@@ -216,14 +225,17 @@ class BattleEndAutomation(threading.Thread):
             if self._captured_since(seen_at):
                 self.log("User exported while game was unfocused.")
                 return
-            time.sleep(0.25)
-
+            time.sleep(0.1)
+        # Cover Continue first, before anything else can take time.
         blocker = self.launch_blocker()
         try:
             exported = self._click_sequence(sct, hwnd, rect, seen_at)
             self.log("Auto-export complete." if exported else "Auto-export did not confirm a clipboard capture.")
         finally:
             self.close_blocker(blocker)
+            # Reload a hidden standby blocker straight away, so a re-detected
+            # end screen (or the next battle) never needs a cold start.
+            self.prewarm_blocker()
 
     def _click_sequence(self, sct, hwnd, rect, seen_at):
         hit = self._battle_log_visible(sct, rect)

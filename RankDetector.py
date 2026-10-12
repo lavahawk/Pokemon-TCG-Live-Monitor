@@ -16,6 +16,7 @@ from PIL import Image
 # Get the script's directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REGIONS_CONFIG = os.path.join(BASE_DIR, "screen_regions.json")
+RANK_PAD_Y = 0.35  # see extract_rank()
 
 
 def _find_tesseract():
@@ -139,14 +140,16 @@ class RankDetector:
                 'height': region['height']
             }
     
-    def capture_region(self, region_name):
+    def capture_region(self, region_name, pad_y=0.0):
         """
         Capture a specific screen region
         Automatically finds game window and adjusts coordinates
-        
+
         Args:
             region_name: Name of the region defined in config
-            
+            pad_y: extra height above AND below, as a fraction of the region's
+                   own height (so it scales with the window like the region)
+
         Returns:
             PIL Image of the captured region or None if region not found
         """
@@ -154,6 +157,10 @@ class RankDetector:
         abs_region = self.get_absolute_region(region_name)
         if not abs_region:
             return None
+        if pad_y:
+            extra = int(round(abs_region["height"] * pad_y))
+            abs_region = dict(abs_region, top=abs_region["top"] - extra,
+                              height=abs_region["height"] + 2 * extra)
         
         # Validate region bounds
         if abs_region["width"] <= 0 or abs_region["height"] <= 0:
@@ -392,6 +399,45 @@ class RankDetector:
         # Convert back to PIL
         return Image.fromarray(resized)
     
+    @staticmethod
+    def preprocess_rank(image):
+        """Isolate the rank digits (white on the dark rank banner).
+
+        Keeps bright pixels only, then keeps connected shapes at least half
+        as tall as the tallest one (the digits share one height), which drops
+        specks, the banner's edge highlights and the league badge rim that
+        Otsu thresholding let through ("1446" read as "61446"). The digits
+        are cropped and scaled to a fixed ~48 px height, so the result is the
+        same at any window size.
+        """
+        gray = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        mask = (gray >= 170).astype(np.uint8)
+        count, _labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if count <= 1:
+            return None
+        heights = stats[1:, cv2.CC_STAT_HEIGHT]
+        tallest = heights.max()
+        if tallest < 6:
+            return None
+        keep = np.zeros_like(mask)
+        for i in range(1, count):
+            x, y, w, h, area = stats[i]
+            if h >= 0.5 * tallest and w <= 1.5 * tallest and area >= 4:
+                keep[_labels == i] = 1
+        ys, xs = np.nonzero(keep)
+        if len(xs) == 0:
+            return None
+        # Upscale the GRAYSCALE digits (not the binary mask) so small windows
+        # keep the digit shapes, then threshold. Non-digit pixels are blanked.
+        y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+        digits = np.where(cv2.dilate(keep, np.ones((3, 3), np.uint8))[y0:y1, x0:x1] > 0,
+                          gray[y0:y1, x0:x1], 0).astype(np.uint8)
+        scale = 48.0 / digits.shape[0]
+        digits = cv2.resize(digits, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        crop = np.where(digits >= 150, 0, 255).astype(np.uint8)   # black digits on white
+        crop = cv2.copyMakeBorder(crop, 16, 16, 16, 16, cv2.BORDER_CONSTANT, value=255)
+        return Image.fromarray(crop)
+
     def extract_rank(self, region_name="rank", debug=False):
         """
         Extract rank number from screen
@@ -403,20 +449,23 @@ class RankDetector:
         Returns:
             Integer rank number or None if not detected
         """
-        # Capture the region
-        img = self.capture_region(region_name)
+        # Capture the region. Padded vertically by 35% of its height each
+        # side: in Master league the points number sits higher than the Elo
+        # number of the lower leagues, and the calibrated box clipped the
+        # digit tops. Relative to the region, so resolution-independent.
+        img = self.capture_region(region_name, pad_y=RANK_PAD_Y)
         if img is None:
             return None
-        
-        # Preprocess for OCR
-        processed_img = self.preprocess_for_ocr(img, for_numbers=True)
-        
+
+        # Preprocess for OCR (digit isolation; generic fallback)
+        processed_img = self.preprocess_rank(img) or self.preprocess_for_ocr(img, for_numbers=True)
+
         # Save debug image if requested
         if debug:
             debug_path = os.path.join(BASE_DIR, f"debug_{region_name}.png")
             processed_img.save(debug_path)
             print(f"Debug image saved to: {debug_path}")
-        
+
         # Configure Tesseract for number-only recognition
         custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789'
         

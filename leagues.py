@@ -50,10 +50,21 @@ def league_name(rank):
     return ""
 
 
+def _league_weights():
+    """User-adjusted league weights (Advanced → Preferences), else defaults."""
+    try:
+        from weights import load_weights
+        ladder = load_weights()["ladder"]
+        return {key: float(ladder.get(key, LEAGUE_WEIGHTS[key])) for key in LEAGUE_WEIGHTS}
+    except Exception:
+        return LEAGUE_WEIGHTS
+
+
 def rank_weight_for(rank):
-    """Piecewise-linear weight between league anchors (0.25 .. 1.0)."""
+    """Piecewise-linear weight between league anchors (default 0.25 .. 1.0)."""
     value = float(rank)
-    anchors = [(threshold, LEAGUE_WEIGHTS[key]) for threshold, key, _ in LEAGUES]
+    league_weights = _league_weights()
+    anchors = [(threshold, league_weights[key]) for threshold, key, _ in LEAGUES]
     if value <= anchors[0][0]:
         return anchors[0][1]
     for (x0, w0), (x1, w1) in zip(anchors, anchors[1:]):

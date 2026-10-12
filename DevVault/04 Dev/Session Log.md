@@ -62,3 +62,9 @@ git commit -m "v2.4: fix auto-start, rework battle-end auto-export, installers, 
 git push
 ```
 (`DevVault/` is included; `Backups/` is gitignored.)
+
+
+## 2026-10-12 — Claude (Phase 3: real-game verification + follow-ups)
+**Did:** Verified auto-export in real matches and fixed what the game exposed (BUG-037 home-screen misclick, BUG-038 HUD detector, blocker timing → standby blocker 0.05 s, Master-league rank OCR). Dashboard performance (lazy deck pages, hidden-hub dashboard, background sprites, opacity slider). Statistics rework (exact Beta, pooling, meta-adjusted, tie modes, weighted personal records). Unified meta sheet (meta_sources.py: online + in-person + Japan, era/legality weighting). Preferences (weights.py). New Meta and In Person tabs, decklist capture (decklists.py). Published v2.4.0 as a GitHub pre-release.
+
+**Next:** see [[Handoff 2026-10-12]] → Open items (silent-install exit, rebuild installer, manifest update).

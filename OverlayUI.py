@@ -284,6 +284,9 @@ class MinimalOverlay(QWidget):
         self.parent_monitor_running = True
         self.db = BattleDatabase()  # Initialize database connection
         self.stats_window = None  # Stats dashboard window
+        # Pre-build the dashboard (hidden) once the hub is up, so the first
+        # click on the arrow opens it instantly.
+        QTimer.singleShot(4000, self._ensure_stats_window)
         self.stats_window_tracking_suspended = False
         self.limitless_manager = None
         self.limitless_chat_state = {}
@@ -845,22 +848,35 @@ class MinimalOverlay(QWidget):
             self.animate_arrow("▼")
             self.open_stats_dashboard()
         else:
-            # Closing - animate arrow flip up
+            # Closing - animate arrow flip up. The window is kept (hidden) so
+            # the next open is instant.
             self.animate_arrow("▲")
             self.stats_window.close()
-            self.stats_window = None
     
     def animate_arrow(self, new_text):
         """Smoothly animate arrow flip"""
         # Simple style update for smooth transition
         QTimer.singleShot(0, lambda: self.arrow_label.setText(new_text))
     
-    def open_stats_dashboard(self):
-        """Open or focus the stats dashboard window"""
+    def _ensure_stats_window(self):
+        """Build the dashboard once (hidden). Called a few seconds after the
+        hub starts, so clicking the arrow only has to show it."""
         if self.stats_window is None:
             try:
                 from StatsUI import StatsWindow
                 self.stats_window = StatsWindow(parent_overlay=self)
+                self._stats_window_shown_once = False
+            except Exception as e:
+                _dbg(f"stats window build error: {e}")
+        return self.stats_window
+
+    def open_stats_dashboard(self):
+        """Open or focus the stats dashboard window"""
+        if self.stats_window is None or not getattr(self, "_stats_window_shown_once", False):
+            try:
+                if self._ensure_stats_window() is None:
+                    return
+                self._stats_window_shown_once = True
 
                 # Show first so Qt computes the real window size
                 self.stats_window.show()

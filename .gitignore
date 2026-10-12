@@ -128,3 +128,12 @@ installer/Output/
 # Per-user app settings
 .app_settings.json
 *.log.*
+
+# Unified meta sheet event cache (meta_sources.py)
+.meta_store/
+
+# Your exported decklists (decklists.py)
+.decklists.json
+
+# Personal deck pins
+.pinned_decks.json

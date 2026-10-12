@@ -9,7 +9,8 @@ This vault is the shared engineering notebook for **Pokemon TCG Live Monitor** (
 > [!info] Current phase
 > **Phase 1: full code review and process mapping. DONE (2026-10-11).**
 > **Phase 2: v2.4 fixes. CODE DONE (2026-10-11).** 33 bugs + 8 security items fixed and written to the project folder (originals in `Backups/pre-v2.4-code/`). See [[Session Log]].
-> **Phase 3 (next): verify on Windows in a real game, then commit and push.** Checklist in [[Session Log#Windows verification checklist]].
+> **Phase 3: real-game verification + v2.4 follow-ups. DONE (2026-10-12).** Auto-export, blocker, rank OCR verified in real matches; unified meta sheet, statistics rework, Meta / In Person tabs, preferences.
+> **Phase 4 (next): fix the silent-install exit, rebuild the installer, then the open items.** → **[[Handoff 2026-10-12]]** (read this first).
 
 ## Map of this vault
 | Area | Note | What's in it |
@@ -23,6 +24,7 @@ This vault is the shared engineering notebook for **Pokemon TCG Live Monitor** (
 | Findings | [[Data Integrity Audit]] | What's actually wrong in `tcg_battles.db` and `Logs/` today |
 | Dev | [[Dev Environment and Test Harness]] | How the code was run off-Windows, scripts in `04 Dev/scripts/` |
 | Dev | [[Session Log]] | Dated log of every work session — **append to it** |
+| Dev | [[Handoff 2026-10-12]] | Latest handoff: what changed since v2.4.0, open items, how to verify |
 
 ## Headline findings (details in [[Bug Register]])
 1. **Limitless auto check-in and match-chat polling never start.** Part of `LimitlessDashboardManager.__init__` was accidentally indented into `_tournament_poll` (BUG-001). Reproduced.

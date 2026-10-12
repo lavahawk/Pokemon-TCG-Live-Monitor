@@ -22,6 +22,7 @@ output; everything is also written to Logs/monitor.log.
 """
 
 import argparse
+import atexit
 import hashlib
 import os
 import queue
@@ -46,6 +47,8 @@ LOCK_FILE = os.path.join(BASE_DIR, ".monitor_lock")
 LAST_DECK_FILE = os.path.join(BASE_DIR, ".last_deck")
 LAST_RANK_FILE = os.path.join(BASE_DIR, ".last_rank")
 BLOCKER_DISMISS_FILE = os.path.join(LOG_DIR, ".blocker_dismiss")
+BLOCKER_READY_FILE = os.path.join(LOG_DIR, ".blocker_ready")
+BLOCKER_SHOW_FILE = os.path.join(LOG_DIR, ".blocker_show")
 MONITOR_LOG = os.path.join(LOG_DIR, "monitor.log")
 CLICKER_LOG = os.path.join(LOG_DIR, "autoclicker.log")
 
@@ -314,6 +317,14 @@ def read_int(path):
         return None
 
 
+def read_text(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except Exception:
+        return ""
+
+
 _settings_cache = {"t": 0.0, "data": {}}
 
 
@@ -331,19 +342,77 @@ def app_setting(key, default):
 
 
 # ───────────────────────────── Continue blocker ─────────────────────────────
-def launch_blocker():
-    try:
-        if os.path.exists(BLOCKER_DISMISS_FILE):
-            os.remove(BLOCKER_DISMISS_FILE)
-    except Exception:
-        pass
+_standby_blocker = {"proc": None}
+
+
+def _remove_files(*paths):
+    for path in paths:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+
+def prewarm_blocker():
+    """Start a hidden standby blocker during a battle (Qt fully loaded), so
+    the end screen only needs a signal file to cover Continue (~30 ms)."""
+    proc = _standby_blocker["proc"]
+    if proc is not None and proc.poll() is None:
+        return
     if not os.path.exists(BLOCKER_SCRIPT):
-        return None
+        return
+    _remove_files(BLOCKER_SHOW_FILE)
     try:
-        return subprocess.Popen([gui_python(), BLOCKER_SCRIPT], cwd=BASE_DIR, creationflags=_no_window_flags())
+        _standby_blocker["proc"] = subprocess.Popen(
+            [gui_python(), BLOCKER_SCRIPT, "--standby", "--parent", str(os.getpid())],
+            cwd=BASE_DIR, creationflags=_no_window_flags())
     except Exception as exc:
-        alog(f"Continue blocker launch failed: {exc}")
-        return None
+        alog(f"Standby blocker launch failed: {exc}")
+
+
+def stop_standby_blocker():
+    proc = _standby_blocker["proc"]
+    _standby_blocker["proc"] = None
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def launch_blocker(wait_s=4.0):
+    """Cover the Continue button and wait until the blocker is in place.
+
+    Uses the pre-warmed standby blocker when there is one (appears in one
+    30 ms poll); otherwise starts a new one (Qt needs 1-2 s). The click
+    sequence only starts once the blocker reports it is positioned.
+    """
+    _remove_files(BLOCKER_DISMISS_FILE, BLOCKER_READY_FILE)
+    standby = _standby_blocker["proc"]
+    _standby_blocker["proc"] = None
+    if standby is not None and standby.poll() is None:
+        proc, how = standby, "standby"
+        write_text(BLOCKER_SHOW_FILE, time.time())
+    else:
+        if not os.path.exists(BLOCKER_SCRIPT):
+            return None
+        try:
+            proc, how = subprocess.Popen([gui_python(), BLOCKER_SCRIPT], cwd=BASE_DIR,
+                                         creationflags=_no_window_flags()), "cold start"
+        except Exception as exc:
+            alog(f"Continue blocker launch failed: {exc}")
+            return None
+    started = time.time()
+    while time.time() - started < wait_s:
+        if os.path.exists(BLOCKER_READY_FILE):
+            alog(f"Continue blocker up after {time.time() - started:.2f}s ({how}).")
+            return proc
+        if proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    alog(f"Continue blocker not confirmed after {time.time() - started:.1f}s - continuing anyway.")
+    return proc
 
 
 def signal_blocker_dismiss():
@@ -380,13 +449,21 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
         return
     detector = RankDetector()
     deadline = time.time() + timeout_s
+    deck = None
     while time.time() < deadline:
         try:
             if detector.is_on_main_menu(validation_method="auto"):
                 db = BattleDatabase()
-                raw_deck = detector.extract_text("my_deck_name", silent=True)
-                deck = snap_deck_name(raw_deck, db.get_known_deck_names()) if raw_deck else None
+                if not deck:
+                    raw_deck = detector.extract_text("my_deck_name", silent=True)
+                    deck = snap_deck_name(raw_deck, db.get_known_deck_names()) if raw_deck else None
                 rank = read_rank_confirmed(detector, last_accepted=read_int(LAST_RANK_FILE))
+                if rank is None and time.time() + 4 < deadline:
+                    # After a battle the points counter animates for a few
+                    # seconds, so consecutive reads disagree. Keep reading
+                    # until it settles instead of giving up (BUG-040).
+                    time.sleep(1)
+                    continue
                 if deck:
                     write_text(LAST_DECK_FILE, deck)
                 if rank:
@@ -449,7 +526,9 @@ class Monitor:
             self.automation = BattleEndAutomation(
                 alog, launch_blocker, close_blocker,
                 enabled_fn=lambda: bool(app_setting("auto_export_battle_log", True)),
+                prewarm_blocker=prewarm_blocker,
             )
+            atexit.register(stop_standby_blocker)
             self.automation.start()
         except Exception as exc:
             alog(f"Auto-export unavailable: {exc}")
@@ -457,6 +536,17 @@ class Monitor:
 
     # ── clipboard ──
     def handle_clipboard(self, text):
+        # Your own deck exported from PTCGL (Export → Copy to clipboard):
+        # remembered for the In Person tab's "Print your decklist".
+        try:
+            from decklists import is_ptcgl_decklist, save_decklist
+            if is_ptcgl_decklist(text):
+                deck = read_text(LAST_DECK_FILE) or None
+                entry = save_decklist(text, deck)
+                log(f"Decklist captured: {entry['deck']} ({entry['cards']} cards).")
+                return
+        except Exception as exc:
+            log(f"Decklist capture failed: {exc}")
         if not is_battle_log(text):
             if len(text) >= 120 and looks_like_partial_log(text):
                 stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
