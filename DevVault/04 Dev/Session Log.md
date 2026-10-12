@@ -136,3 +136,6 @@ git push
 
 ## 2026-10-12 — Claude (Predicted scores marked *)
 - Scores below the firm-rank threshold show italic with an asterisk ("46.1*" in the Meta tab, "46*" on the deck page META SCORE card and OWN GAMES SCORE tile). The hover starts with "* Predicted score · range 38–55% · 7.0 of 30 effective games for a firm rank" (`StatsWindow._predicted_note`).
+
+## 2026-10-12 — Claude (Low-confidence marker, Meta tab only)
+- Reverted the italic/asterisk formatting on the deck page (META SCORE card, OWN GAMES SCORE tile are plain again). Meta tab only: a single asterisk (no italics) when the Score's 90% range is wider than +/- 6.5 pts (`StatsWindow.SCORE_FLAG_PTS`; meta ranges are capped near +/- 7 by the prior, so this means "still mostly the starting assumption"). Hover header: "* Low confidence · 90% range 38–55% (+/- 8.6 pts, wider than +/- 6.5)". Flags 20 of 82 rows on current data. Rank column keeps "~" for predicted ranks.

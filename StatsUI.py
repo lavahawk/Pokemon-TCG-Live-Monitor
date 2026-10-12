@@ -3944,11 +3944,9 @@ class StatsWindow(QWidget):
             caption = (f"{'Would rank' if score.get('ranked') else 'Predicted'} {self._rank_text(score)} of {ranked}"
                        if score.get("rank") else f"range {_pct_range(score['low'], score['high'])}")
             top.addWidget(self._create_estimate_card(
-                "META SCORE", f"{sc:.0f}" if score.get("ranked") else f"<i>{sc:.0f}*</i>",
-                self._confidence_accent(score["p_above_even"]),
+                "META SCORE", f"{sc:.0f}", self._confidence_accent(score["p_above_even"]),
                 score["low"], score["score"], score["high"], caption,
-                self._predicted_note(score, score_info)
-                + self._score_tooltip(analysis.get("deck_name", ""), score, score_info, True),
+                self._score_tooltip(analysis.get("deck_name", ""), score, score_info, True),
             ), 0, 1)
         elif meta_adj:
             adj = meta_adj["mean"] * 100.0
@@ -3994,11 +3992,8 @@ class StatsWindow(QWidget):
         if own and score.get("eff_games", 0) > 0:
             own_rank = f" · {self._rank_text(own, with_range=False)}" if own.get("rank") else ""
             adv.addWidget(self._create_mini_stat(
-                "OWN GAMES SCORE",
-                f"{own['score'] * 100:.0f}{own_rank}" if own.get("ranked") else f"<i>{own['score'] * 100:.0f}*</i>{own_rank}",
-                "#B39DDB",
-                self._predicted_note(own, score_info)
-                + f"<b>Own games only: {own['score'] * 100:.1f}</b> · range {_pct_range(own['low'], own['high'])}"
+                "OWN GAMES SCORE", f"{own['score'] * 100:.0f}{own_rank}", "#B39DDB",
+                f"<b>Own games only: {own['score'] * 100:.1f}</b> · range {_pct_range(own['low'], own['high'])}"
                 + (f" · {'would rank' if own.get('ranked') else 'predicted'} {self._rank_text(own)} of "
                    f"{score_info.get('ranked', 0)}" if own_rank else "")
                 + "<br>" + formulas.own_score(own, score_info)), 0, 0)
@@ -6688,13 +6683,20 @@ class StatsWindow(QWidget):
         self._score_caches = caches
         return results, info
 
-    @staticmethod
-    def _predicted_note(res, info):
-        """Hover header for a score marked * (not enough effective games for a firm rank)."""
-        if res.get("ranked") or "low" not in res:
+    SCORE_FLAG_PTS = 6.5  # Meta tab: * when the 90% range is wider than +/- this (near the prior-only width ~7)
+
+    @classmethod
+    def _score_is_uncertain(cls, res):
+        return "low" in res and (res["high"] - res["low"]) * 50.0 > cls.SCORE_FLAG_PTS
+
+    @classmethod
+    def _uncertain_note(cls, res):
+        """Hover header for a Score marked * (wide 90% range)."""
+        if not cls._score_is_uncertain(res):
             return ""
-        return (f"<b>* Predicted score</b> · range {_pct_range(res['low'], res['high'])} · "
-                f"{res.get('eff_games', 0):.1f} of {info.get('n_needed', 0):.0f} effective games for a firm rank<br>")
+        half = (res["high"] - res["low"]) * 50.0
+        return (f"<b>* Low confidence</b> · 90% range {_pct_range(res['low'], res['high'])} "
+                f"(± {half:.1f} pts, wider than ± {cls.SCORE_FLAG_PTS:g})<br>")
 
     @staticmethod
     def _rank_text(res, with_range=True):
@@ -6841,17 +6843,12 @@ class StatsWindow(QWidget):
             if res and res.get("eff_games", 0) > 0:
                 sc = res["score"]
                 sacc = self._confidence_accent(res["p_above_even"])
-                firm = bool(res.get("ranked"))
-                self._set_meta_item(table, i, 2, f"{sc * 100:.1f}" + ("" if firm else "*"), accent=sacc,
+                wide = self._score_is_uncertain(res)
+                self._set_meta_item(table, i, 2, f"{sc * 100:.1f}" + ("*" if wide else ""), accent=sacc,
                                     sort_value=sc, link=link)
-                tip = self._predicted_note(res, score_info) + self._score_tooltip(
+                tip = self._uncertain_note(res) + self._score_tooltip(
                     r.get("deck", ""), res.get("own_of", res), score_info, is_mine)
-                score_item = table.item(i, 2)
-                score_item.setToolTip(tip)
-                if not firm:
-                    italic = score_item.font()
-                    italic.setItalic(True)
-                    score_item.setFont(italic)
+                table.item(i, 2).setToolTip(tip)
                 bar_wrap = QWidget()
                 bar_layout = QHBoxLayout(bar_wrap)
                 bar_layout.setContentsMargins(6, 0, 6, 0)
