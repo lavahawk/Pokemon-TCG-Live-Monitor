@@ -90,3 +90,5 @@ Derived numbers:
 | `.meta_store/last_inputs.json` | `build_meta_sheet` | `rebuild_meta_sheet`, `japan_view` | `japan` events now carry `shop`; lists cover the whole era window (online ~870, Japan ~230) |
 | `.app_settings.json` `limitless_api_key` | Advanced → Meta Data | `meta_sources.api_key()` | optional; raises the play API rate limit (env `LIMITLESS_API_KEY` also works) |
 | Sheet fields | | | rows: `lists` (decklists behind `cards`), `cards` = `[{name, cat P/T/E, set, number, incl % of lists, avg copies when played, per_list}]` (≥3% of lists, max 70); sheet: `decklists` (total lists) |
+| Sheet fields (later) | | | rows: `share_recent` (% of players in the last 21 days of online events, any Data view); sheet: `recent` = {from, to, players} |
+

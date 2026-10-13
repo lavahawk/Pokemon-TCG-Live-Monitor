@@ -75,6 +75,7 @@ ONLINE_MIN_PLAYERS = 32
 ONLINE_MAX_EVENTS = 1500     # every 32+ player event in the era window (~170 a month)
 JP_MAX_EVENTS = 1000         # every City League in the era window
 CARD_MIN_INCL = 0.03         # cards in fewer lists than this are left out of `cards`
+RECENT_DAYS = 21             # `share_recent`: popularity in the latest online (PTCGL) events
 CARD_MAX = 70
 EXPANSION_TTL = 24 * 3600
 REQUEST_WORKERS = 4
@@ -920,6 +921,7 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                                    "matchups": {},
                                    # card usage: weighted / raw list counts, per card [lists, copies, set, no.]
                                    "lists_w": 0.0, "lists_n": 0, "cards": {},
+                                   "recent": 0,  # players in the last RECENT_DAYS of online events
                                    # in-person placings (raw counts + weighted for conversion)
                                    "ip": {"day2": 0, "top32": 0, "top8": 0, "wins": 0, "best": None,
                                           "w_day2": 0.0, "w_top32": 0.0, "w_top8": 0.0}}
@@ -955,6 +957,20 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
     in_person_events = []
     events_used = {"online": 0, "in_person": 0, "japan": 0}
     in_person_records = 0  # in-person events with Labs match results
+
+    # Current popularity: every player of the online (PTCGL) events of the
+    # last RECENT_DAYS counts once, whatever the Data view. It's the closest
+    # thing to what the ladder plays right now, and the starting point when
+    # guessing an opponent's deck from a few revealed cards.
+    latest = max((d["event"]["date"] for d in online_data), default="")
+    recent_from = (date.fromisoformat(latest) - timedelta(days=RECENT_DAYS)).isoformat() if latest else ""
+    recent_players = 0
+    for data in online_data:
+        if data["event"]["date"] > recent_from:
+            for d in data["decks"]:
+                arch(d["deck"], d["deck_id"], d["icons"],
+                     f"https://play.limitlesstcg.com/decks/{d['deck_id']}?game=PTCG")["recent"] += 1
+                recent_players += 1
 
     for data in online_data:
         ev = data["event"]
@@ -1201,7 +1217,7 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
     for a in archetypes.values():
         share = 100.0 * a["share_num"] / share_den if share_den else 0.0
         w_rec = on_real_games((a["w"], a["l"], a["t"]), a["raw_games"])
-        if share < 0.05 and not a["raw_games"]:
+        if share < 0.05 and not a["raw_games"] and not a["recent"]:
             continue
         games = sum(w_rec)
         post = win_rate_posterior(*w_rec) if games else None
@@ -1214,6 +1230,8 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
             "share": round(share, 2),
             # English-legal field only (no Japan-only decks): what the ladder faces.
             "share_en": round(100.0 * a["share_en_num"] / share_en_den, 2) if share_en_den else 0.0,
+            # Share of the last RECENT_DAYS of online (PTCGL) events: today's popularity.
+            "share_recent": round(100.0 * a["recent"] / recent_players, 2) if recent_players else None,
             "top_share": round(100.0 * a["top_num"] / top_den, 2) if top_den else None,
             # Top finishes in the English field only (in-person), to compare with share_en.
             "top_share_en": round(100.0 * a["top_en_num"] / top_en_den, 2) if top_en_den else None,
@@ -1247,6 +1265,7 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
         "events": events_used,
         "in_person_records": in_person_records,
         "decklists": sum(a["lists_n"] for a in archetypes.values()),
+        "recent": {"from": recent_from, "to": latest, "players": recent_players},
         "tournaments_processed": sum(events_used.values()),
         "total_entries": sum(int(d["event"].get("players") or 0) for d in online_data)
                          + sum(int(e.get("players") or 0) for e in in_person_events),

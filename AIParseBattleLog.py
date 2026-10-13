@@ -576,7 +576,8 @@ def ai_parse(battlelog, username, api_key):
             "each archetype is given ALL the opponent's cards and their copy counts):\n"
             + (evidence["explain"] or f"Opponent revealed: {sorted(evidence['pokemon'])}") + "\n"
             + "Name the opponent's deck by its main line (the Pokemon with the most copies that the "
-            "archetype is built around), not by a 1-2 copy tech. Prefer a candidate name above when it fits.\n"
+            "archetype is built around), not by a 1-2 copy tech. Prefer a candidate name above when it fits. "
+            "In a close call between candidates, pick the more popular one (it is far more likely to be met).\n"
             + f"{username}'s own cards are NOT evidence for the opponent's deck.\n")
     prompt = f"""
 You are identifying Pokemon TCG deck archetypes from an official battle log.

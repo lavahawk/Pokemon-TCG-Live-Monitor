@@ -151,6 +151,21 @@ def test_copies_tell_main_line_from_tech():
     assert "odd for it: Zorua (8%)" in text or "Zorua" in text
 
 
+def test_close_calls_go_to_the_popular_deck():
+    def row(deck, recent, cards):
+        return {"deck": deck, "share_recent": recent, "share_en": 1.0, "lists": 100,
+                "cards": [{"name": n, "cat": "P", "incl": incl, "avg": 2} for n, incl in cards]}
+    rows = [row("Rare", 0.5, [("Duskull", 100), ("Dusknoir", 100)]),
+            row("Popular", 5.0, [("Duskull", 100), ("Dusknoir", 100), ("Budew", 10)]),
+            row("Other", 5.0, [("Dreepy", 100)])]
+    # Cards fit both, "Rare" a bit better; "Popular" is 10x more played now.
+    ranked = C.classify({"Duskull": 1, "Dusknoir": 1}, rows)
+    assert ranked[0][0]["deck"] == "Popular"
+    # A clear card read isn't overruled by popularity.
+    clear = [row("Rare", 0.5, [("Duskull", 100), ("Dusknoir", 100), ("Lunatone", 100)]), rows[1]]
+    assert C.classify({"Duskull": 1, "Dusknoir": 1, "Lunatone": 1}, clear)[0][0]["deck"] == "Rare"
+
+
 def test_counts_cut_targets():
     C.set_known_cards(["Munkidori", "Fezandipiti ex", "Mega Gengar ex", "Dreepy"])
     log = ("opp played Dreepy to the Bench.\nopp played Dreepy to the Bench.\n"

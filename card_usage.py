@@ -182,6 +182,17 @@ def _known_card_pattern():
     return _PATTERN["regex"]
 
 
+CLOSE_CALL = 2 / 3     # top pick below this = a close call ...
+CLOSE_CONTENDER = 0.25  # ... decided by popularity among picks at least this likely
+
+
+def popularity(row):
+    """% of today's field: the last weeks of online (PTCGL) events, else the
+    whole-window English share."""
+    recent = row.get("share_recent")
+    return recent if recent is not None else (row.get("share_en") or row.get("share") or 0.0)
+
+
 def classify(cards_seen, rows, top=3, floor=0.004):
     """Rank meta archetypes by how well their decklists explain the cards
     seen: log P(deck) + sum over seen cards of log P(card in a list of that
@@ -203,12 +214,12 @@ def classify(cards_seen, rows, top=3, floor=0.004):
     pokemon = {c["name"] for r in candidates for c in r["cards"] if c["cat"] == "P"}
     if not seen & pokemon:
         return []
-    total_share = sum(r.get("share_en") or r.get("share") or 0.0 for r in candidates) or 1.0
+    total_share = sum(popularity(r) for r in candidates) or 1.0
     scored = []
     for r in candidates:
         incl = {c["name"]: c["incl"] / 100.0 for c in r["cards"]}
         avg = {c["name"]: c.get("avg") or 1.0 for c in r["cards"]}
-        prior = max(1e-4, (r.get("share_en") or r.get("share") or 0.0) / total_share)
+        prior = max(1e-4, popularity(r) / total_share)
         score = math.log(prior)
         for name in seen:
             p = incl.get(name)
@@ -226,7 +237,16 @@ def classify(cards_seen, rows, top=3, floor=0.004):
     best = scored[0][0]
     weights = [math.exp(s - best) for s, _r in scored]
     norm = sum(weights)
-    return [(r, w / norm) for (_s, r), w in list(zip(scored, weights))[:top]]
+    ranked = [(r, w / norm) for (_s, r), w in list(zip(scored, weights))[:top]]
+    # Close call: the most popular contender is the better bet (it's met far
+    # more often). Probabilities stay as computed; only the order changes.
+    if ranked[0][1] < CLOSE_CALL:
+        contenders = [x for x in ranked if x[1] >= CLOSE_CONTENDER]
+        best_pop = max(contenders, key=lambda x: popularity(x[0]))
+        if best_pop is not ranked[0]:
+            ranked.remove(best_pop)
+            ranked.insert(0, best_pop)
+    return ranked
 
 
 def explain(ranked, copies, rows, max_fit=4, max_odd=3):
@@ -253,7 +273,7 @@ def explain(ranked, copies, rows, max_fit=4, max_odd=3):
         odd = [n for n in seen_p if n not in mine or mine[n]["incl"] < 10.0]
         fit_text = ", ".join(f"{n} ({mine[n]['incl']:.0f}% of lists, usually {mine[n]['avg']:.0f})"
                              for n in fits[:max_fit]) or "none"
-        line = f"{i}. {r['deck']} {prob * 100:.0f}% - fits: {fit_text}"
+        line = f"{i}. {r['deck']} {prob * 100:.0f}% (played by {popularity(r):.1f}% of the field) - fits: {fit_text}"
         if odd:
             line += "; odd for it: " + ", ".join(
                 f"{n} ({mine[n]['incl']:.0f}%)" if n in mine else f"{n} (not played)" for n in odd[:max_odd])
