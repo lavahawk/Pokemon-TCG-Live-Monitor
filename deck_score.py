@@ -2,7 +2,7 @@
 Deck Score: one number for "which decks are REALLY the best".
 
 Score = expected win rate against TODAY's English-legal field (each opponent
-weighted by its meta share, mirror = 50%), estimated with a hierarchical
+weighted by its meta share, mirror = par), estimated with a hierarchical
 Bayesian model whose priors are fitted to the data itself:
 
     deck strength   theta_d ~ Beta(mu * k_s, (1 - mu) * k_s)
@@ -24,6 +24,10 @@ Bayesian model whose priors are fitted to the data itself:
   deck spread (~4 pts), so it takes many games to move far from it - a 10-1
   start can't outrank decks measured over thousands of games.
 * Ties are split per the tie rule (deck_analytics.tie_split).
+* Par = an even deck's result under the tie rule, (1 - T)/2 + T x tie share
+  (T = the field's tie rate): 50% unless ties count as losses. Mirrors are
+  worth par and 'beats the field' means above par. Weighted records in the
+  sheet sum to the real games (weights shift influence, never add games).
 
 Returns per deck: score (mean, %), 90% range, P(score > 50%), rank among
 qualifying decks and P(#1) / P(top 5) from joint simulation. Your decks also
@@ -35,7 +39,7 @@ import math
 
 import numpy as np
 
-from deck_analytics import CREDIBLE_LEVEL, beta_cdf, beta_ppf, tie_split
+from deck_analytics import CREDIBLE_LEVEL, beta_cdf, beta_ppf, tie_par, tie_split
 
 THETA = np.linspace(0.0025, 0.9975, 399)
 _LOG_T, _LOG_1T = np.log(THETA), np.log1p(-THETA)
@@ -140,10 +144,13 @@ def _cells(matchups, overall, field, own_key):
     return cells, residual
 
 
-def score_deck(prior_a, prior_b, matchups, overall, field, own_key, k_m, level=CREDIBLE_LEVEL, extra_loglik=None):
+def score_deck(prior_a, prior_b, matchups, overall, field, own_key, k_m, level=CREDIBLE_LEVEL, extra_loglik=None,
+               par=0.5):
     """matchups: {opp_key: (w, l)} effective; overall: (W, L) effective;
     field: [(key, share)] with shares summing to 1. extra_loglik: more
-    evidence about theta on the THETA grid (in-person results)."""
+    evidence about theta on the THETA grid (in-person results). par: the
+    result rate of an even contest under the tie rule (mirror matches, and
+    the line "beats the field" is measured against)."""
     cells, residual = _cells(matchups, overall, field, own_key)
     post = _theta_posterior(prior_a, prior_b, cells, residual, k_m, extra_loglik)
 
@@ -157,8 +164,8 @@ def score_deck(prior_a, prior_b, matchups, overall, field, own_key, k_m, level=C
     terms = []
     for key, s in field:
         if key == own_key:
-            const += 0.5 * s
-            terms.append((key, s, 0.5, 0.0))
+            const += par * s
+            terms.append((key, s, par, 0.0))
             continue
         w, l = matchups.get(key, (0.0, 0.0))
         n = w + l
@@ -182,7 +189,8 @@ def score_deck(prior_a, prior_b, matchups, overall, field, own_key, k_m, level=C
         "sd": math.sqrt(max(var, 0.0)),
         "low": beta_ppf(tail, a, b),
         "high": beta_ppf(1.0 - tail, a, b),
-        "p_above_even": 1.0 - beta_cdf(0.5, a, b),
+        "p_above_even": 1.0 - beta_cdf(par, a, b),
+        "par": par,
         "strength": float((post * THETA).sum()),
         "strength_sd": math.sqrt(max(float((post * THETA ** 2).sum()) - float((post * THETA).sum()) ** 2, 0.0)),
         "coverage": covered,
@@ -248,6 +256,14 @@ def compute_scores(meta_rows, my_decks=(), *, pilot_sd=None, min_meta_games=0,
     n_needed = games_needed((strength or {}).get("rank_margin", RANK_MARGIN))
     total_share = sum(r[share_key] for r in rows) or 1.0
     field = [(r["id"], r[share_key] / total_share) for r in rows]
+    # Par = an even deck's expected result under the tie rule, from the
+    # field's tie rate (share-weighted). 50% unless ties count as losses.
+    def tie_rate(r):
+        g = sum(float(r.get(k) or 0) for k in ("wins", "losses", "ties"))
+        return float(r.get("ties") or 0) / g if g > 0 else None
+    rated = [(s, tie_rate(by)) for (key, s), by in zip(field, rows) if tie_rate(by) is not None]
+    field_tie_rate = (sum(s * t for s, t in rated) / sum(s for s, _t in rated)) if rated else None
+    par = tie_par(field_tie_rate)
 
     def scale_of(r):
         weighted = sum(float(r.get(k) or 0) for k in ("wins", "losses", "ties"))
@@ -313,12 +329,14 @@ def compute_scores(meta_rows, my_decks=(), *, pilot_sd=None, min_meta_games=0,
             return ll
         coarse = max(np.linspace(0.0, 40.0, 21), key=marginal)          # step 2
         beta_link = float(max(np.linspace(max(0.0, coarse - 2.0), coarse + 2.0, 17), key=marginal))  # step 0.25
-        if beta_link > 0:
+        # With in-person match results (Limitless Labs) in the records, the
+        # same events already shape theta; Day 2 -> Top 32 would count them twice.
+        if beta_link > 0 and not any(r.get("ip_games") for r in rows):
             extra = {k: _in_person_loglik(weighted_t[k], n, beta_link, q0, mu, kq) for k, _t, n, _c in conv_rows}
 
     results = {}
     for key, (r, overall, matchups) in prepared.items():
-        res = score_deck(prior_a, prior_b, matchups, overall, field, key, k_m, level, extra.get(key))
+        res = score_deck(prior_a, prior_b, matchups, overall, field, key, k_m, level, extra.get(key), par=par)
         res.update(eff_games=overall[0] + overall[1], is_mine=False, in_person=key in extra,
                    qualifies=float(r.get("raw_games") or 0) >= max(1, min_meta_games)
                    and overall[0] + overall[1] >= n_needed)
@@ -347,7 +365,7 @@ def compute_scores(meta_rows, my_decks=(), *, pilot_sd=None, min_meta_games=0,
         cell_frac = d.get("matchup_ladder_frac") or {}
         matchups = {k: _wl(adjust_personal(v, cell_frac.get(k, d.get("ladder_frac", 1.0)), strength)[:3])
                     for k, v in (d.get("matchups") or {}).items()}
-        res = score_deck(pa, pb, matchups, overall, field, mirror, k_m, level)
+        res = score_deck(pa, pb, matchups, overall, field, mirror, k_m, level, par=par)
         res.update(eff_games=overall[0] + overall[1], is_mine=True, mirror_id=mirror, prior_mean=m0, adjust=adj,
                    qualifies=overall[0] + overall[1] >= n_needed,
                    needs=max(0.0, n_needed - (overall[0] + overall[1])))
@@ -356,7 +374,7 @@ def compute_scores(meta_rows, my_decks=(), *, pilot_sd=None, min_meta_games=0,
         # results (deck spread + pilot spread), so it measures YOUR results
         # with this deck, still adjusted for sample size.
         own_a, own_b = _beta_from_moments(mu, tau * tau + deck_var)
-        own = score_deck(own_a, own_b, matchups, overall, field, mirror, k_m, level)
+        own = score_deck(own_a, own_b, matchups, overall, field, mirror, k_m, level, par=par)
         own.update(prior_mean=mu, prior_sd=math.sqrt(tau * tau + deck_var))
         res["own"] = own
         results[d["id"]] = res
@@ -419,5 +437,6 @@ def compute_scores(meta_rows, my_decks=(), *, pilot_sd=None, min_meta_games=0,
     info = {"mu": mu, "k_s": k_s, "k_m": k_m, "pilot_sd": tau, "ranked": len(ranked), "level": level,
             "strength_sd": math.sqrt(deck_var), "q0": q0, "conv_prior": conv_prior, "beta_link": beta_link,
             "in_person_decks": len(extra), "strength": strength, "n_needed": n_needed,
+            "par": par, "field_tie_rate": field_tie_rate,
             "rank_margin": (strength or {}).get("rank_margin", RANK_MARGIN)}
     return results, info

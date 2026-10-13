@@ -22,3 +22,8 @@ lines: 635
 - No OpenAI timeout (BUG-031). The prompt includes the full log (prompt-injection surface is small, since output only lands in the DB).
 
 Related: BUG-005, 008, 023, 030, 031, SEC-09.
+
+## Deck card handoff (2026-10-12)
+- After saving, `main` calls `deck_confirm.write_request(battle_id, deck, source, needs_input)`: source `ai` (card shows the pick) or `guess` / `none` (card asks).
+- The local-mode console prompt for the opponent deck is gone. Under the monitor stdout is captured, so that prompt was invisible and the parser sat until the 180 s timeout. The monitor now sets `PTCGL_NO_PROMPT=1`, so `_console_available()` is False for the remaining my-deck / result prompts too.
+- `deck_source` stored as AI only when the AI parse actually succeeded (it used to say AI whenever a key existed, even after falling back).

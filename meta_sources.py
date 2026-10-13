@@ -3,6 +3,8 @@ Unified meta sheet: one weighted view of the Standard meta built from
 
   * play.limitlesstcg.com   online tournaments  - shares, W/L records, matchups
   * limitlesstcg.com        in-person events    - shares + placement points
+  * labs.limitlesstcg.com   in-person pairings  - W/L records, matchups (every
+                            round, every player: labs knows the whole field's decks)
   * limitlesstcg.com/jp     Japanese City Leagues (Bo1) - shares + placements
 
 Every event gets a weight:
@@ -28,6 +30,7 @@ already uses (deck, icons, share, wins, losses, ties, win_pct, ...), plus:
     matchups  {opponent_key: [w, l, t]}   weighted, from online pairings
 """
 
+import html
 import json
 import math
 import os
@@ -44,6 +47,7 @@ SHEET_FILE = os.path.join(BASE_DIR, ".meta_cache_limitless_standard.json")
 SCHEMA_VERSION = 3
 
 LIMITLESS = "https://limitlesstcg.com"
+LABS = "https://labs.limitlesstcg.com"
 PLAY_API = "https://play.limitlesstcg.com/api"
 
 def current_weights():
@@ -206,6 +210,139 @@ def fetch_in_person_event(session, event):
     return _cached(f"inperson_v2_{event['id']}", build)
 
 
+def _labs_get(session, url):
+    # Labs doesn't declare a charset, so requests would decode it as Latin-1.
+    response = session.get(url, timeout=TIMEOUT)
+    response.raise_for_status()
+    return response.content.decode("utf-8", "replace")
+
+
+def list_labs(session):
+    """Limitless Labs events: [{labs_id, name, date}] (index page, cached 6 h)."""
+    def build():
+        page = _labs_get(session, f"{LABS}/")
+        events, seen = [], set()
+        for lid, body in re.findall(r'href="/(\d{4})/[a-z]*"[^>]*>(.*?)</a>', page, re.S):
+            text = html.unescape(" ".join(re.sub(r"<[^>]+>", " ", body).split()))
+            m = re.search(r"([A-Z][a-z]+) (\d{1,2})(?!\d).*?(\d{4})", text)
+            if lid in seen or not m:
+                continue
+            try:
+                start = datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y").date()
+            except ValueError:
+                continue
+            seen.add(lid)
+            events.append({"labs_id": lid, "name": text[:m.start()].strip(), "date": start.isoformat()})
+        return events
+    return _cached("labs_index", build, ttl=6 * 3600)
+
+
+def match_labs_event(event, labs_events):
+    """The Labs event behind a limitlesstcg.com in-person event: start within
+    3 days and a shared place word ("Lousville" ~ "Louisville")."""
+    from difflib import SequenceMatcher
+    try:
+        day = date.fromisoformat(event["date"][:10])
+    except (KeyError, ValueError):
+        return None
+
+    def words(text):
+        return [w for w in re.findall(r"[a-z]+", (text or "").casefold())
+                if len(w) >= 4 and w not in ("regional", "championship", "championships", "special", "event",
+                                             "international", "cup", "league")]
+    mine = words(event.get("name"))
+    best, best_score = None, 0.0
+    for lab in labs_events:
+        try:
+            gap = abs((date.fromisoformat(lab["date"]) - day).days)
+        except ValueError:
+            continue
+        if gap > 3:
+            continue
+        score = max((SequenceMatcher(None, a, b).ratio() for a in mine for b in words(lab["name"])), default=0.0)
+        if score > best_score:
+            best, best_score = lab, score
+    return best if best_score >= 0.8 else None
+
+
+def _labs_icons(fragment):
+    return tuple(sorted(re.search(r'alt="([^"]+)"', tag).group(1)
+                        for tag in re.findall(r'<img[^>]*class="pokemon"[^>]*>', fragment)
+                        if re.search(r'alt="([^"]+)"', tag)))
+
+
+def fetch_labs_results(session, event, labs_id):
+    """Every round's pairings of a Labs event, aggregated per archetype slug:
+    records, matchups and each player's record (for the pilot design effect).
+    Labs shows nearly every player's deck, Day 1 included, so this is the full
+    field, not only the players who made Day 2."""
+    def build():
+        decks_page = _labs_get(session, f"{LABS}/{labs_id}/decks")
+        decks = {}
+        for row in re.findall(r"<tr>(.*?)</tr>", decks_page, re.S):
+            m = re.search(rf'href="/{labs_id}/decks/([a-z0-9\-]+)">([^<]+)</a>', row)
+            if m:
+                decks[m.group(1)] = {"name": html.unescape(m.group(2)).strip(), "icons": list(_labs_icons(row))}
+        by_icons = {}
+        for slug, d in decks.items():
+            by_icons.setdefault(tuple(sorted(d["icons"])), []).append(slug)
+        # Archetypes sharing the same icons (Basic Box / Clefairy Ogerpon):
+        # their own pages list their players.
+        known_players = {}
+        for slugs in by_icons.values():
+            if len(slugs) > 1:
+                for slug in slugs:
+                    page = _labs_get(session, f"{LABS}/{labs_id}/decks/{slug}")
+                    for pid in re.findall(rf'href="/{labs_id}/player/(\d+)"', page):
+                        known_players.setdefault(pid, slug)
+
+        first = _labs_get(session, f"{LABS}/{labs_id}/pairings?round=1")
+        rounds = max([int(x) for x in re.findall(r"\?round=(\d+)", first)] or [0])
+        player_deck, pilots = {}, {}
+        records, matchups = {}, {}
+        games = unknown = 0
+        cell = re.compile(r'<td class="w-\[45%\][^"]*?svelte-[a-z0-9]+\s*([a-z ]*)">(.*?)</td>', re.S)
+        for rnd in range(1, rounds + 1):
+            page = first if rnd == 1 else _labs_get(session, f"{LABS}/{labs_id}/pairings?round={rnd}")
+            for row in re.findall(r"<tr>(.*?)</tr>", page, re.S):
+                cells = cell.findall(row)
+                if len(cells) != 2:
+                    continue
+                sides = []
+                for cls, body in cells:
+                    pid = re.search(rf'href="/{labs_id}/player/(\d+)"', body)
+                    if not pid:
+                        break
+                    pid = pid.group(1)
+                    if pid not in player_deck:
+                        slugs = by_icons.get(_labs_icons(body)) or []
+                        player_deck[pid] = slugs[0] if len(slugs) == 1 else known_players.get(pid)
+                    sides.append((pid, cls))
+                if len(sides) != 2:
+                    continue  # bye
+                (p1, c1), (p2, c2) = sides
+                r1 = 0 if "winner" in c1 else 2 if "tie" in c1 else 1 if "winner" in c2 else None
+                if r1 is None:
+                    continue  # unreported / double loss
+                d1, d2 = player_deck.get(p1), player_deck.get(p2)
+                if not (d1 and d2):
+                    unknown += 1
+                    continue
+                games += 1
+                for me, opp, slot, pid in ((d1, d2, r1, p1), (d2, d1, (1, 0, 2)[r1], p2)):
+                    records.setdefault(me, [0, 0, 0])[slot] += 1
+                    matchups.setdefault(me, {}).setdefault(opp, [0, 0, 0])[slot] += 1
+                    pr = pilots.setdefault(pid, [me, 0.0, 0])
+                    pr[1] += (1.0, 0.0, 0.5)[slot]
+                    pr[2] += 1
+        by_deck = {}
+        for deck, x, n in pilots.values():
+            by_deck.setdefault(deck, []).append([x, n])
+        return {"event": event, "labs_id": labs_id, "rounds": rounds, "games": games, "unknown": unknown,
+                "decks": decks, "records": records, "matchups": matchups, "pilots": by_deck}
+    return _cached(f"labs_{labs_id}", build)
+
+
 def fetch_in_person_standings(session, event):
     """Every listed (Day 2) placing: [{rank, deck, deck_id}], plus the legal set range."""
     def build():
@@ -321,6 +458,20 @@ def fetch_online_event(session, event):
 
 
 FETCH_BUDGET_S = 150  # per source; unfinished events are retried on the next refresh
+
+
+def _fetch_labs(session, in_person, progress):
+    """{limitless event id: aggregated Labs results} for the events Labs covers."""
+    try:
+        labs_events = list_labs(session)
+    except Exception as exc:
+        progress(f"  Limitless Labs index unavailable ({exc}) - in-person records skipped")
+        return {}
+    pairs = [(ev, match_labs_event(ev, labs_events)) for ev in in_person]
+    jobs = [dict(ev, labs_id=lab["labs_id"]) for ev, lab in pairs if lab]
+    done = _fetch_all(session, lambda sess, ev: fetch_labs_results(sess, ev, ev["labs_id"]),
+                      jobs, "in-person results (Labs)", progress)
+    return {d["event"]["id"]: d for d in done}
 
 
 def _fetch_all(session, fn, events, label, progress):
@@ -444,6 +595,7 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
     inperson_data = _fetch_all(session, fetch_in_person_event, in_person, "in-person", progress)
     standings_data = {d["event"]["id"]: d for d in
                       _fetch_all(session, fetch_in_person_standings, in_person, "in-person standings", progress)}
+    labs_data = _fetch_labs(session, in_person, progress)
     japan_data = _fetch_all(session, fetch_japan_event, japan, "Japan", progress)
     online_data = _fetch_all(session, fetch_online_event, online, "online", progress)
     try:
@@ -454,7 +606,7 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
         os.replace(path + ".tmp", path)
     except Exception:
         pass
-    return _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data, japan_data, online_data,
+    return _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data, japan_data, online_data, labs_data,
                      use_weights, sources)
 
 
@@ -472,14 +624,15 @@ def rebuild_meta_sheet(use_weights=True, sources=ALL_SOURCES, progress=lambda ms
     inperson_data = _fetch_all(session, fetch_in_person_event, inputs["in_person"], "in-person", progress)
     standings_data = {d["event"]["id"]: d for d in
                       _fetch_all(session, fetch_in_person_standings, inputs["in_person"], "in-person standings", progress)}
+    labs_data = _fetch_labs(session, inputs["in_person"], progress)
     japan_data = _fetch_all(session, fetch_japan_event, inputs["japan"], "Japan", progress)
     online_data = _fetch_all(session, fetch_online_event, inputs["online"], "online", progress)
     return _assemble(inputs["exp_en"], inputs["exp_jp"], inputs["since_en"], inputs["since_jp"],
-                     inperson_data, standings_data, japan_data, online_data, use_weights, sources)
+                     inperson_data, standings_data, japan_data, online_data, labs_data, use_weights, sources)
 
 
 def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data, japan_data, online_data,
-              use_weights=True, sources=ALL_SOURCES):
+              labs_data=None, use_weights=True, sources=ALL_SOURCES):
     sources = set(sources or ALL_SOURCES)
 
     def event_weight(kind, event, era):
@@ -494,8 +647,9 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
         a = archetypes.get(key)
         if a is None:
             a = archetypes[key] = {"id": key, "deck": name, "icons": [], "deck_url": None,
-                                   "share_num": 0.0, "share_en_num": 0.0, "top_num": 0.0, "count": 0,
-                                   "w": 0.0, "l": 0.0, "t": 0.0, "raw_games": 0,
+                                   "share_num": 0.0, "share_en_num": 0.0, "top_num": 0.0, "top_en_num": 0.0,
+                                   "count": 0, "rw": 0, "rl": 0, "rt": 0, "mraw": {},
+                                   "w": 0.0, "l": 0.0, "t": 0.0, "raw_games": 0, "ip_games": 0,
                                    # effective sample: Kish sums and per-pilot records (deck_score.py)
                                    "sw": 0.0, "sw2": 0.0, "pilots": [],
                                    "sources": {"online": 0, "in_person": 0, "japan": 0},
@@ -512,10 +666,11 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
     # Icon signature -> archetype name (Japanese results only carry icons).
     icon_names = {}
 
-    share_den = share_en_den = top_den = 0.0
+    share_den = share_en_den = top_den = top_en_den = 0.0
     ip_totals = {"day2": 0.0, "top32": 0.0, "top8": 0.0}
     in_person_events = []
     events_used = {"online": 0, "in_person": 0, "japan": 0}
+    in_person_records = 0  # in-person events with Labs match results
 
     for data in online_data:
         ev = data["event"]
@@ -543,6 +698,9 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
             a["w"] += weight * d["w"]
             a["l"] += weight * d["l"]
             a["t"] += weight * d["t"]
+            a["rw"] += d["w"]
+            a["rl"] += d["l"]
+            a["rt"] += d["t"]
             g = d["w"] + d["l"] + d["t"]
             a["raw_games"] += g
             a["sw"] += weight * g
@@ -561,6 +719,7 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                 rec[0] += weight * w
                 rec[1] += weight * l
                 rec[2] += weight * t
+                a["mraw"][_key(opp)] = a["mraw"].get(_key(opp), 0) + w + l + t
 
     # In-person names are sometimes shorter than the online ones ("Ogerpon
     # Meganium" vs "Ogerpon Meganium Hydrapple"). Map a name to the single
@@ -592,6 +751,7 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
             continue
         events_used["in_person"] += 1
         top_den += weight
+        top_en_den += weight
         share_den += weight
         share_en_den += weight
         st = standings_data.get(ev["id"])
@@ -617,12 +777,39 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                 ip["wins"] += 1
             if ip["best"] is None or p["rank"] < ip["best"]["rank"]:
                 ip["best"] = {"rank": p["rank"], "event": ev["name"], "date": ev["date"]}
+        # Match results from Limitless Labs (every round, whole field).
+        labs = (labs_data or {}).get(ev["id"])
+        if labs and labs.get("games"):
+            in_person_records += 1
+            name_of = {slug: resolve_in_person(d["name"]) for slug, d in labs["decks"].items()}
+            for slug, (w, l, t) in labs["records"].items():
+                a = arch(name_of.get(slug, slug), icons=labs["decks"].get(slug, {}).get("icons"))
+                a["w"] += weight * w
+                a["l"] += weight * l
+                a["t"] += weight * t
+                a["rw"] += w
+                a["rl"] += l
+                a["rt"] += t
+                g = w + l + t
+                a["raw_games"] += g
+                a["ip_games"] += g
+                a["sw"] += weight * g
+                a["sw2"] += weight * weight * g
+                a["pilots"] += [tuple(x) for x in labs["pilots"].get(slug, [])]
+                for opp, (ow, ol, ot) in labs["matchups"].get(slug, {}).items():
+                    cell = _key(name_of.get(opp, opp))
+                    rec = a["matchups"].setdefault(cell, [0.0, 0.0, 0.0])
+                    rec[0] += weight * ow
+                    rec[1] += weight * ol
+                    rec[2] += weight * ot
+                    a["mraw"][cell] = a["mraw"].get(cell, 0) + ow + ol + ot
         for d in data["decks"]:
             a = arch(resolve_in_person(d["deck"]), d["deck_id"], d["icons"],
                      f"{LIMITLESS}/decks/{d['deck_id']}" if d.get("deck_id") else None)
             a["share_num"] += weight * d["count"] / total
             a["share_en_num"] += weight * d["count"] / total
             a["top_num"] += weight * d["points"] / points
+            a["top_en_num"] += weight * d["points"] / points
             a["count"] += d["count"]
             a["sources"]["in_person"] += 1
             if d["icons"]:
@@ -693,13 +880,20 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
         design = 1.0 + pilot_var / (p * (1.0 - p)) * cluster
         return kish / design
 
+    def on_real_games(rec, games):
+        """Weights decide how much each game counts, never how many games
+        there are: the weighted W/L/T proportions, scaled to the real games."""
+        total = sum(rec)
+        return [x * games / total for x in rec] if total > 0 else [0.0, 0.0, 0.0]
+
     rows = []
     for a in archetypes.values():
         share = 100.0 * a["share_num"] / share_den if share_den else 0.0
+        w_rec = on_real_games((a["w"], a["l"], a["t"]), a["raw_games"])
         if share < 0.05 and not a["raw_games"]:
             continue
-        games = a["w"] + a["l"] + a["t"]
-        post = win_rate_posterior(a["w"], a["l"], a["t"]) if games else None
+        games = sum(w_rec)
+        post = win_rate_posterior(*w_rec) if games else None
         rows.append({
             "id": a["id"],
             "deck": a["deck"],
@@ -710,25 +904,35 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
             # English-legal field only (no Japan-only decks): what the ladder faces.
             "share_en": round(100.0 * a["share_en_num"] / share_en_den, 2) if share_en_den else 0.0,
             "top_share": round(100.0 * a["top_num"] / top_den, 2) if top_den else None,
-            # Weighted record (rounded) - the win rate the deck pages compare against.
-            "wins": round(a["w"], 1),
-            "losses": round(a["l"], 1),
-            "ties": round(a["t"], 1),
+            # Top finishes in the English field only (in-person), to compare with share_en.
+            "top_share_en": round(100.0 * a["top_en_num"] / top_en_den, 2) if top_en_den else None,
+            # Actual games played (the W/L/T above are event-weighted sums).
+            "raw_wins": a["rw"], "raw_losses": a["rl"], "raw_ties": a["rt"],
+            # Weighted record on the real number of games (sums to raw_games):
+            # the win rate the deck pages compare against.
+            "wins": round(w_rec[0], 1),
+            "losses": round(w_rec[1], 1),
+            "ties": round(w_rec[2], 1),
             "raw_games": a["raw_games"],
+            "ip_games": a["ip_games"],  # of which in-person (Limitless Labs pairings)
             "eff_games": round(effective_games(a), 1),
             "win_pct": round(post["observed"] * 100.0, 1) if post and post["observed"] is not None else None,
             "bayes_win_pct": round(post["mean"] * 100.0, 1) if post else None,
             "sources": a["sources"],
-            "matchups": {k: [round(x, 2) for x in v] for k, v in a["matchups"].items()},
+            "matchups": {k: [round(x, 2) for x in on_real_games(v, a["mraw"].get(k, 0))]
+                         for k, v in a["matchups"].items() if a["mraw"].get(k)},
             "in_person": _in_person_summary(a["ip"], ip_totals),
             "record_source": "unified",
         })
     rows.sort(key=lambda r: r["share"], reverse=True)
     sheet = {
         "schema_version": SCHEMA_VERSION,
+        # wins/losses/ties and matchups = weighted proportions x real games
+        "record_basis": "real_games",
         "rows": rows,
         "fetched_at": time.time(),
         "events": events_used,
+        "in_person_records": in_person_records,
         "tournaments_processed": sum(events_used.values()),
         "total_entries": sum(int(d["event"].get("players") or 0) for d in online_data)
                          + sum(int(e.get("players") or 0) for e in in_person_events),

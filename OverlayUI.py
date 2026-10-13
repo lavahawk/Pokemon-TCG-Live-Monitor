@@ -7,6 +7,7 @@ from version import VERSION
 
 import sys
 import os
+import time
 import win32gui
 import win32process
 import win32con
@@ -21,6 +22,71 @@ from BattleDatabase import BattleDatabase
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "Logs")
+GAME_SESSION_FILE = os.path.join(LOG_DIR, ".game_session")  # written by the monitor on game start
+SESSION_PROMPT_WINDOW_S = 120  # offer the W-L reset only this soon after the game started
+SESSION_PROMPT_LINGER_MS = 10000
+
+
+def _overlay_setting(key, default):
+    try:
+        from app_settings import load_app_settings
+        return load_app_settings().get(key, default)
+    except Exception:
+        return default
+
+
+class FadingPopup(QWidget):
+    """Frameless popup that can fade itself out after `linger_ms` (hovering
+    keeps it; leaving restarts a shorter countdown). linger_ms=None = stays."""
+
+    def __init__(self, linger_ms=None, opacity=0.92):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                         | Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._linger = linger_ms
+        self._opacity = opacity
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.fade_out)
+        self._anim = None
+        self.setWindowOpacity(opacity)
+
+    def _animate(self, start, end, ms, done=None):
+        if self._anim is not None:
+            self._anim.stop()
+        self._anim = QPropertyAnimation(self, b"windowOpacity", self)
+        self._anim.setDuration(ms)
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(end)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic if end > start else QEasingCurve.Type.InCubic)
+        if done:
+            self._anim.finished.connect(done)
+        self._anim.start()
+
+    def show_animated(self):
+        if self._linger:
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+            self.setWindowOpacity(0.0)
+            self.show()
+            self._animate(0.0, self._opacity, 260)
+            self._timer.start(self._linger)
+        else:
+            self.show()
+
+    def fade_out(self):
+        self._animate(self.windowOpacity(), 0.0, 700, self.close)
+
+    def enterEvent(self, event):
+        if self._linger:
+            self._timer.stop()
+            if self.windowOpacity() < self._opacity:
+                self._animate(self.windowOpacity(), self._opacity, 150)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if self._linger and self.isVisible():
+            self._timer.start(3500)
+        super().leaveEvent(event)
 
 # --- DEBUG LOGGING (internal only) ---
 import datetime as _dt
@@ -323,8 +389,75 @@ class MinimalOverlay(QWidget):
         self.monitor_timer.timeout.connect(self.check_monitor_running)
         self.monitor_timer.start(5000)
         _dbg("monitor_timer started (5000ms)")
+
+        # "Opponent deck" card above the mini GUI after each saved battle
+        # (deck_confirm.py / deck_popup.py).
+        self.deck_popup = None
+        self._deck_request_mtime = None
+        self.deck_timer = QTimer()
+        self.deck_timer.timeout.connect(self._poll_deck_confirm)
+        self.deck_timer.start(1000)
+        self._session_seen = None
+        self._session_prompt_due = None
         _dbg("__init__ complete")
     
+    def _poll_deck_confirm(self):
+        if not getattr(self, "_overlay_placed", False):
+            return  # anchored popups wait until the mini GUI sits on the game window
+        try:
+            from deck_confirm import REQUEST_FILE, menu_seen_at, read_request
+            try:
+                mtime = os.path.getmtime(REQUEST_FILE)
+            except OSError:
+                mtime = None
+            geo = self.frameGeometry()
+            anchor = (geo.right() + 1, geo.top() - 6)
+            if mtime != self._deck_request_mtime:
+                self._deck_request_mtime = mtime
+                request = read_request()
+                if request:
+                    if self.deck_popup is None:
+                        from deck_popup import DeckConfirmPopup
+                        self.deck_popup = DeckConfirmPopup(self.db)
+                    self.deck_popup.offer(request, anchor)
+                    _dbg(f"deck popup: battle {request.get('battle_id')} {request.get('deck')!r} "
+                         f"({request.get('source')}, needs_input={request.get('needs_input')})")
+            if self.deck_popup is not None:
+                self.deck_popup.tick(menu_seen_at(), anchor, self.isVisible())
+                self._position_chat_window()
+        except Exception as exc:
+            _dbg(f"_poll_deck_confirm error: {exc}")
+        self._poll_game_session()
+
+    def _poll_game_session(self):
+        """New Pokemon TCG Live session (monitor wrote .game_session): offer
+        today's W-L reset in a popup that fades by itself."""
+        try:
+            with open(GAME_SESSION_FILE, "r", encoding="utf-8") as handle:
+                started = float(handle.read().strip() or 0)
+        except (OSError, ValueError):
+            return
+        if started != self._session_seen:
+            self._session_seen = started
+            self._session_prompt_due = started
+        due = self._session_prompt_due
+        if due is None:
+            return
+        if time.time() - due > SESSION_PROMPT_WINDOW_S:
+            self._session_prompt_due = None
+            return
+        if not self.isVisible() or not getattr(self, "_overlay_placed", False):
+            return  # wait until the mini GUI sits on the game window
+        self._session_prompt_due = None
+        if not _overlay_setting("overlay_session_reset_prompt", True):
+            return
+        if self.wins + self.losses <= 0:
+            return  # nothing to reset
+        if getattr(self, "_reset_popup", None) is not None and self._reset_popup.isVisible():
+            return
+        _dbg(f"session reset prompt ({self.wins}-{self.losses})")
+        self.confirm_reset_today_stats(linger_ms=SESSION_PROMPT_LINGER_MS)
+
     def check_monitor_running(self):
         """Check if TCGLiveMonitor.py is still running via PID file"""
         try:
@@ -483,6 +616,9 @@ class MinimalOverlay(QWidget):
                     x, y, 0, 0,
                     win32con.SWP_NOACTIVATE | win32con.SWP_NOSIZE
                 )
+                # Popups anchored to the mini GUI may only be placed from now on.
+                self._overlay_placed = True
+                self._position_reset_popup()
         except Exception as e:
             _dbg(f"follow_game_window exception: {e}")
     
@@ -645,23 +781,17 @@ class MinimalOverlay(QWidget):
         p.end()
         return QPixmap(pixmap)
 
-    def confirm_reset_today_stats(self):
-        """Tiny frameless popup matching the overlay style: "Reset?" + red Reset."""
+    def confirm_reset_today_stats(self, linger_ms=None):
+        """Tiny frameless popup matching the overlay style: "Reset?" + red Reset.
+        linger_ms: the new-session version, which fades out by itself."""
         try:
             # Reuse the existing popup if it's already open.
             if getattr(self, "_reset_popup", None) is not None and self._reset_popup.isVisible():
                 self._reset_popup.close()
                 return
 
-            popup = QWidget(
-                None,
-                Qt.WindowType.FramelessWindowHint
-                | Qt.WindowType.WindowStaysOnTopHint
-                | Qt.WindowType.Tool,
-            )
-            popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             # A touch of transparency for the whole popup.
-            popup.setWindowOpacity(0.92)
+            popup = FadingPopup(linger_ms=linger_ms, opacity=0.92)
             popup.setObjectName("resetPopup")
 
             card = QFrame()
@@ -670,6 +800,11 @@ class MinimalOverlay(QWidget):
             v.setContentsMargins(9, 6, 9, 7)
             v.setSpacing(4)
 
+            if linger_ms:
+                session = QLabel("New session")
+                session.setObjectName("resetSession")
+                session.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                v.addWidget(session)
             current = QLabel(f"Reset?  ({self.wins}-{self.losses})")
             current.setObjectName("resetCurrent")
             current.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -706,14 +841,28 @@ class MinimalOverlay(QWidget):
             popup.setStyleSheet(self._reset_popup_style())
             self._reset_popup = popup
 
-            # Position just above the overlay, right-aligned with it.
             popup.adjustSize()
-            geo = self.frameGeometry()
-            popup.move(geo.right() - popup.width(), geo.top() - popup.height() - 6)
-            popup.show()
+            self._position_reset_popup()
+            popup.show_animated()
             _dbg("Reset popup opened")
         except Exception as e:
             _dbg(f"confirm_reset_today_stats error: {e}")
+
+    def _position_reset_popup(self):
+        """Keep the Reset? popup just above the mini GUI (and the deck card,
+        if showing), right-aligned with it. Re-run whenever the overlay moves."""
+        popup = getattr(self, "_reset_popup", None)
+        if popup is None:
+            return
+        try:
+            geo = self.frameGeometry()
+            top = geo.top()
+            deck_card = getattr(self, "deck_popup", None)
+            if deck_card is not None and deck_card.isVisible():
+                top = min(top, deck_card.geometry().y())
+            popup.move(geo.right() - popup.width(), top - popup.height() - 6)
+        except RuntimeError:  # popup already deleted
+            self._reset_popup = None
 
     def _do_reset_today(self, popup):
         try:
@@ -732,6 +881,14 @@ class MinimalOverlay(QWidget):
                 background-color: rgba(20, 20, 20, 0.88);
                 border: 1px solid rgba(80, 80, 80, 0.85);
                 border-radius: 10px;
+            }
+            QLabel#resetSession {
+                color: #8E959E;
+                font-family: 'Segoe UI', Arial;
+                font-size: 8px;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                background-color: transparent;
             }
             QLabel#resetCurrent {
                 color: #DCDCDC;
@@ -834,7 +991,12 @@ class MinimalOverlay(QWidget):
                 x = min_x
             if x < 0:
                 x = 0
-            y = geo.y() - self.chat_window.height() - 8
+            top = geo.y()
+            # Stack above the opponent-deck card while it is showing.
+            popup = getattr(self, "deck_popup", None)
+            if popup is not None and popup.isVisible():
+                top = min(top, popup.geometry().y())
+            y = top - self.chat_window.height() - 8
             if y < 0:
                 y = 0
             self.chat_window.move(x, y)
@@ -917,8 +1079,15 @@ class MinimalOverlay(QWidget):
     def update_display(self):
         """Update the stats label and pokeball icon"""
         # Update text
-        new_text = f"Elo:{self.current_rank} | Max:{self.max_rank} | {self.wins}-{self.losses}"
-        self.stats_label.setText(new_text)
+        if _overlay_setting("overlay_show_max_elo", True):
+            new_text = f"Elo:{self.current_rank} | Max:{self.max_rank} | {self.wins}-{self.losses}"
+        else:
+            new_text = f"Elo:{self.current_rank} | {self.wins}-{self.losses}"
+        if new_text != self.stats_label.text():
+            self.stats_label.setText(new_text)
+            # Resize once the layout has seen the new label (the pill shrinks / grows;
+            # follow_game_window re-anchors it to the corner).
+            QTimer.singleShot(0, self.adjustSize)
         
         # Update pokeball icon based on current Elo
         league = get_league_from_elo(self.current_rank)

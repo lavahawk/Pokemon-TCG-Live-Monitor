@@ -57,6 +57,8 @@ RUNNING_PROC_CHECK_S = 10  # game-process check while it is running
 CLIPBOARD_POLL_S = 0.5
 PARSER_TIMEOUT_S = 180
 MENU_OCR_TIMEOUT_S = 120
+SUSPECT_RANK_JUMP = 300    # one game never moves the rank this far
+SUSPECT_RECHECK_S = 8      # re-read a suspect rank after the menu settles
 
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -450,9 +452,15 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
     detector = RankDetector()
     deadline = time.time() + timeout_s
     deck = None
+    suspect = None
     while time.time() < deadline:
         try:
             if detector.is_on_main_menu(validation_method="auto"):
+                try:
+                    from deck_confirm import mark_menu_seen
+                    mark_menu_seen()  # lets the overlay's deck card fade
+                except Exception:
+                    pass
                 db = BattleDatabase()
                 if not deck:
                     raw_deck = detector.extract_text("my_deck_name", silent=True)
@@ -463,6 +471,17 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
                     # seconds, so consecutive reads disagree. Keep reading
                     # until it settles instead of giving up (BUG-040).
                     time.sleep(1)
+                    continue
+                last = read_int(LAST_RANK_FILE)
+                if rank and last and abs(rank - last) > SUSPECT_RANK_JUMP and rank != suspect:
+                    # A stable but implausible reading (1513 -> 402 while the
+                    # menu was still loading). Read again once the screen has
+                    # settled and keep it only if it repeats, e.g. a season reset.
+                    _save_rank_snapshot(detector, rank)
+                    log(f"Menu OCR ({reason}): rank {rank} is {abs(rank - last)} from the last "
+                        f"rank {last}; re-checking in {SUSPECT_RECHECK_S}s.")
+                    suspect = rank
+                    time.sleep(SUSPECT_RECHECK_S)
                     continue
                 if deck:
                     write_text(LAST_DECK_FILE, deck)
@@ -483,7 +502,21 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
         except Exception as exc:
             log(f"Menu OCR error: {exc}")
         time.sleep(2)
-    log(f"Menu OCR ({reason}): main menu not seen within {timeout_s}s.")
+    if suspect is not None:
+        log(f"Menu OCR ({reason}): rank {suspect} not confirmed within {timeout_s}s - not stored.")
+    else:
+        log(f"Menu OCR ({reason}): main menu not seen within {timeout_s}s.")
+
+
+def _save_rank_snapshot(detector, rank):
+    """Keep the rank crop behind a suspect reading so misreads can be diagnosed."""
+    try:
+        from RankDetector import RANK_PAD_Y
+        img = detector.capture_region("rank", pad_y=RANK_PAD_Y)
+        if img is not None:
+            img.save(os.path.join(LOG_DIR, f"rank_suspect_{rank}_{time.strftime('%Y%m%d_%H%M%S')}.png"))
+    except Exception as exc:
+        log(f"Rank snapshot failed: {exc}")
 
 
 # ───────────────────────────── the monitor ─────────────────────────────
@@ -543,7 +576,7 @@ class Monitor:
             if is_ptcgl_decklist(text):
                 deck = read_text(LAST_DECK_FILE) or None
                 entry = save_decklist(text, deck)
-                log(f"Decklist captured: {entry['deck']} ({entry['cards']} cards).")
+                log(f"Decklist {'saved' if entry.get('new') else 'updated'}: {entry['deck']} ({entry['cards']} cards).")
                 return
         except Exception as exc:
             log(f"Decklist capture failed: {exc}")
@@ -605,8 +638,12 @@ class Monitor:
     def run_parser(path):
         cmd = [sys.executable, PARSER_SCRIPT, os.path.abspath(path)]
         try:
+            # Output is captured, so the parser must not prompt in the console:
+            # the overlay's deck card asks for the opponent's deck instead.
+            env = dict(os.environ, PTCGL_NO_PROMPT="1")
             result = subprocess.run(cmd, cwd=BASE_DIR, capture_output=True, text=True, encoding="utf-8",
-                                    errors="replace", timeout=PARSER_TIMEOUT_S, creationflags=_no_window_flags())
+                                    errors="replace", timeout=PARSER_TIMEOUT_S, creationflags=_no_window_flags(),
+                                    env=env)
         except subprocess.TimeoutExpired:
             log(f"Parser timed out after {PARSER_TIMEOUT_S}s.")
             return None
@@ -636,6 +673,8 @@ class Monitor:
                 running = is_game_process_running()
                 if running and not game_running:
                     log("Pokemon TCG Live detected.")
+                    # New game session: the overlay offers today's W-L reset.
+                    write_text(os.path.join(LOG_DIR, ".game_session"), f"{time.time():.3f}")
                     ensure_username()  # no-op once saved; first run asks now, not at sign-in
                     set_low_priority(False)
                     self.ensure_overlay()

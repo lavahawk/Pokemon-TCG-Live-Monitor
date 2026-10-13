@@ -7,6 +7,7 @@
 # Browser profile / session data (may contain login cookies & tokens)
 .limitless_web_profile/
 .ptcgl_replay_profile/
+.trainerhill_web_profile/
 
 # User-specific runtime data
 .last_rank
@@ -137,3 +138,9 @@ installer/Output/
 
 # Personal deck pins
 .pinned_decks.json
+
+# Per-user deck settings (pin/star/ignore, base archetypes)
+.deck_flags.json
+.deck_archetypes.json
+# Generated UI images (spin box / combo arrows)
+.ui_cache/

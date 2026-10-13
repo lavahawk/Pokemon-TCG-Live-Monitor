@@ -490,3 +490,296 @@ class SeriesChart(QWidget):
                     return
             parent = parent.parent()
         event.ignore()
+
+
+# ── Meta trend (several archetypes over time) ─────────────────────────────
+# Categorical palette: the dataviz reference instance, dark-surface steps,
+# validated against the dashboard surface (#0B0F17): adjacent CVD dE >= 8.4,
+# normal-vision dE >= 19.3, contrast >= 3:1. Fixed order, never cycled into
+# new hues: slots 9-16 reuse the hues with a dashed line / hatched fill.
+SERIES_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
+MAX_SERIES = 2 * len(SERIES_COLORS)
+SURFACE = QColor(11, 15, 23)
+
+
+def series_style(slot):
+    """(QColor, dashed) for a colour slot 0..15."""
+    return QColor(SERIES_COLORS[slot % len(SERIES_COLORS)]), slot >= len(SERIES_COLORS)
+
+
+class TrendChart(QWidget):
+    """Shares or counts of several archetypes per day (TrainerHill meta trend).
+
+    set_data(dates, series, mode, stacked): dates are ISO strings; each series
+    is {"id", "name", "slot", "values": [...]} (one value per date).
+    mode "share" (percent) or "count"; stacked draws areas instead of lines.
+    Hover: crosshair + a tooltip with every series on that day.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.dates = []
+        self.series = []
+        self.mode = "share"
+        self.stacked = False
+        self.focus = None  # series id to highlight (legend hover)
+        self.empty_text = "Pick decks to compare"
+        self._hover = -1
+        self._reveal = 1.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(420)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.valueChanged.connect(self._set_reveal)
+        self.setMouseTracking(True)
+        self.setMinimumSize(320, 260)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFont(chart_font())
+
+    def set_data(self, dates, series, mode="share", stacked=False, animate=True):
+        self.dates = [datetime.strptime(d[:10], "%Y-%m-%d") for d in dates]
+        self.series = list(series)
+        self.mode = mode
+        self.stacked = stacked
+        self._hover = -1
+        if animate and self.series:
+            self._anim.stop()
+            self._anim.start()
+        else:
+            self._reveal = 1.0
+        self.update()
+
+    def set_focus(self, series_id):
+        if series_id != self.focus:
+            self.focus = series_id
+            self.update()
+
+    def _set_reveal(self, value):
+        self._reveal = float(value)
+        self.update()
+
+    # ── geometry ──
+    def _labels_inline(self):
+        return not self.stacked and 0 < len(self.series) <= 4
+
+    def _plot(self):
+        fm = QFontMetrics(self.font())
+        right = 14
+        if self._labels_inline():
+            right += max(fm.horizontalAdvance(s["name"]) for s in self.series) + 14
+        return QRectF(46, 12, max(10.0, self.width() - 46 - right), max(10.0, self.height() - 12 - 28))
+
+    def _stacks(self):
+        """Per series: (lower, upper) value lists (lines: lower = None)."""
+        out = []
+        base = [0.0] * len(self.dates)
+        for s in self.series:
+            vals = [float(v or 0) for v in s["values"]]
+            if self.stacked:
+                upper = [b + v for b, v in zip(base, vals)]
+                out.append((list(base), upper))
+                base = upper
+            else:
+                out.append((None, vals))
+        return out
+
+    def _y_range(self, stacks, plot):
+        top = max([max(up) for _lo, up in stacks if up] or [1.0])
+        if self.mode == "share" and self.stacked:
+            top = 100.0
+        step = nice_step(top, max(2, int(plot.height() // 42)))
+        hi = max(step, math.ceil(top / step - 1e-9) * step)
+        if self.mode == "share":
+            hi = min(hi, 100.0)
+        return 0.0, hi, step
+
+    def _x(self, plot, i):
+        n = len(self.dates)
+        return plot.left() + (plot.width() * i / (n - 1) if n > 1 else plot.width() / 2)
+
+    def _y(self, plot, lo, hi, v):
+        return plot.bottom() - (v - lo) / (hi - lo) * plot.height() * self._reveal
+
+    def _fmt(self, v):
+        return f"{v:.1f}%" if self.mode == "share" else f"{v:,.0f}"
+
+    # ── painting ──
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(self.font())
+        fm = QFontMetrics(self.font())
+        if not self.dates or not self.series:
+            p.setPen(TEXT)
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.empty_text)
+            return
+        plot = self._plot()
+        stacks = self._stacks()
+        lo, hi, step = self._y_range(stacks, plot)
+
+        # recessive grid + y labels
+        v = lo
+        while v <= hi + 1e-9:
+            y = plot.bottom() - (v - lo) / (hi - lo) * plot.height()  # grid doesn't animate
+            p.setPen(QPen(GRID, 1))
+            p.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
+            p.setPen(TEXT)
+            label = f"{v:g}%" if self.mode == "share" else f"{v:,.0f}"
+            p.drawText(QRectF(0, y - 8, plot.left() - 8, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       label)
+            v += step
+
+        # x labels: evenly spaced dates, skipped when they would collide
+        last_right = -1e9
+        n = len(self.dates)
+        stride = max(1, math.ceil(n / max(1, plot.width() / 64)))
+        for i in range(n - 1, -1, -stride):  # newest first, so the latest day is always labelled
+            text = _fmt_day(self.dates[i])
+            w = fm.horizontalAdvance(text)
+            x = min(max(self._x(plot, i) - w / 2, plot.left() - 10), plot.right() - w + 6)
+            if last_right != -1e9 and x + w + 8 > last_right:
+                continue
+            p.setPen(TEXT)
+            p.drawText(QRectF(x, plot.bottom() + 8, w + 2, 16), Qt.AlignmentFlag.AlignLeft, text)
+            last_right = x
+
+        dim = self.focus is not None
+        order = range(len(self.series))
+        if self.stacked:
+            for k in order:
+                s, (lower, upper) = self.series[k], stacks[k]
+                color, hatched = series_style(s["slot"])
+                fill = QColor(color)
+                fill.setAlpha(70 if dim and s["id"] != self.focus else 215)
+                path = QPainterPath(QPointF(self._x(plot, 0), self._y(plot, lo, hi, upper[0])))
+                for i in range(1, n):
+                    path.lineTo(self._x(plot, i), self._y(plot, lo, hi, upper[i]))
+                for i in range(n - 1, -1, -1):
+                    path.lineTo(self._x(plot, i), self._y(plot, lo, hi, lower[i]))
+                path.closeSubpath()
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(fill)
+                p.drawPath(path)
+                if hatched:  # slots 9-16: same hue + texture, never a new hue
+                    p.setBrush(_hatch_brush(SURFACE))
+                    p.drawPath(path)
+                # 2px surface gap between layers
+                edge = QPainterPath(QPointF(self._x(plot, 0), self._y(plot, lo, hi, upper[0])))
+                for i in range(1, n):
+                    edge.lineTo(self._x(plot, i), self._y(plot, lo, hi, upper[i]))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(SURFACE, 2))
+                p.drawPath(edge)
+        else:
+            for k in order:
+                s, (_lower, upper) = self.series[k], stacks[k]
+                color, dashed = series_style(s["slot"])
+                if dim and s["id"] != self.focus:
+                    color.setAlpha(55)
+                path = QPainterPath(QPointF(self._x(plot, 0), self._y(plot, lo, hi, upper[0])))
+                for i in range(1, n):
+                    path.lineTo(self._x(plot, i), self._y(plot, lo, hi, upper[i]))
+                pen = QPen(color, 2.6 if s["id"] == self.focus else 2)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                if dashed:
+                    pen.setStyle(Qt.PenStyle.DashLine)
+                p.setPen(pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawPath(path)
+            if self._labels_inline():
+                self._paint_end_labels(p, plot, stacks, lo, hi, fm)
+
+        if 0 <= self._hover < n:
+            x = self._x(plot, self._hover)
+            p.setPen(QPen(QColor(255, 255, 255, 60), 1, Qt.PenStyle.DashLine))
+            p.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
+            for k, s in enumerate(self.series):
+                color, _ = series_style(s["slot"])
+                y = self._y(plot, lo, hi, stacks[k][1][self._hover])
+                p.setPen(QPen(SURFACE, 2))
+                p.setBrush(color)
+                p.drawEllipse(QPointF(x, y), 4, 4)
+            self._paint_tooltip(p, plot, x)
+
+    def _paint_end_labels(self, p, plot, stacks, lo, hi, fm):
+        """Direct labels at the line ends (<= 4 series), nudged apart."""
+        items = sorted(((self._y(plot, lo, hi, up[-1]), s) for s, (_l, up) in zip(self.series, stacks)),
+                       key=lambda t: t[0])
+        placed = []
+        for y, s in items:
+            y = max(y, placed[-1] + fm.height()) if placed else y
+            placed.append(y)
+            color, _ = series_style(s["slot"])
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            p.drawEllipse(QPointF(plot.right() + 10, y), 3, 3)
+            p.setPen(TEXT_STRONG)
+            p.drawText(QRectF(plot.right() + 18, y - fm.height() / 2, self.width() - plot.right() - 18, fm.height()),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, s["name"])
+
+    def _paint_tooltip(self, p, plot, x):
+        i = self._hover
+        rows = sorted(((float(s["values"][i] or 0), s) for s in self.series), key=lambda t: -t[0])
+        shown = rows[:12]
+        bold = QFont(self.font())
+        bold.setBold(True)
+        fm, fm_b = QFontMetrics(self.font()), QFontMetrics(bold)
+        title = f"{self.dates[i]:%a} {_fmt_day(self.dates[i])}"
+        lines = [(s, f"{s['name']}", self._fmt(v)) for v, s in shown]
+        name_w = max([fm.horizontalAdvance(n) for _s, n, _v in lines] + [fm_b.horizontalAdvance(title)])
+        val_w = max(fm.horizontalAdvance(v) for _s, _n, v in lines)
+        w = 14 + name_w + 16 + val_w + 12
+        extra = len(rows) - len(shown)
+        h = fm_b.height() + fm.height() * (len(lines) + (1 if extra else 0)) + 16
+        bx = x + 14 if x + 14 + w < self.width() - 4 else x - w - 14
+        by = plot.top() + 4
+        p.setPen(QPen(QColor(255, 255, 255, 40), 1))
+        p.setBrush(QColor(14, 18, 26, 240))
+        p.drawRoundedRect(QRectF(bx, by, w, h), 7, 7)
+        p.setFont(bold)
+        p.setPen(TEXT_STRONG)
+        p.drawText(QRectF(bx + 10, by + 7, w - 20, fm_b.height()), Qt.AlignmentFlag.AlignLeft, title)
+        p.setFont(self.font())
+        ly = by + 8 + fm_b.height()
+        for s, name, value in lines:
+            color, _ = series_style(s["slot"])
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            p.drawRoundedRect(QRectF(bx + 10, ly + fm.height() / 2 - 3, 6, 6), 1.5, 1.5)
+            p.setPen(QColor(214, 225, 240, 215))
+            p.drawText(QRectF(bx + 22, ly, name_w, fm.height()), Qt.AlignmentFlag.AlignLeft, name)
+            p.setPen(TEXT_STRONG)
+            p.drawText(QRectF(bx + 10, ly, w - 20, fm.height()), Qt.AlignmentFlag.AlignRight, value)
+            ly += fm.height()
+        if extra:
+            p.setPen(TEXT)
+            p.drawText(QRectF(bx + 22, ly, w - 30, fm.height()), Qt.AlignmentFlag.AlignLeft, f"+{extra} more")
+
+    # ── interaction ──
+    def mouseMoveEvent(self, event):
+        if not self.dates:
+            return
+        plot = self._plot()
+        x = event.position().x()
+        n = len(self.dates)
+        i = 0 if n == 1 else round((x - plot.left()) / plot.width() * (n - 1))
+        i = max(0, min(n - 1, i))
+        if i != self._hover:
+            self._hover = i
+            self.update()
+
+    def leaveEvent(self, _event):
+        self._hover = -1
+        self.update()
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+def _hatch_brush(color):
+    """Diagonal hatch (45 degrees) in the surface colour, for texture slots."""
+    from PySide6.QtGui import QBrush
+    return QBrush(color, Qt.BrushStyle.BDiagPattern)

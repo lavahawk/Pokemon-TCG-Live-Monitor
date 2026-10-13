@@ -26,3 +26,10 @@ Transparency: `formulas.py` builds the hover formulas with real numbers (estimat
 **Conversion** (`res['conversion']`): Top 32 / Day 2 as a Beta-Binomial with an empirical-Bayes prior around q0 (≈ 9.7% of Day 2 decks make Top 32). Shown as mean× with range and P(> 1.0×), so a deck with 2 Day 2 finishes can no longer claim 6×.
 
 **No gem detector** (user decision 2026-10-12): underplayed strong decks should surface naturally from the Score (e.g. Starmie Froslass, #1 on 0.6% share).
+
+## In-person records (2026-10-12 night)
+In-person events now feed W/L and matchups from Limitless Labs pairings (whole field, every round). The Day 2 → Top 32 logit link is **not** added to θ when any row has `ip_games` (it would count the same events twice); conversion is still computed for the Converts column, and the hover drops the link line automatically (`res["in_person"]` is false).
+
+## Par and record basis (2026-10-12 night)
+- Sheet records are weighted proportions on real games (`record_basis = real_games`); `scale_of` = eff_games / raw games ≤ 1.
+- `par` = an even deck's result under the tie rule, from the share-weighted field tie rate. Mirror cells are worth par; `p_above_even` = P(Score > par). Reported in `info["par"]` and `info["field_tie_rate"]`.

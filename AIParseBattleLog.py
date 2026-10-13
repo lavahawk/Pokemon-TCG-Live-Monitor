@@ -333,7 +333,8 @@ def load_chat_capture():
     return {}
 
 
-def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_path=None, is_tournament=False, battle_hash=None):
+def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_path=None, is_tournament=False,
+                     battle_hash=None, deck_source=None):
     # Attach the current match's chat (if any) to the battle record so it can
     # be reviewed alongside the game data.
     chat_capture = load_chat_capture()
@@ -346,7 +347,7 @@ def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_
         result=win_or_loss,
         my_rank=load_last_rank(),
         confidence=confidence,
-        deck_source="AI" if not is_local_only_mode() and load_api_key() else "Local",
+        deck_source=deck_source or ("AI" if not is_local_only_mode() and load_api_key() else "Local"),
         log_file=os.path.abspath(log_file_path) if log_file_path else latest_log_file(),
         is_tournament=is_tournament,
         chat_log=chat_log,
@@ -361,6 +362,9 @@ def _console_available():
     TTY and prompting would block forever, silently preventing the battle
     from being saved. Tk dialogs would also hang with no user visible UI.
     """
+    if os.environ.get("PTCGL_NO_PROMPT"):
+        # Run by the monitor: stdout is captured, so a prompt would be invisible.
+        return False
     try:
         return bool(sys.stdin is not None and sys.stdin.isatty())
     except Exception:
@@ -375,17 +379,10 @@ def local_fallback_parse(battlelog, username):
             "Local-only mode could not find your deck from OCR.\n\nPlease enter your deck name:",
         )
 
-    # Only prompt when a console is available. In headless mode a prompt
-    # would block forever, so fall back to a placeholder instead.
-    opponents_deck = None
+    # The opponent's deck is asked for by the overlay's "Opponent deck" card
+    # after saving (deck_confirm.py); store the best guess until then.
     inferred = infer_opponent_deck_from_log(battlelog)
-    if _console_available():
-        opponents_deck = prompt_string(
-            "Enter Opponent Deck",
-            "Local-only mode is active.\n\nPlease enter the opponent's deck name for this battle:",
-        )
-    if not opponents_deck:
-        opponents_deck = inferred or "Unknown (local mode)"
+    opponents_deck = inferred or "Unknown (local mode)"
 
     win_or_loss = parse_result_from_log(battlelog, username)
     if not win_or_loss and _console_available():
@@ -409,6 +406,7 @@ def local_fallback_parse(battlelog, username):
         "OpponentsDeck": (opponents_deck or "").strip(),
         "Win_or_Loss": (win_or_loss or "").strip().title(),
         "Confidence": confidence,
+        "deck_source": "guess" if inferred else "none",
     }
 
 
@@ -612,6 +610,7 @@ def main():
     else:
         try:
             response_dict = ai_parse(battlelog, username, api_key)
+            response_dict["deck_source"] = "ai"
         except Exception as exc:
             print(f"AI parse failed: {exc}")
             print("Falling back to local-only parsing.")
@@ -667,11 +666,22 @@ def main():
         print(f"Tournament check failed: {exc}")
 
     try:
+        deck_source = response_dict.get("deck_source") or "none"
+        if deck_source == "ai" and not (response_dict.get("OpponentsDeck") or "").strip():
+            deck_source = "none"  # AI gave no deck: ask on the overlay card
         battle_id = save_to_database(my_deck, opponents_deck, win_or_loss, confidence, explicit_log_path,
-                                     is_tournament=tournament, battle_hash=battle_hash)
+                                     is_tournament=tournament, battle_hash=battle_hash,
+                                     deck_source="AI" if deck_source == "ai" else "Local")
         if battle_id:
             print(f"Battle saved to database{' (Limitless tournament)' if tournament else ''}.")
             print(f"BATTLE_ID={battle_id}")
+            try:
+                # Overlay card: shows the AI's pick (click to fix) or asks for the deck.
+                from deck_confirm import write_request
+                write_request(battle_id, opponents_deck, source=deck_source, needs_input=deck_source != "ai",
+                              my_deck=my_deck, result=win_or_loss)
+            except Exception as exc:
+                print(f"Warning: Could not request the deck confirmation card: {exc}")
         else:
             print("DUPLICATE: this battle log is already in the database.")
     except Exception as exc:

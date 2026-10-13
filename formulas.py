@@ -30,9 +30,11 @@ def estimate(post, weighted=True):
     lines = [
         f"{F}Estimate = (W + 2) / (W + L + 4) = {a:.1f} / {a + b:.1f} = {_pct(a / (a + b))}{END}",
         f"{F}Range = {tail}th–{100 - tail}th percentile of Beta({a:.1f}, {b:.1f}){END}",
-        f"{F}Chance > 50% = P(Beta({a:.1f}, {b:.1f}) > 0.5) = {_pct(post['p_above_even'])}{END}",
+        f"{F}Chance > par = P(Beta({a:.1f}, {b:.1f}) > {post.get('par', 0.5):.3f}) = {_pct(post['p_above_even'])}{END}",
+        f"{F}par = (1 − T) / 2 + T × tie share = {_pct(post.get('par', 0.5))}{END}  "
+        f"{DIM}(an even contest under your tie rule; T = tie rate, shrunk toward 12%){END}",
         f"{DIM}W, L = wins and losses{' after weighting' if weighted else ''}; ties split by your tie rule. "
-        f"The +2 / +4 is a mild prior (like starting at 2-2) that keeps tiny samples near 50%.{END}",
+        f"The +2 / +4 is a mild prior (like starting at 2-2 around par) that keeps tiny samples near par.{END}",
     ]
     if weighted:
         lines.append(game_weights())
@@ -66,13 +68,16 @@ def effective_games(row, pilot_sd=None):
     eff = row.get("eff_games")
     weighted = sum(float(row.get(k) or 0) for k in ("wins", "losses", "ties"))
     tau = f"{pilot_sd * 100:.0f}%" if pilot_sd else "τ"
-    lines = [f"{F}effective games = Kish n ÷ design effect{END}",
+    lines = [f"{F}evidence (effective sample size) = Kish n ÷ design effect{END}",
              f"{F}Kish n = (Σ w·g)² / Σ w²·g{END}  {DIM}(w = event weight, g = games){END}",
              f"{F}design effect = 1 + τ² / (p(1 − p)) × (avg rounds per player − 1),  τ = {tau}{END}",
              f"{DIM}τ = how much players of the same deck differ (measured from Limitless standings). "
              f"One player's rounds aren't independent games, so they count for less.{END}"]
     if eff is not None:
-        lines.append(f"{F}{raw:,} games played · {weighted:,.0f} weighted → {eff:,.0f} effective{END}")
+        lines.append(f"{F}{raw:,} games played (mirror games count once for each player){END}")
+        lines.append(f"{F}evidence ≈ {eff:,.0f}{END}  {DIM}= how many independent, equally weighted games "
+                     f"would give the same certainty. A statistical size used for the ranges, not data points: "
+                     f"weights change how much each game counts, never how many games there are.{END}")
     return "<br>".join(lines)
 
 
@@ -80,7 +85,7 @@ def score(res, info, is_mine=False, names=None, archetype=None):
     names = names or {}
     mu, k_s, k_m = info.get("mu", 0.5), info.get("k_s", 0), info.get("k_m", 0)
     lines = [
-        f"{F}Score = Σ share × matchup estimate{END}  {DIM}(each opponent by its meta share; mirror = 50%){END}",
+        f"{F}Score = Σ share × matchup estimate{END}  {DIM}(each opponent by its meta share; mirror = par {_pct(info.get('par', 0.5))}){END}",
         f"{F}matchup estimate = (k·θ + wins) / (k + games),  k = {k_m:.0f}{END}",
         f"{F}θ (deck strength) = {_pct(res.get('strength', 0))} ± {res.get('strength_sd', 0) * 100:.1f}{END}  "
         f"{DIM}from all its matchups, starting at "
@@ -115,8 +120,8 @@ def pooled_matchup(post, deck_mean, strength=6.0):
             f"leans on it until you've played it a few times.{END}")
 
 
-def verdict(p):
-    return (f"{F}Chance > 50% = {_pct(p)}{END}<br>"
+def verdict(p, par=0.5):
+    return (f"{F}Chance > {'50%' if abs(par - 0.5) < 0.0005 else 'par ' + _pct(par)} = {_pct(p)}{END}<br>"
             f"{DIM}Favored ≥ 90% · Leaning favored ≥ 70% · Too close to call 30–70% · "
             f"Leaning unfavored ≤ 30% · Unfavored ≤ 10%{END}")
 

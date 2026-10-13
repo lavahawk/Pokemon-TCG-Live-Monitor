@@ -55,6 +55,10 @@ def _read_log_file(path):
     return None
 
 
+# Opponent placeholder for imported results (no matchup information).
+IMPORTED_OPPONENT = "(imported result)"
+
+
 class BattleDatabase:
     """Handles all database operations for battle tracking."""
 
@@ -111,7 +115,10 @@ class BattleDatabase:
             cur.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
 
             columns = {row[1] for row in cur.execute("PRAGMA table_info(battles)")}
-            for name, ddl in (("is_tournament", "INTEGER DEFAULT 0"), ("chat_log", "TEXT"), ("log_hash", "TEXT")):
+            # weight: an explicit per-game weight (imported results); import_id
+            # groups the rows of one import so it can be removed as a whole.
+            for name, ddl in (("is_tournament", "INTEGER DEFAULT 0"), ("chat_log", "TEXT"), ("log_hash", "TEXT"),
+                              ("weight", "REAL"), ("import_id", "TEXT")):
                 if name not in columns:
                     cur.execute(f"ALTER TABLE battles ADD COLUMN {name} {ddl}")
             conn.commit()
@@ -373,7 +380,8 @@ class BattleDatabase:
         resets = dict(cur.execute("SELECT date, reset_at FROM session_resets").fetchall())
         cur.execute("DELETE FROM session_stats")
         rows = cur.execute("""
-            SELECT DATE(timestamp), timestamp, upper(result), my_rank FROM battles ORDER BY timestamp
+            SELECT DATE(timestamp), timestamp, upper(result), my_rank FROM battles
+            WHERE COALESCE(deck_source, '') != 'Import' ORDER BY timestamp
         """).fetchall()
         days = {}
         for day, ts, result, rank in rows:
@@ -413,6 +421,50 @@ class BattleDatabase:
             conn.close()
         return True
 
+    # ── imported results (Advanced → Import your results) ──────────────
+    def add_imported_record(self, deck, wins, losses, ties, weight, date, *, tournament=False, note=""):
+        """Add results played before / outside the app as one game row each
+        (opponent unknown), with an explicit per-game weight. They count in
+        deck statistics and the Score, not in today's W-L, the charts,
+        Recent Battles or matchups. Returns the import id."""
+        import uuid
+        import_id = uuid.uuid4().hex[:12]
+        stamp = f"{date} 12:00:00"
+        rows = ([("Win",)] * int(wins) + [("Loss",)] * int(losses) + [("Tie",)] * int(ties))
+        conn = self._connect()
+        try:
+            conn.executemany(
+                "INSERT INTO battles (timestamp, my_deck, opponent_deck, result, my_rank, confidence, deck_source, "
+                "log_file, is_tournament, weight, import_id) VALUES (?, ?, ?, ?, NULL, 100, 'Import', ?, ?, ?, ?)",
+                [(stamp, deck, IMPORTED_OPPONENT, r[0], (note or "")[:200], 1 if tournament else 0, float(weight),
+                  import_id) for r in rows])
+            conn.commit()
+        finally:
+            conn.close()
+        return import_id
+
+    def list_imports(self):
+        """[(import_id, date, deck, wins, losses, ties, weight, tournament, note)] newest first."""
+        return self._fetchall("""
+            SELECT import_id, DATE(MIN(timestamp)), my_deck,
+                   SUM(CASE WHEN result='Win' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN result='Loss' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN lower(result) IN ('tie','draw') THEN 1 ELSE 0 END),
+                   MAX(weight), MAX(is_tournament), MAX(log_file)
+            FROM battles WHERE deck_source = 'Import' AND import_id IS NOT NULL
+            GROUP BY import_id ORDER BY MIN(id) DESC
+        """)
+
+    def delete_import(self, import_id):
+        conn = self._connect()
+        try:
+            changed = conn.execute("DELETE FROM battles WHERE deck_source = 'Import' AND import_id = ?",
+                                   (import_id,)).rowcount
+            conn.commit()
+        finally:
+            conn.close()
+        return changed
+
     # ── queries for the UI ─────────────────────────────────────────────
     def _fetchall(self, query, params=()):
         conn = self._connect()
@@ -424,13 +476,13 @@ class BattleDatabase:
     def get_recent_battles_with_ids(self, limit=20):
         return self._fetchall("""
             SELECT id, timestamp, my_deck, opponent_deck, result, my_rank, confidence, deck_source, log_file, is_tournament
-            FROM battles ORDER BY timestamp DESC, id DESC LIMIT ?
+            FROM battles WHERE COALESCE(deck_source, '') != 'Import' ORDER BY timestamp DESC, id DESC LIMIT ?
         """, (limit,))
 
     def get_recent_battles(self, limit=10):
         return self._fetchall("""
             SELECT timestamp, my_deck, opponent_deck, result, my_rank, log_file, is_tournament
-            FROM battles ORDER BY timestamp DESC, id DESC LIMIT ?
+            FROM battles WHERE COALESCE(deck_source, '') != 'Import' ORDER BY timestamp DESC, id DESC LIMIT ?
         """, (limit,))
 
     def get_deck_stats(self, deck_name):
@@ -462,7 +514,7 @@ class BattleDatabase:
                    SUM(CASE WHEN result='Loss' THEN 1 ELSE 0 END),
                    COUNT(*)
             FROM battles
-            WHERE timestamp >= date('now', 'localtime', '-' || ? || ' days')
+            WHERE timestamp >= date('now', 'localtime', '-' || ? || ' days') AND COALESCE(deck_source, '') != 'Import'
             GROUP BY DATE(timestamp) ORDER BY d ASC
         """, (days,))
 
@@ -487,18 +539,19 @@ class BattleDatabase:
                    SUM(CASE WHEN result='Win' THEN 1 ELSE 0 END) AS wins,
                    SUM(CASE WHEN result='Loss' THEN 1 ELSE 0 END),
                    SUM(CASE WHEN lower(result) IN ('tie','draw') THEN 1 ELSE 0 END)
-            FROM battles WHERE my_deck = ?
+            FROM battles WHERE my_deck = ? AND COALESCE(deck_source, '') != 'Import'
             GROUP BY opponent_deck ORDER BY games DESC, wins DESC, opponent_deck ASC
         """, (deck_name,))
 
     def get_deck_recent_battles(self, deck_name, limit=8):
         return self._fetchall("""
             SELECT timestamp, my_deck, opponent_deck, result, my_rank, log_file, is_tournament
-            FROM battles WHERE my_deck = ? ORDER BY timestamp DESC, id DESC LIMIT ?
+            FROM battles WHERE my_deck = ? AND COALESCE(deck_source, '') != 'Import' ORDER BY timestamp DESC, id DESC LIMIT ?
         """, (deck_name, limit))
 
     def get_deck_battle_history(self, deck_name):
-        return self._fetchall("SELECT timestamp, result FROM battles WHERE my_deck = ? ORDER BY timestamp ASC", (deck_name,))
+        return self._fetchall("SELECT timestamp, result FROM battles WHERE my_deck = ? AND COALESCE(deck_source, '') != 'Import' "
+                              "ORDER BY timestamp ASC", (deck_name,))
 
     def get_deck_battles_with_rank(self, deck_name):
         rows = self._fetchall("SELECT result, my_rank, is_tournament FROM battles WHERE my_deck = ? ORDER BY timestamp ASC", (deck_name,))
@@ -507,15 +560,16 @@ class BattleDatabase:
     def get_deck_battles_detailed(self, deck_name):
         """Every game with this deck: result, rank, tournament flag, date, opponent."""
         rows = self._fetchall(
-            "SELECT result, my_rank, is_tournament, timestamp, opponent_deck FROM battles "
+            "SELECT result, my_rank, is_tournament, timestamp, opponent_deck, weight, deck_source FROM battles "
             "WHERE my_deck = ? ORDER BY timestamp ASC", (deck_name,))
         return [{"result": str(r or "").strip(), "my_rank": rank, "is_tournament": bool(t),
-                 "timestamp": ts, "opponent": opp} for r, rank, t, ts, opp in rows]
+                 "timestamp": ts, "opponent": opp, "weight": w, "imported": src == "Import"}
+                for r, rank, t, ts, opp, w, src in rows]
 
     def get_battle_timeline(self):
         """Every battle oldest first: (timestamp, my_deck, opponent_deck, result, my_rank, is_tournament)."""
         return self._fetchall("SELECT timestamp, my_deck, opponent_deck, result, my_rank, is_tournament "
-                              "FROM battles ORDER BY timestamp ASC, id ASC")
+                              "FROM battles WHERE COALESCE(deck_source, '') != 'Import' ORDER BY timestamp ASC, id ASC")
 
     def get_all_battles_with_rank(self):
         rows = self._fetchall("SELECT my_deck, result, my_rank, is_tournament FROM battles ORDER BY timestamp ASC")

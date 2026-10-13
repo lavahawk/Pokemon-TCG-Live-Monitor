@@ -50,6 +50,10 @@ Derived numbers:
 | `.japan_translation_cache.json` | japan_data | japan_data | AI translations |
 | `.meta_icon_cache/*.png` | sprite fetcher | StatsUI | pokesprite / PokeAPI images |
 | `.deck_icon_overrides.json`, `.pinned_decks.json` | StatsUI | StatsUI | per-deck UI prefs |
+| `.deck_archetypes.json` | StatsUI deck page "Base archetype" field | `deck_analytics.match_meta_row` (every caller) | `{your deck name: Limitless archetype}`; wins over name matching |
+| `Logs/.deck_confirm.json` | parser after saving a battle (`deck_confirm.write_request`) | overlay (`deck_popup`) | `{battle_id, deck, source ai/guess/none, needs_input, result, created, handled}` |
+| `Logs/.game_session` | monitor on "Pokemon TCG Live detected" | overlay | epoch; the overlay offers the W-L reset once per value (within 120 s) |
+| `Logs/.menu_seen` | monitor `detect_menu_stats` | overlay | epoch of the last main-menu sighting (deck card fades after it) |
 | `.stats_window_geometry.json` | StatsUI | StatsUI | written on every move/resize pixel |
 | `.console_pref` | StatsUI | StatsUI | `visible`/`hidden` |
 | `.overlay_debug.log` | OverlayUI | humans | unbounded (BUG-019) |
@@ -64,3 +68,16 @@ Derived numbers:
 - Starts with `Setup`; turns are `<name>'s Turn` lines (new format) or `Turn # N - <name>'s Turn` (old).
 - Ends with one of: `All Prize cards taken. X wins.` · `Opponent conceded. X wins.` · `You conceded. X wins.` · `Opponent took all of their Prize cards. X wins.` · `Knocked Out with no Benched Pokémon. X wins.` · `Opponent was inactive for too long. X wins.`
 - `parse_winner_from_log` takes the last `[A-Za-z0-9_-]+ wins.` match (BUG-023 for other name chars).
+
+### `.app_settings.json` keys added 2026-10-12 (evening)
+- `overlay_show_max_elo` (default true): mini GUI shows `Max:`.
+- `overlay_session_reset_prompt` (default true): new-session Reset? popup.
+- `matrix_archetypes` (list of meta row ids, or null = top N by share) and `matrix_my_decks` (list of deck names, or null = follow "★ Starred decks"): Meta → Matchups picks.
+
+### Added 2026-10-12 (night)
+| File | Writer | Reader | Content |
+|---|---|---|---|
+| `.meta_store/labs_index.json` | `meta_sources.list_labs` (6 h TTL) | `_fetch_labs` | Limitless Labs events: labs_id, name, start date |
+| `.meta_store/labs_<id>.json` | `meta_sources.fetch_labs_results` (forever) | `_assemble` | one in-person event aggregated per archetype slug: records, matchups, per-player records, decks (slug → name, icons), games / unknown |
+| `.app_settings.json` `meta_trend` | StatsUI Trend view | StatsUI | period, sources, min_players, mode, stacked, view, smooth, selected deck ids |
+| Sheet fields | | | rows: `ip_games` (in-person games inside `raw_games`); sheet: `in_person_records` (events with Labs results) |

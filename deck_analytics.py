@@ -2,7 +2,9 @@
 Helpers for deck-level statistics and Limitless archetype matching.
 """
 
+import json
 import math
+import os
 import re
 from difflib import SequenceMatcher
 from statistics import NormalDist
@@ -54,6 +56,31 @@ def tie_split(ties, mode=None):
         return 0.0, 0.0
     share = _TIE_WIN_SHARE[mode]
     return ties * share, ties * (1.0 - share)
+
+
+TYPICAL_TIE_RATE = 0.12  # Standard Bo1/Bo3 mix on Limitless; prior for small samples
+_TIE_PRIOR_GAMES = 4.0  # light: a record's own tie rate takes over after a few games
+
+
+def tie_par(tie_rate=None, mode=None):
+    """Result rate of an EVEN contest under the tie rule: each side wins half
+    the decided games and gets its tie share of the ties.
+        par = (1 - T) / 2 + T x tie win share
+    50% when ties count half or are ignored; below 50% when ties count as
+    losses (both players take the loss). T = tie rate."""
+    mode = mode or tie_mode()
+    if mode == "ignore":
+        return 0.5
+    t = TYPICAL_TIE_RATE if tie_rate is None else min(1.0, max(0.0, float(tie_rate)))
+    return (1.0 - t) / 2.0 + t * _TIE_WIN_SHARE[mode]
+
+
+def record_par(wins, losses, ties, mode=None):
+    """tie_par() for one record, its tie rate shrunk toward the typical rate
+    so one tied game can't move par much."""
+    n = max(0.0, float(wins or 0)) + max(0.0, float(losses or 0)) + max(0.0, float(ties or 0))
+    t = (max(0.0, float(ties or 0)) + TYPICAL_TIE_RATE * _TIE_PRIOR_GAMES) / (n + _TIE_PRIOR_GAMES)
+    return tie_par(t, mode)
 
 
 def result_rate(wins, losses, ties=0.0, mode=None):
@@ -165,14 +192,19 @@ def beta_ppf(q, a, b):
 CREDIBLE_LEVEL = 0.90  # "likely range" shown in the UI: 90% of the posterior
 
 
-def win_rate_posterior(wins, losses, ties=0.0, *, prior_mean=0.5, prior_strength=4.0, level=CREDIBLE_LEVEL):
+def win_rate_posterior(wins, losses, ties=0.0, *, prior_mean=None, prior_strength=4.0, level=CREDIBLE_LEVEL):
     """Beta posterior for a win rate.
 
     prior_mean/prior_strength: the prior is worth `prior_strength` games
-    centred on `prior_mean` (default Beta(2, 2): mild pull toward 50%).
-    Matchups use the deck's own win rate as prior_mean (partial pooling).
-    Returns mean, sd, equal-tailed `level` range, and exact P(WR > 50%).
+    centred on `prior_mean` (default: par, i.e. 50% unless ties count as
+    losses - see tie_par). Matchups use the deck's own win rate as
+    prior_mean (partial pooling).
+    Returns mean, sd, equal-tailed `level` range, par and exact P(WR > par)
+    ("p_above_even": better than an even contest).
     """
+    par = record_par(wins, losses, ties)
+    if prior_mean is None:
+        prior_mean = par
     wins = max(0.0, float(wins or 0))
     losses = max(0.0, float(losses or 0))
     ties = max(0.0, float(ties or 0))
@@ -199,7 +231,8 @@ def win_rate_posterior(wins, losses, ties=0.0, *, prior_mean=0.5, prior_strength
         "low": beta_ppf(tail, a, b),
         "high": beta_ppf(1.0 - tail, a, b),
         "level": level,
-        "p_above_even": 1.0 - beta_cdf(0.5, a, b),
+        "par": par,
+        "p_above_even": 1.0 - beta_cdf(par, a, b),
     }
 
 
@@ -561,6 +594,8 @@ def battle_weight(battle, expansions=None):
         except Exception:
             eras = [1.0, 0.7, 0.4]
         era_w = eras[era] if era < len(eras) else 0.0
+    if battle.get("weight") is not None:  # imported results carry their own weight
+        return era_w * max(0.0, float(battle["weight"]))
     return era_w * rank_weight(battle.get("my_rank"), is_tournament=bool(battle.get("is_tournament")))
 
 
@@ -592,7 +627,63 @@ def weighted_record(battles, expansions=None):
     return wins * scale, losses * scale, ties * scale
 
 
+# Your deck names are free text ("Pult Hammers NAIC 2026"), so a deck can name
+# the Limitless archetype it is a version of. Stored as {deck name: archetype}
+# in .deck_archetypes.json, set from the deck page's "Base archetype" field.
+DECK_ARCHETYPES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".deck_archetypes.json")
+_archetype_cache = {"mtime": None, "map": {}}
+
+
+def deck_archetypes():
+    """{deck name: base archetype} (re-read only when the file changes)."""
+    try:
+        mtime = os.path.getmtime(DECK_ARCHETYPES_FILE)
+    except OSError:
+        _archetype_cache.update(mtime=None, map={})
+        return {}
+    if mtime != _archetype_cache["mtime"]:
+        try:
+            with open(DECK_ARCHETYPES_FILE, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            mapping = {str(k): str(v) for k, v in data.items() if v} if isinstance(data, dict) else {}
+        except Exception:
+            mapping = {}
+        _archetype_cache.update(mtime=mtime, map=mapping)
+    return _archetype_cache["map"]
+
+
+def deck_archetypes_signature():
+    deck_archetypes()
+    return _archetype_cache["mtime"]
+
+
+def set_deck_archetype(deck_name, archetype):
+    """Set (or with an empty archetype, clear) a deck's base archetype."""
+    mapping = dict(deck_archetypes())
+    if archetype:
+        mapping[deck_name] = archetype
+    else:
+        mapping.pop(deck_name, None)
+    tmp = DECK_ARCHETYPES_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(mapping, handle, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, DECK_ARCHETYPES_FILE)
+    _archetype_cache["mtime"] = None
+
+
 def match_meta_row(deck_name, meta_rows, *, min_score=0.62):
+    """Best Limitless row for a deck name. A base archetype set for the deck
+    wins over name matching (the hit then carries "override": archetype)."""
+    override = deck_archetypes().get(deck_name or "")
+    if override:
+        hit = _fuzzy_meta_row(override, meta_rows, min_score=min_score)
+        if hit:
+            hit["override"] = override
+            return hit
+    return _fuzzy_meta_row(deck_name, meta_rows, min_score=min_score)
+
+
+def _fuzzy_meta_row(deck_name, meta_rows, *, min_score=0.62):
     local_norm = normalize_deck_name(deck_name)
     local_tokens = set(local_norm.split())
     if not local_norm:
