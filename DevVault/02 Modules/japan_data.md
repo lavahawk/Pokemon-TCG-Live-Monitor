@@ -1,12 +1,11 @@
 ---
-tags: [module, integration]
-file: japan_data.py
-lines: 902
+tags: [module, integration, removed]
+file: japan_data.py (removed 2026-10-13)
 ---
-# japan_data.py: Japanese meta
+# japan_data.py: removed
 
-Scrapes pokekameshi.com: the tier list (`/strongestdeck-tire/`), 5 **hard-coded** daily winner pages (`pokemontaikaiwin2026080x–0816`) and 5 hard-coded data-lab weekly reports (`taikairesult-m6-3w … m5-9w`). It parses HTML with regex (h2/h3 headings, `優勝/準優勝/ベスト4/ベスト8：deck` lines), weights placings, translates names (static map → cache → optional gpt-4o) and outputs Limitless-shaped rows. Cache 1 h (`.meta_cache_japan.json`).
+The pokekameshi.com scraper (tier list, hard-coded winner / data-lab pages, OpenAI name translation) was **removed on 2026-10-13**. Its City League numbers came from the same official top-16 lists that Limitless JP already carries, so they couldn't be added to the meta sheet without double-counting. It was also fragile (BUG-027).
 
-Problems: all under BUG-027 in [[Bug Register]]. Summary: stale sources, rows get 100% win rate (finishes ≠ wins, so hide the WR/Bayes/P>50 columns for Japan or model "share" only), the first-substring translation, duplicate/wrong dictionary entries, 2 AI calls per name, and a timeframe filter that's a placeholder (all options return the same rows).
+The **Japan Data** tab now reads Limitless City Leagues from the meta sheet's event cache: `meta_sources.japan_view(since, sheet_rows)` gives per-archetype points (16 for 1st … 1 for 16th), top-16 count, share, top 4, wins, average placing and a trend (newer half vs older half of the period). Names follow the Meta tab (same icons = same archetype). See [[Data Sources]] and [[StatsUI]].
 
-Fix direction: discover slugs from `sitemap.xml` (constant already defined, unused); use BeautifulSoup (already a dependency); use the longest-match translation; batch the AI translation through `hard_refresh_translations`.
+Left on disk and unused: `.meta_cache_japan.json`, `.japan_translation_cache.json`.

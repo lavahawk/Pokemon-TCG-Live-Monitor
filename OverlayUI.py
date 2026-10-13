@@ -25,6 +25,17 @@ LOG_DIR = os.path.join(BASE_DIR, "Logs")
 GAME_SESSION_FILE = os.path.join(LOG_DIR, ".game_session")  # written by the monitor on game start
 SESSION_PROMPT_WINDOW_S = 120  # offer the W-L reset only this soon after the game started
 SESSION_PROMPT_LINGER_MS = 10000
+DECK_FLAGS_FILE = os.path.join(BASE_DIR, ".deck_flags.json")  # starred / ignored decks (dashboard)
+
+
+def ignored_decks():
+    """Decks marked Ignore on the dashboard: left out of today's W-L."""
+    try:
+        import json
+        with open(DECK_FLAGS_FILE, "r", encoding="utf-8") as handle:
+            return [str(d) for d in (json.load(handle) or {}).get("ignored", [])]
+    except Exception:
+        return []
 
 
 def _overlay_setting(key, default):
@@ -738,7 +749,7 @@ class MinimalOverlay(QWidget):
                         self.max_rank = f.read().strip()
             
             # Get W/L from database (much faster!)
-            self.wins, self.losses = self.db.get_today_stats()
+            self.wins, self.losses = self.db.get_today_stats(ignored_decks())
             
             # Update display
             self.update_display()

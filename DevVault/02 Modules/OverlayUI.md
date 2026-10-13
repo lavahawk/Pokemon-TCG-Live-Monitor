@@ -31,3 +31,6 @@ Related: BUG-019, 020, 032.
 - `overlay_show_max_elo` off → "Elo:1487 | 4-2". `adjustSize` is deferred with `QTimer.singleShot(0)`: called straight after `setText` the layout still had the old size hint and the pill didn't shrink.
 - Both are toggled from Advanced → **Preferences · Overlay** (StatsUI) and re-read every 3 s, no restart needed.
 - **Gotcha:** the overlay is shown before its first `follow_game_window` tick, so anything anchored to it must wait for `_overlay_placed` (set right after the first `SetWindowPos`). The Reset? popup is re-anchored each move (`_position_reset_popup`).
+
+## 2026-10-13
+- Today's W-L skips games with decks marked **Ignore** on the dashboard (`ignored_decks()` reads `.deck_flags.json`; `BattleDatabase.get_today_stats(ignored_decks)` subtracts their wins/losses since the last reset).

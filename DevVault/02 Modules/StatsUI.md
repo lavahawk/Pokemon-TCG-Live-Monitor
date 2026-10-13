@@ -61,3 +61,12 @@ Deck page header: "Base archetype" line edit under the record (`_create_base_arc
 
 ## TrainerHill tab (2026-10-12 late)
 Embedded tools.trainerhill.com (`create_trainerhill_tab`, `_ensure_trainerhill_view`, `open_trainerhill_tool(path)`, `ToolsPage`). See Session Log. The Meta Trend view's data still comes from `trainerhill_trend.py` (their API), drawn natively.
+
+## 2026-10-13
+- **Meta → Cards** (4th view, built lazily like the matrix): archetype picker (by share, with list counts), **Compare with** one of your PTCGL exports (picking a list jumps to the closest archetype, `card_usage.best_archetype`), Hide under 10%. Table: Card · Type · Played in (% of lists; core ≥90 white, common ≥50 blue, tech grey) · Copies (avg when played) · Usual (rounded avg for cards in ≥ half the lists) · Yours · ± (red = missing core card). Summary line: lists, core count, "x% like the typical list", missing core, rare picks (<10%). Double-click opens the card on Limitless. Logic in `card_usage.py` (no Qt; tests in `test_card_usage.py`).
+- **Japan Data** tab rebuilt on Limitless City Leagues (`meta_sources.japan_view`): Period (2 weeks / month / 3 months / window), metrics (City Leagues, top-16 placings, archetypes), table # · Deck · Points · Top 16 · Share · Top 4 · Wins · Avg place · Trend. Rendered each time the tab opens (cache only, fast). `JapanFetcher`, the AI-translate / hard-refresh controls and `japan_data.py` are gone.
+- **Deck page "Win rate over time"** is a `SeriesChart` now (hover per game with opponent, drag-zoom, result strip) and uses the **weighted** estimate like the Win rate card (it was unweighted before). `MplCanvas`, `_smart_time_format` and the matplotlib backend import were removed (matplotlib is still used by `charts.chart_font()` for the DejaVu TTF only).
+- **Dashboard win-rate chart: deck filter** (`winrate_deck_box`, "All decks" + decks by games played). The summary line uses the same filtered games (`_filter_winrate_deck`). The rank chart stays all decks.
+- **Advanced → Meta Data:** optional Limitless API key (`limitless_api_key`).
+- Console detection lists processes with `game_window.process_list()` (Toolhelp snapshot, ~25 ms) and reads command lines only for python processes (was `psutil.process_iter` with cmdline for every process).
+- Meta status line shows the number of decklists.

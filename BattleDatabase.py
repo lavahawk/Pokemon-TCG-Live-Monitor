@@ -400,14 +400,28 @@ class BattleDatabase:
                         (day, wins, losses, max_rank, min_rank))
         conn.commit()
 
-    def get_today_stats(self):
+    def get_today_stats(self, ignored_decks=None):
+        """Today's W-L (since the last reset). Games with an ignored deck
+        (Decks → Ignore) are left out."""
         today = datetime.now().strftime("%Y-%m-%d")
         conn = self._connect()
         try:
             row = conn.execute("SELECT wins, losses FROM session_stats WHERE date = ?", (today,)).fetchone()
+            wins, losses = (row[0], row[1]) if row else (0, 0)
+            ignored = [d for d in (ignored_decks or []) if d]
+            if ignored and (wins or losses):
+                reset = conn.execute("SELECT reset_at FROM session_resets WHERE date = ?", (today,)).fetchone()
+                marks = ",".join("?" * len(ignored))
+                skip_w, skip_l = conn.execute(
+                    f"SELECT SUM(upper(result) = 'WIN'), SUM(upper(result) = 'LOSS') FROM battles "
+                    f"WHERE DATE(timestamp) = ? AND timestamp > ? AND COALESCE(deck_source, '') != 'Import' "
+                    f"AND my_deck IN ({marks})",
+                    [today, reset[0] if reset and reset[0] else ""] + ignored).fetchone()
+                wins = max(0, wins - (skip_w or 0))
+                losses = max(0, losses - (skip_l or 0))
         finally:
             conn.close()
-        return (row[0], row[1]) if row else (0, 0)
+        return wins, losses
 
     def reset_today_stats(self):
         """Reset today's W/L to 0-0 (battle history is untouched; survives rebuilds)."""

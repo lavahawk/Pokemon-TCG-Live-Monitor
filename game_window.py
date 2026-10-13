@@ -56,6 +56,12 @@ def _process_names_toolhelp():
     """Executable names of every process via CreateToolhelp32Snapshot - one
     kernel snapshot, a few milliseconds. (psutil's per-process name lookup
     cost ~3 s of CPU for ~600 processes, every 5 s while idle.)"""
+    return [name for _pid, name in process_list()]
+
+
+def process_list():
+    """[(pid, executable name)] of every process, from one Toolhelp snapshot
+    (Windows only; raises elsewhere)."""
     import ctypes
     from ctypes import wintypes
 
@@ -74,12 +80,12 @@ def _process_names_toolhelp():
     try:
         entry = PROCESSENTRY32W()
         entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
-        names = []
+        procs = []
         ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
         while ok:
-            names.append(entry.szExeFile)
+            procs.append((entry.th32ProcessID, entry.szExeFile))
             ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
-        return names
+        return procs
     finally:
         kernel32.CloseHandle(snap)
 

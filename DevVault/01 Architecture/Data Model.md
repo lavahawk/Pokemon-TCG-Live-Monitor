@@ -81,3 +81,12 @@ Derived numbers:
 | `.meta_store/labs_<id>.json` | `meta_sources.fetch_labs_results` (forever) | `_assemble` | one in-person event aggregated per archetype slug: records, matchups, per-player records, decks (slug → name, icons), games / unknown |
 | `.app_settings.json` `meta_trend` | StatsUI Trend view | StatsUI | period, sources, min_players, mode, stacked, view, smooth, selected deck ids |
 | Sheet fields | | | rows: `ip_games` (in-person games inside `raw_games`); sheet: `in_person_records` (events with Labs results) |
+
+### Added 2026-10-13 (data sources + card usage) — see [[Data Sources]]
+| File | Writer | Reader | Content |
+|---|---|---|---|
+| `.meta_store/online_v3_<id>.json` | `meta_sources.fetch_online_event` (forever) | `_assemble` | online event: decks + W/L/T, matchups, `lists` (count) and `cards` = per deck `{"n": lists, "c": {"P\|Dreepy": [lists with it, copies, set, number]}}`. Replaces `online_<id>.json` (v2, no decklists); a v2 file still supplies matchups (saves the pairings call) and offline rebuilds fall back to it. |
+| `.meta_store/inperson_lists_<id>.json` | `meta_sources.fetch_in_person_lists` (forever, only once lists are published) | `_assemble` | every Day 2 decklist of an in-person event, summarized per archetype title (same shape as above) |
+| `.meta_store/last_inputs.json` | `build_meta_sheet` | `rebuild_meta_sheet`, `japan_view` | `japan` events now carry `shop`; lists cover the whole era window (online ~870, Japan ~230) |
+| `.app_settings.json` `limitless_api_key` | Advanced → Meta Data | `meta_sources.api_key()` | optional; raises the play API rate limit (env `LIMITLESS_API_KEY` also works) |
+| Sheet fields | | | rows: `lists` (decklists behind `cards`), `cards` = `[{name, cat P/T/E, set, number, incl % of lists, avg copies when played, per_list}]` (≥3% of lists, max 70); sheet: `decklists` (total lists) |

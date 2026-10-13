@@ -49,9 +49,9 @@ from deck_analytics import (
     wilson_interval,
     win_rate_posterior,
 )
-import japan_data
 from charts import SeriesChart, TrendChart, MAX_SERIES, series_style
 import trainerhill_trend
+import card_usage
 from deck_score import compute_scores
 import formulas
 from ui_widgets import DeckFlagButton, DeckTabBar, MineRowDelegate, MINE_ROLE
@@ -193,16 +193,6 @@ class PageScrollArea(QScrollArea):
             super().wheelEvent(event)
 
 
-try:
-    import matplotlib
-    matplotlib.use('Qt5Agg')
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-    from matplotlib.figure import Figure
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
-    print("Warning: matplotlib not available, graphs will not display")
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 META_ICON_CACHE_DIR = os.path.join(BASE_DIR, ".meta_icon_cache")
 POKESPRITE_BASE_URL = "https://raw.githubusercontent.com/bradley-erickson/pokesprite/master/pokemon/regular"
@@ -257,11 +247,6 @@ SPRITE_NAME_ALIASES = {
 
 def _normalize_sprite_name(sprite_name):
     return (sprite_name or "").strip().lower().replace(" ", "-")
-
-
-def _looks_japanese(text):
-    """Return True if the text contains Japanese characters (untranslated)."""
-    return bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", text or ""))
 
 
 def _invert_str(value):
@@ -1826,53 +1811,6 @@ def get_limitless_dashboard_manager():
     return _limitless_dashboard_manager
 
 
-class MplCanvas(FigureCanvasQTAgg):
-    """Matplotlib canvas with modern dark theme"""
-    def __init__(self, parent=None, width=5, height=3, dpi=100):
-        self.figure = Figure(figsize=(width, height), dpi=dpi)
-        self.figure.patch.set_facecolor('none')
-        self.figure.patch.set_alpha(0.0)
-        
-        self.axes = self.figure.add_subplot(111)
-        
-        # Modern dark styling
-        self.axes.set_facecolor('#0a0a0a')
-        self.axes.patch.set_alpha(0.3)
-        
-        # Remove top and right spines for cleaner look
-        self.axes.spines['top'].set_visible(False)
-        self.axes.spines['right'].set_visible(False)
-        self.axes.spines['bottom'].set_color('#2a2a2a')
-        self.axes.spines['left'].set_color('#2a2a2a')
-        self.axes.spines['bottom'].set_linewidth(0.5)
-        self.axes.spines['left'].set_linewidth(0.5)
-        
-        super(MplCanvas, self).__init__(self.figure)
-        self.setStyleSheet("background-color: transparent;")
-        self.setMinimumSize(300, 200)
-
-    def wheelEvent(self, event):
-        """Forward wheel events to the enclosing page scroll area.
-
-        Matplotlib canvases normally capture the wheel for zooming, which
-        stops the page from scrolling when the cursor is over a graph. We
-        instead let the wheel scroll the page (like a normal webpage). The
-        graph's own zoom is disabled in favor of smooth page scrolling.
-        """
-        # Find the nearest PageScrollArea ancestor and scroll it.
-        parent = self.parent()
-        while parent is not None:
-            if isinstance(parent, PageScrollArea):
-                vbar = parent.verticalScrollBar()
-                if vbar is not None and vbar.maximum() > 0:
-                    vbar.setValue(vbar.value() - event.angleDelta().y())
-                    event.accept()
-                    return
-            parent = parent.parent()
-        # No page scroll area found — fall back to default behavior.
-        super().wheelEvent(event)
-
-
 class GlassFrame(QFrame):
     """The dashboard's main glass surface, painted directly.
 
@@ -3143,30 +3081,6 @@ class MetaFetcher(QThread):
         }
 
 
-class JapanFetcher(QThread):
-    """Background thread for fetching Japan meta data from pokekameshi.com."""
-    data_ready = Signal(str, object)  # (source_name, data)
-    error = Signal(str, str)          # (source_name, error_message)
-
-    def __init__(self, ai_enabled=False, api_key=None, force=False, parent=None):
-        super().__init__(parent)
-        self.ai_enabled = ai_enabled
-        self.api_key = api_key
-        self.force = force
-
-    def run(self):
-        try:
-            data = japan_data.fetch_japan_data(
-                ai_enabled=self.ai_enabled,
-                api_key=self.api_key,
-                force=self.force,
-                use_cache=not self.force,
-            )
-            self.data_ready.emit("japan", data)
-        except Exception as e:
-            self.error.emit("japan", str(e))
-
-
 class StatsWindow(QWidget):
     """Modern sleek stats dashboard - minimizes to mini overlay"""
     
@@ -3198,7 +3112,6 @@ class StatsWindow(QWidget):
         self.starred_decks, self.ignored_decks = self._load_deck_flags()
         self.deck_icon_overrides = self._load_deck_icon_overrides()
         self.limitless_standard_meta = self._load_meta_cache("limitless_standard")
-        self._japan_rows = []
         # In-memory pixmap cache keyed by (sprite_name, size) to avoid re-reading
         # and re-scaling sprite PNGs from disk on every UI refresh.
         self._sprite_pixmap_cache = {}
@@ -4234,118 +4147,77 @@ class StatsWindow(QWidget):
             adv.setColumnStretch(col, 1)
         return container
 
-    def _smart_time_format(self, timestamps):
-        if len(timestamps) < 2:
-            return "%m/%d"
-        time_range = (timestamps[-1] - timestamps[0]).total_seconds()
-        if time_range < 86400:
-            return "%H:%M"
-        if time_range < 86400 * 14:
-            return "%m/%d"
-        if time_range < 86400 * 90:
-            return "%m/%d"
-        return "%m/%d/%y"
-
-    def _build_deck_trend_series(self, deck_name):
-        history = self.db.get_deck_battle_history(deck_name)
-        times = []
-        observed = []
-        bayes = []
-        lows = []
-        highs = []
-        wins = 0
-        losses = 0
-        ties = 0
-
-        for timestamp, result in history:
+    def _deck_trend_points(self, deck_name):
+        """SeriesChart points for a deck page: the weighted estimate after
+        each game with its 90% range (same maths as the Win rate card and
+        the dashboard chart), the raw win % so far dashed."""
+        battles = [b for b in self.db.get_deck_battles_detailed(deck_name) if not b.get("imported")]
+        expansions = cached_expansions("en")
+        points = []
+        total = sq = ws = ls = ts = 0.0
+        raw = {"W": 0, "L": 0, "T": 0}
+        win_c, loss_c, tie_c = "#66BB6A", "#EF5350", "#9AA5B1"
+        for i, b in enumerate(battles):
             try:
-                dt = datetime.fromisoformat(timestamp)
+                when = datetime.fromisoformat(str(b["timestamp"]))
             except Exception:
                 continue
-            normalized_result = str(result).lower()
-            if normalized_result == "win":
-                wins += 1
-            elif normalized_result in ("tie", "draw"):
-                ties += 1
-            else:
-                losses += 1
-            # Same model and 90% range as the cards above the chart.
-            post = win_rate_posterior(wins, losses, ties)
-            times.append(dt)
-            observed.append((post["observed"] or 0.0) * 100.0)
-            bayes.append(post["mean"] * 100.0)
-            lows.append(post["low"] * 100.0)
-            highs.append(post["high"] * 100.0)
-
-        return times, observed, bayes, lows, highs
+            kind = self._result_kind(b["result"])
+            raw[kind] += 1
+            weight = battle_weight(b, expansions)
+            if weight > 0:
+                total += weight
+                sq += weight * weight
+                if kind == "W":
+                    ws += weight
+                elif kind == "L":
+                    ls += weight
+                else:
+                    ts += weight
+            scale = total / sq if sq else 0.0  # rescale to Kish's effective sample
+            post = win_rate_posterior(ws * scale, ls * scale, ts * scale)
+            actual = result_rate(raw["W"], raw["L"], raw["T"])
+            color = {"W": win_c, "L": loss_c, "T": tie_c}[kind]
+            label = {"W": "Win", "L": "Loss", "T": "Tie"}[kind]
+            record = f"{raw['W']}-{raw['L']}" + (f"-{raw['T']}" if raw["T"] else "")
+            tip = [f"{post['mean'] * 100:.0f}%   range {_pct_range(post['low'], post['high'])}",
+                   f"Game {len(points) + 1} · {_short_day(when)} · {_clock(when)}",
+                   f"{label} vs {b['opponent']}" if b.get("opponent") else label,
+                   f"Actual so far: {actual * 100:.0f}% ({record})" if actual is not None else record,
+                   f"Counts ×{weight:.2f} · {post['games']:.1f} effective games" if weight > 0
+                   else "Older format, not counted"]
+            points.append({"y": post["mean"] * 100, "lo": post["low"] * 100, "hi": post["high"] * 100,
+                           "alt": actual * 100 if actual is not None else None, "t": when,
+                           "dot": color, "strip": color, "tip": tip})
+        return points
 
     def _create_deck_trend_card(self, analysis):
         card, layout = self._create_dashboard_card("WIN RATE OVER TIME")
-        if not MATPLOTLIB_AVAILABLE:
-            fallback = QLabel("Matplotlib is not available, so deck trend charts are disabled.")
-            fallback.setObjectName("deckMetricNote")
-            fallback.setWordWrap(True)
-            layout.addWidget(fallback)
-            return card
-
-        times, observed, bayes, lows, highs = self._build_deck_trend_series(analysis.get("deck_name", ""))
-        if not times:
+        points = self._deck_trend_points(analysis.get("deck_name", ""))
+        if not points:
             empty = QLabel("No battle history is available for this deck yet.")
             empty.setObjectName("deckMetricNote")
             layout.addWidget(empty)
             return card
-
-        canvas = MplCanvas(self, width=7.0, height=3.1, dpi=90)
-        canvas.setMinimumHeight(250)
-        axes = canvas.axes
-        axes.cla()
-        axes.set_facecolor((0.04, 0.04, 0.04, 0.32))
-        canvas.figure.patch.set_facecolor("none")
-        canvas.figure.patch.set_alpha(0)
-
-        axes.fill_between(times, lows, highs, alpha=0.12, color="#6BB6E8")
-        axes.plot(times, bayes, color="#6BB6E8", linewidth=2.6, marker="o", markersize=4)
-        axes.plot(times, observed, color="#9CC344", linewidth=1.6, linestyle="--", alpha=0.9)
-        axes.axhline(y=50, color="#666666", linestyle="--", linewidth=1, alpha=0.35)
-        axes.set_ylim(0, 100)
-        axes.tick_params(colors="#8797AB", labelsize=8)
-        axes.grid(True, alpha=0.08, color="#444444", linewidth=0.5)
-        axes.spines["top"].set_visible(False)
-        axes.spines["right"].set_visible(False)
-        axes.spines["bottom"].set_color("#2a2a2a")
-        axes.spines["left"].set_color("#2a2a2a")
-        axes.spines["bottom"].set_linewidth(0.5)
-        axes.spines["left"].set_linewidth(0.5)
-
-        date_format = self._smart_time_format(times)
-        if len(times) <= 5:
-            tick_indices = list(range(len(times)))
-        else:
-            step = max(1, len(times) // 4)
-            tick_indices = list(range(0, len(times), step))
-            if tick_indices[-1] != len(times) - 1:
-                tick_indices.append(len(times) - 1)
-
-        tick_positions = [times[i] for i in tick_indices]
-        tick_labels = [times[i].strftime(date_format) for i in tick_indices]
-        axes.set_xticks(tick_positions)
-        axes.set_xticklabels(tick_labels, rotation=35, ha="right")
-        axes.set_yticks([0, 25, 50, 75, 100])
-        axes.set_yticklabels(["0", "25", "50", "75", "100"])
-        canvas.figure.subplots_adjust(left=0.08, right=0.98, top=0.96, bottom=0.22)
-        canvas.draw()
-
+        chart = SeriesChart("#6BB6E8")
+        chart.y_format = lambda v: f"{v:.0f}%"
+        chart.y_clamp = (0, 100)
+        chart.y_include = (50,)
+        chart.y_min_pad = 5
+        chart.setMinimumHeight(250)
+        chart.set_data(points, animate=False)
+        layout.addWidget(chart)
         legend = QLabel(
             "<span style='color:#6BB6E8'>━●</span> estimate &nbsp;&nbsp;"
-            "<span style='color:#9CC344'>┅</span> actual &nbsp;&nbsp;"
-            "<span style='color:#6BB6E8'>▒</span> confidence range"
-        )
-        legend.setToolTip("Estimate: true win rate after each game. Actual: your raw win % so far.<br>"
+            "<span style='color:rgba(255,255,255,0.55)'>┅</span> actual so far &nbsp;&nbsp;"
+            "<span style='color:#6BB6E8'>▒</span> confidence range &nbsp;&nbsp;"
+            "<span style='color:#8A97AA'>hover for each game · drag to zoom · double-click to reset</span>")
+        legend.setToolTip("Estimate: true win rate after each game, weighted like the Win rate card "
+                          "(format age × league / tournament). Actual: your raw win % so far.<br>"
                           + RANGE_EXPLAINED.format(level=90) + " Early swings are mostly noise.")
         legend.setTextFormat(Qt.TextFormat.RichText)
         legend.setObjectName("deckMetricNote")
         legend.setWordWrap(True)
-        layout.addWidget(canvas)
         layout.addWidget(legend)
         return card
 
@@ -5921,6 +5793,32 @@ class StatsWindow(QWidget):
         debug_card.layout().addLayout(debug_layout)
         layout.addWidget(debug_card)
 
+        # Meta data: optional Limitless API key (raises the 50 requests / 5 min limit)
+        meta_card = self.create_card("Meta Data")
+        meta_layout = QVBoxLayout()
+        meta_layout.setSpacing(8)
+        meta_layout.setContentsMargins(12, 8, 12, 12)
+        self.limitless_key_input = QLineEdit()
+        self.limitless_key_input.setObjectName("metaSearch")
+        self.limitless_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.limitless_key_input.setPlaceholderText("Limitless API key (optional)")
+        self.limitless_key_input.setText(self.app_settings.get("limitless_api_key") or "")
+        self.limitless_key_input.editingFinished.connect(self._save_limitless_key)
+        meta_layout.addWidget(self.limitless_key_input)
+        meta_desc = QLabel(
+            "Online results and decklists come from the Limitless API, which allows 50 requests per 5 minutes "
+            "without a key. Events are cached for good, so the full window fills in over a few refreshes "
+            "(the current format's biggest events first). A key raises the limit: request one at "
+            "<a href='https://play.limitlesstcg.com/account/settings/api' style='color:#6BB6E8'>"
+            "play.limitlesstcg.com → Settings → API</a>.")
+        meta_desc.setObjectName("settingsDesc")
+        meta_desc.setWordWrap(True)
+        meta_desc.setTextFormat(Qt.TextFormat.RichText)
+        meta_desc.setOpenExternalLinks(True)
+        meta_layout.addWidget(meta_desc)
+        meta_card.layout().addLayout(meta_layout)
+        layout.addWidget(meta_card)
+
         # AI / Local Parsing Section
         parser_card = self.create_card("AI Parsing Mode")
         parser_layout = QVBoxLayout()
@@ -6470,8 +6368,8 @@ class StatsWindow(QWidget):
                 view.load(QUrl(self._pokedata_home_url))
         elif tab_name == "TrainerHill":
             self._ensure_trainerhill_view()
-        elif tab_name == "Japan Data" and self.japan_table.rowCount() == 0 and self.japan_refresh_btn.isEnabled():
-            self._fetch_japan_data()
+        elif tab_name == "Japan Data":
+            self._render_japan_table()
 
     def _meta_header_bar(self, title_text, last_updated_label, refresh_btn, browser_url=None, browser_label="Open in Browser"):
         """Build the top bar used by all meta tabs: title | last updated | refresh | browser btn."""
@@ -6912,6 +6810,7 @@ class StatsWindow(QWidget):
             "QTableCornerButton::section { background: rgb(12,17,26); border: none; }")
         self.meta_views.addTab(self.meta_matrix, "Matchups")
         self.meta_views.addTab(self._create_meta_trend_view(), "Trend")
+        self.meta_views.addTab(self._create_meta_cards_view(), "Cards")
         self.meta_views.currentChanged.connect(self._on_meta_view_changed)
         vlayout.addWidget(self.meta_views, stretch=1)
         self._on_meta_view_changed(0)
@@ -7027,7 +6926,9 @@ class StatsWindow(QWidget):
     def _meta_view_sheet(self):
         """The sheet for the Meta tab's Data / Custom weights choice. The
         default view is the regular sheet; others are re-assembled from the
-        cached events (no downloads, ~0.2 s) and kept in memory."""
+        cached events (no downloads, a second or two with ~900 events) on a
+        background thread and kept in memory. Returns "pending" while one is
+        being built, None if it can't be built."""
         base = self.limitless_standard_meta or {}
         source = getattr(self, "_meta_source", "all")
         use_weights = getattr(self, "_meta_use_weights", True)
@@ -7035,22 +6936,31 @@ class StatsWindow(QWidget):
             return base
         key = (base.get("fetched_at"), source, use_weights)
         cache = getattr(self, "_meta_view_cache", {})
-        if key not in cache:
+        if key in cache:
+            return cache[key]
+        if getattr(self, "_meta_view_building", None) != key:
             from meta_sources import ALL_SOURCES, rebuild_meta_sheet
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            try:
-                sheet = rebuild_meta_sheet(use_weights, ALL_SOURCES if source == "all" else (source,))
-            except Exception as e:
-                print(f"Meta view rebuild failed: {e}")
-                sheet = None
-            finally:
-                QApplication.restoreOverrideCursor()
-            if sheet is None:
-                return None
-            sheet["fetched_at"] = base.get("fetched_at")
-            cache = {key: sheet}  # keep only the latest alternative view
-            self._meta_view_cache = cache
-        return cache[key]
+            self._meta_view_building = key
+            self._meta_view_token = getattr(self, "_meta_view_token", 0) + 1
+            fetcher = CallFetcher(self._meta_view_token, lambda: rebuild_meta_sheet(
+                use_weights, ALL_SOURCES if source == "all" else (source,)))
+            fetcher.done.connect(lambda token, result, k=key: self._meta_view_built(token, k, result))
+            self._meta_view_fetcher = fetcher
+            _start_thread(fetcher)
+        return "pending"
+
+    def _meta_view_built(self, token, key, result):
+        if token != getattr(self, "_meta_view_token", 0):
+            return  # another view was asked for meanwhile
+        self._meta_view_building = None
+        if isinstance(result, Exception) or result is None:
+            if isinstance(result, Exception):
+                print(f"Meta view rebuild failed: {result}")
+            self._meta_view_cache = {key: None}
+        else:
+            result["fetched_at"] = key[0]
+            self._meta_view_cache = {key: result}  # keep only the latest alternative view
+        self._populate_meta_tab()
 
     def _deck_scores(self, data=None, use_weights=True):
         """Deck Scores (deck_score.py) for every archetype and all your
@@ -7154,6 +7064,9 @@ class StatsWindow(QWidget):
         if not hasattr(self, "meta_arch_table"):
             return
         data = self._meta_view_sheet()
+        if data == "pending":
+            self.meta_status.setText("Building this view from the event cache…")
+            return
         if data is None:
             self.meta_status.setText("This view is built from the event cache - press ↻ Refresh once to create it.")
             data = self.limitless_standard_meta or {}
@@ -7186,7 +7099,9 @@ class StatsWindow(QWidget):
         self.meta_status.setText(
             f"{len(rows)} archetypes · {events.get('online', 0)} online · {events.get('in_person', 0)} in-person"
             + (f" ({data.get('in_person_records')} with results)" if data.get("in_person_records") else "") + " · "
-            f"{events.get('japan', 0)} Japan events · set: {exp.get('name', '?')} · ties: {mode_name} · updated {stamp}"
+            f"{events.get('japan', 0)} Japan events"
+            + (f" · {data['decklists']:,} decklists" if data.get("decklists") else "")
+            + f" · set: {exp.get('name', '?')} · ties: {mode_name} · updated {stamp}"
             + (f" · sorted by Score ({score_info.get('ranked', 0)} ranked)" if score_info.get("ranked") else
                " · no Score here: Japan publishes placings, not match records")
             + ("" if use_weights else " · raw data (custom weights off)"))
@@ -7342,6 +7257,10 @@ class StatsWindow(QWidget):
         self._meta_matrix_dirty = True
         if self.meta_views.currentIndex() == 1:
             self._ensure_meta_matrix()
+        self._meta_cards_rows = [r for r in rows if r.get("cards")]
+        self._meta_cards_dirty = True
+        if self.meta_views.currentIndex() == 3:
+            self._ensure_meta_cards()
 
     def _on_meta_view_changed(self, index):
         """The matchup matrix is opt-in: built and its size control shown only
@@ -7355,6 +7274,196 @@ class StatsWindow(QWidget):
         if index == 2 and not getattr(self, "_trend_loaded", False):
             self._trend_loaded = True
             self._trend_fetch(breakdown=True)
+        if index == 3:
+            self._ensure_meta_cards()
+
+    # ── Meta → Cards (card usage from public decklists) ───────────────────
+    def _create_meta_cards_view(self):
+        view = QWidget()
+        outer = QVBoxLayout(view)
+        outer.setContentsMargins(0, 8, 0, 0)
+        outer.setSpacing(6)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        def label(text):
+            lbl = QLabel(text)
+            lbl.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 11px;")
+            return lbl
+        row.addWidget(label("Archetype:"))
+        self.cards_arch_combo = QComboBox()
+        self.cards_arch_combo.setObjectName("metaCombo")
+        self.cards_arch_combo.setFixedHeight(28)
+        self.cards_arch_combo.setMinimumWidth(260)
+        self.cards_arch_combo.setMaxVisibleItems(25)
+        self.cards_arch_combo.currentIndexChanged.connect(lambda *_: self._populate_meta_cards())
+        row.addWidget(self.cards_arch_combo)
+        row.addSpacing(10)
+        row.addWidget(label("Compare with:"))
+        self.cards_list_combo = QComboBox()
+        self.cards_list_combo.setObjectName("metaCombo")
+        self.cards_list_combo.setFixedHeight(28)
+        self.cards_list_combo.setMinimumWidth(200)
+        self.cards_list_combo.setToolTip("One of your decklists (PTCGL: Decks → Export → Copy to clipboard while the "
+                                         "monitor runs). Picking a list also picks the archetype closest to it.")
+        self.cards_list_combo.currentIndexChanged.connect(self._on_cards_list_changed)
+        row.addWidget(self.cards_list_combo)
+        row.addSpacing(10)
+        self.cards_hide_rare = QPushButton("Hide under 10%")
+        self.cards_hide_rare.setObjectName("eloScaleBtn")
+        self.cards_hide_rare.setCheckable(True)
+        self.cards_hide_rare.setChecked(True)
+        self.cards_hide_rare.setFixedHeight(24)
+        self.cards_hide_rare.setToolTip("Hide cards played in fewer than 10% of the lists (your own cards always show).")
+        self.cards_hide_rare.toggled.connect(lambda *_: self._populate_meta_cards())
+        row.addWidget(self.cards_hide_rare)
+        row.addStretch()
+        outer.addLayout(row)
+
+        self.cards_summary = QLabel("")
+        self.cards_summary.setTextFormat(Qt.TextFormat.RichText)
+        self.cards_summary.setWordWrap(True)
+        self.cards_summary.setStyleSheet("color: rgba(236,242,252,0.8); font-size: 11px;")
+        outer.addWidget(self.cards_summary)
+
+        self.cards_table = self._make_meta_table(
+            ["Card", "Type", "Played in", "Copies", "Usual", "Yours", "±"],
+            [None, 76, 86, 70, 64, 64, 56], sortable=True, stretch_last=False)
+        self.cards_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col, tip in enumerate([
+                "Double-click a card to open it on Limitless.",
+                "Pokémon · Trainer · Energy",
+                "Share of the archetype's decklists that play the card (weighted by format age: the current "
+                "set counts most)<br><b>core</b> ≥ 90% · <b>common</b> ≥ 50% · <b>tech</b> below",
+                "Average copies in the lists that play it",
+                "The usual count: average copies rounded, for cards in at least half the lists",
+                "Copies in your selected list",
+                "Your copies minus the usual count"]):
+            self.cards_table.horizontalHeaderItem(col).setToolTip(tip)
+        self.cards_table.cellDoubleClicked.connect(lambda r, c: self._open_table_row_link(self.cards_table, r))
+        outer.addWidget(self.cards_table, stretch=1)
+        return view
+
+    def _ensure_meta_cards(self):
+        if not getattr(self, "_meta_cards_dirty", True) and self.cards_arch_combo.count():
+            self._fill_cards_lists()  # new exports show up without a meta refresh
+            self._populate_meta_cards()
+            return
+        self._meta_cards_dirty = False
+        rows = sorted(getattr(self, "_meta_cards_rows", None) or [],
+                      key=lambda r: -(r.get("share_en") or r.get("share") or 0))
+        self._cards_by_id = {r["id"]: r for r in rows}
+        combo = self.cards_arch_combo
+        current = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        for r in rows:
+            combo.addItem(f"{r['deck']}   ·   {r.get('lists', 0):,} lists", r["id"])
+        index = combo.findData(current) if current else -1
+        combo.setCurrentIndex(max(0, index))
+        combo.blockSignals(False)
+        first_time = self._fill_cards_lists()
+        if current is None and first_time:
+            self._on_cards_list_changed()  # start on the archetype closest to your newest list
+        else:
+            self._populate_meta_cards()
+
+    def _fill_cards_lists(self):
+        """Your decklists in the Compare combo. True when this is the first
+        fill and it picked your newest list."""
+        try:
+            from decklists import all_decklists
+            lists = all_decklists()
+        except Exception:
+            lists = []
+        self._cards_lists = {e["id"]: e for e in lists}
+        combo = self.cards_list_combo
+        first = combo.count() == 0
+        current = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("No list", None)
+        for e in lists:
+            combo.addItem(f"{e['name']}  ({(e.get('captured_at') or '')[:10]})", e["id"])
+        index = (1 if lists else 0) if first else max(0, combo.findData(current))
+        combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+        return first and index == 1
+
+    def _on_cards_list_changed(self, *_):
+        """Picking a list jumps to the archetype closest to it."""
+        entry = (getattr(self, "_cards_lists", {}) or {}).get(self.cards_list_combo.currentData())
+        if entry:
+            best = card_usage.best_archetype(list(getattr(self, "_cards_by_id", {}).values()),
+                                             card_usage.parse_list(entry.get("text")))
+            index = self.cards_arch_combo.findData(best["id"]) if best else -1
+            if index >= 0 and index != self.cards_arch_combo.currentIndex():
+                self.cards_arch_combo.setCurrentIndex(index)  # repopulates
+                return
+        self._populate_meta_cards()
+
+    def _populate_meta_cards(self):
+        import html as _html
+        esc = _html.escape
+        table = self.cards_table
+        row = (getattr(self, "_cards_by_id", {}) or {}).get(self.cards_arch_combo.currentData())
+        table.setSortingEnabled(False)
+        table.setRowCount(0)
+        if not row:
+            self.cards_summary.setText("No card data yet - press ↻ Refresh. Card usage comes from the decklists "
+                                       "published with online events and in-person Day 2 standings.")
+            return
+        entry = (getattr(self, "_cards_lists", {}) or {}).get(self.cards_list_combo.currentData())
+        mine = card_usage.parse_list(entry.get("text")) if entry else None
+        result = card_usage.compare(row.get("cards"), mine)
+        hide = self.cards_hide_rare.isChecked()
+        shown = [c for c in result if not hide or c["incl"] >= 10.0 or c["mine"]]
+        info = card_usage.summary(result)
+        text = (f"<b>{esc(row['deck'])}</b> · {row.get('lists', 0):,} decklists (online events + in-person "
+                f"Day 2), weighted by format age · {info['core']} core cards")
+        if mine is not None:
+            match = card_usage.similarity(row.get("cards"), mine)
+            text += f"<br>Your list <b>{esc(entry['name'])}</b>: {match * 100:.0f}% like the typical list"
+            if info["missing_core"]:
+                text += (" · <span style='color:#EF5350'>missing core: "
+                         + ", ".join(esc(c["name"]) for c in info["missing_core"][:6]) + "</span>")
+            if info["unusual"]:
+                text += (" · <span style='color:#F9A825'>rare picks: "
+                         + ", ".join(esc(c["name"]) for c in info["unusual"][:6]) + "</span>")
+        self.cards_summary.setText(text)
+        role_color = {"core": "#EEF4FF", "common": "#6BB6E8", "tech": "#9BA8BC", "only yours": "#B39DDB"}
+        table.setUpdatesEnabled(False)
+        table.setRowCount(len(shown))
+        for i, c in enumerate(shown):
+            link = (f"https://limitlesstcg.com/cards/{c['set']}/{c['number']}"
+                    if c.get("set") and c.get("number") else None)
+            table.setRowHeight(i, 28)
+            self._set_meta_item(table, i, 0, c["name"], accent=role_color.get(c["role"]),
+                                align=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                                sort_value=c["name"].lower(), link=link)
+            table.item(i, 0).setToolTip(f"<b>{esc(c['name'])}</b> · {c['role']}"
+                                        + (f" · {c['set']} {c['number']}" if c.get("set") else ""))
+            self._set_meta_item(table, i, 1, card_usage.CAT_NAMES.get(c["cat"], c["cat"]), muted=True,
+                                sort_value="PTE".find(c["cat"]), link=link)
+            self._set_meta_item(table, i, 2, f"{c['incl']:.0f}%" if c["incl"] else "–",
+                                accent=role_color.get(c["role"]), muted=not c["incl"], sort_value=c["incl"], link=link)
+            self._set_meta_item(table, i, 3, f"{c['avg']:.1f}" if c["avg"] else "–", muted=not c["avg"],
+                                sort_value=c["avg"], link=link)
+            self._set_meta_item(table, i, 4, str(c["typical"]) if c["typical"] else "–", muted=not c["typical"],
+                                sort_value=c["typical"], link=link)
+            if c["mine"] is None:
+                for col in (5, 6):
+                    self._set_meta_item(table, i, col, "", muted=True, sort_value=0, link=link)
+                continue
+            missing_core = c["role"] == "core" and not c["mine"]
+            self._set_meta_item(table, i, 5, str(c["mine"]) if c["mine"] else "–",
+                                accent="#EF5350" if missing_core else None, muted=not c["mine"],
+                                sort_value=c["mine"], link=link)
+            diff = c["diff"]
+            self._set_meta_item(table, i, 6, f"{diff:+d}" if diff else "", sort_value=diff,
+                                accent="#EF5350" if missing_core else "#F9A825" if diff else None, link=link)
+        table.setUpdatesEnabled(True)
+        table.setSortingEnabled(True)
 
     def _ensure_meta_matrix(self):
         if not getattr(self, "_meta_matrix_dirty", False) or not getattr(self, "_meta_matrix_args", None):
@@ -8096,281 +8205,154 @@ class StatsWindow(QWidget):
         except Exception as exc:
             self._th_status.setText(f"Download failed: {exc}")
 
-    def create_japan_tab(self):
-        """Japan Data: consolidated, translated, sortable-by-timeframe meta.
+    JAPAN_PERIODS = (("2w", "Last 2 weeks", 14), ("1m", "Last month", 30), ("3m", "Last 3 months", 91),
+                     ("all", "Whole format window", None))
 
-        Pulls from pokekameshi.com, translates deck names to English (aligned
-        with Limitless names via optional AI), and renders in a format
-        comparable to the US/Limitless meta table. Includes a timeframe filter,
-        an AI-translation toggle, a hard-refresh button, and an important-sites
-        showcase.
-        """
+    def create_japan_tab(self):
+        """Japan Data: Japanese City Leagues from Limitless (the official
+        top-16 results), named like the Meta tab's archetypes. Built from the
+        meta sheet's event cache - no separate download."""
         outer = QWidget()
         outer.setObjectName("contentWidget")
         vlayout = QVBoxLayout(outer)
         vlayout.setContentsMargins(12, 10, 12, 12)
         vlayout.setSpacing(8)
 
-        # --- Header row: title + timeframe filter + AI toggle + refresh ---
         header_row = QHBoxLayout()
         header_row.setSpacing(10)
-        title = QLabel("JAPAN DATA")
+        title = QLabel("JAPAN · CITY LEAGUES")
         title.setObjectName("sectionHeader")
         header_row.addWidget(title)
         header_row.addStretch()
-
-        # Timeframe filter (sortable by timeframe)
-        tf_label = QLabel("Timeframe:")
+        tf_label = QLabel("Period:")
         tf_label.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 11px;")
         header_row.addWidget(tf_label)
         self.japan_timeframe_combo = QComboBox()
-        self.japan_timeframe_combo.addItems(["Recent", "1 Week", "1 Month", "3 Months", "All Time"])
+        for key, text, _days in self.JAPAN_PERIODS:
+            self.japan_timeframe_combo.addItem(text, key)
+        self.japan_timeframe_combo.setCurrentIndex(1)
         self.japan_timeframe_combo.setObjectName("metaCombo")
-        self.japan_timeframe_combo.setFixedWidth(120)
         self.japan_timeframe_combo.setFixedHeight(28)
-        self.japan_timeframe_combo.currentIndexChanged.connect(self._on_japan_timeframe_changed)
+        self.japan_timeframe_combo.currentIndexChanged.connect(lambda *_: self._render_japan_table())
         header_row.addWidget(self.japan_timeframe_combo)
-
-        # AI translation toggle (recommended)
-        self.japan_ai_toggle = QCheckBox("AI Translate")
-        self.japan_ai_toggle.setObjectName("metaCombo")
-        self.japan_ai_toggle.setToolTip(
-            "Use the OpenAI API key to translate Japanese deck names, aligned "
-            "with the top Limitless deck names. Runs once and caches permanently."
-        )
-        self.japan_ai_toggle.setChecked(True)
-        header_row.addWidget(self.japan_ai_toggle)
-
-        # Hard refresh button (re-runs AI translation)
-        self.japan_hard_refresh_btn = QPushButton("↻ Hard Refresh")
-        self.japan_hard_refresh_btn.setObjectName("metaRefreshBtn")
-        self.japan_hard_refresh_btn.setFixedHeight(28)
-        self.japan_hard_refresh_btn.setToolTip(
-            "Force a full re-fetch AND re-run the AI translation of deck names. "
-            "This uses API tokens, so only use it when you want fresh translations."
-        )
-        self.japan_hard_refresh_btn.clicked.connect(self._japan_hard_refresh)
-        header_row.addWidget(self.japan_hard_refresh_btn)
-
-        # Normal refresh button
-        self.japan_refresh_btn = QPushButton("↻ Load")
-        self.japan_refresh_btn.setObjectName("metaRefreshBtn")
-        self.japan_refresh_btn.setFixedHeight(28)
-        self.japan_refresh_btn.setFixedWidth(70)
-        self.japan_refresh_btn.clicked.connect(self._fetch_japan_data)
-        header_row.addWidget(self.japan_refresh_btn)
-
-        open_btn = QPushButton("pokekameshi ↗")
+        open_btn = QPushButton("Limitless JP ↗")
         open_btn.setObjectName("limitlessBtn")
         open_btn.setFixedHeight(28)
-        open_btn.clicked.connect(lambda: webbrowser.open(japan_data.TIER_LIST_URL))
+        open_btn.clicked.connect(lambda: webbrowser.open("https://limitlesstcg.com/tournaments/jp"))
         header_row.addWidget(open_btn)
         vlayout.addLayout(header_row)
 
-        # --- Status label ---
-        self.japan_status = QLabel(
-            "Click ↻ Load to fetch consolidated Japanese meta from pokekameshi.com. "
-            "Deck names are translated to English and aligned with Limitless names."
-        )
-        self.japan_status.setStyleSheet("color: rgba(255,255,255,0.4); font-size: 10px; font-style: italic;")
+        self.japan_status = QLabel("Loads with the meta data (Meta → ↻ Refresh).")
+        self.japan_status.setStyleSheet("color: rgba(255,255,255,0.45); font-size: 10px;")
         self.japan_status.setWordWrap(True)
         vlayout.addWidget(self.japan_status)
 
-        # --- Metrics bar ---
         metrics_bar, self.japan_metric_labels = self._create_meta_stats_bar((
-            ("decks", "Decks"),
-            ("entries", "Entries"),
-            ("translated", "Translated"),
+            ("events", "City Leagues"),
+            ("placings", "Top-16 placings"),
+            ("decks", "Archetypes"),
         ))
         vlayout.addWidget(metrics_bar)
 
-        # --- Comparable meta table ---
-        cols = ["#", "Deck", "Finishes", "Share", "Wins", "Losses", "Actual", "Estimate", "Range", "Chance >50%"]
-        widths = [34, None, 68, 64, 58, 62, 72, 78, 98, 56]
+        cols = ["#", "Deck", "Points", "Top 16", "Share", "Top 4", "Wins", "Avg place", "Trend"]
+        widths = [40, None, 70, 64, 64, 58, 54, 76, 70]
         self.japan_table = self._make_meta_table(cols, widths, sortable=True, stretch_last=False)
         self.japan_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        vlayout.addWidget(self.japan_table)
+        for col, tip in enumerate([
+                "Order by City League points",
+                "Archetype (named like the Meta tab: same Pokémon icons = same deck)",
+                "City League points: 16 for 1st, 15 for 2nd … 1 for 16th, summed over the period",
+                "Top-16 finishes (only the top 16 of a City League are published)",
+                "Share of all published top-16 spots",
+                "Finishes in the top 4",
+                "Events won",
+                "Average placing when it made the top 16 (1 = best)",
+                "Change in share: the newer half of the period's events vs the older half (points)"]):
+            self.japan_table.horizontalHeaderItem(col).setToolTip(tip)
+        vlayout.addWidget(self.japan_table, stretch=1)
 
-        # --- Important sites showcase ---
-        sites_label = QLabel("IMPORTANT JAPANESE SITES")
+        sites_label = QLabel("JAPANESE SITES")
         sites_label.setObjectName("sectionHeader")
-        sites_label.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 10px; font-weight: 700; letter-spacing: 1px; margin-top: 8px;")
+        sites_label.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 10px; font-weight: 700; "
+                                  "letter-spacing: 1px; margin-top: 6px;")
         vlayout.addWidget(sites_label)
-
         sites = [
-            ("Pokeka Meshi (ポケカ飯)", japan_data.POKEKAMESHI_BASE,
-             "Tier list, deck recipes, data lab reports, tournament results"),
-            ("Pokeka Data Lab", "https://pokekameshi.com/datalab-voluntarycompetition/",
-             "Methodology + weekly independent-tournament aggregation"),
-            ("Pokemon Card Official (JP)", "https://www.pokemon-card.com/",
-             "Official deck-code viewer, card search, rules"),
-            ("ポケカデータラボ", "https://pokekameshi.com/taikairesult-m6-3w/",
-             "Weekly independent-tournament data aggregation"),
-            ("ポケカ情報局", "https://pokecabook.com/",
-             "Japanese deck recipes, tier lists, tournament results"),
-            ("ポケカ速報", "https://pokeka-sokuhou.com/",
-             "Japanese Pokemon card news and meta updates"),
-            ("ポケカデッキ研究所", "https://pokeca-deck.com/",
-             "Japanese deck analysis and meta reports"),
-            ("ポケモンカード公式 デッキ検索", "https://www.pokemon-card.com/deck/",
-             "Official deck-code search and deck building"),
+            ("Pokeka Meshi (ポケカ飯)", "https://pokekameshi.com/strongestdeck-tire/",
+             "Tier list, deck recipes, data lab reports"),
+            ("ポケカ情報局", "https://pokecabook.com/", "Deck recipes, tier lists, tournament results"),
+            ("Pokémon Card Official (JP)", "https://www.pokemon-card.com/", "Deck-code viewer, card search, rules"),
+            ("Official event results", "https://players.pokemon-card.com/", "Players Club: official City League results"),
         ]
         sites_grid = QGridLayout()
         sites_grid.setSpacing(6)
         for i, (name, url, desc) in enumerate(sites):
-            row = i // 2
-            col = (i % 2) * 2
             btn = QPushButton(name)
             btn.setObjectName("limitlessBtn")
-            btn.setFixedHeight(30)
+            btn.setFixedHeight(28)
             btn.clicked.connect(lambda checked=False, u=url: webbrowser.open(u))
-            sites_grid.addWidget(btn, row, col)
+            sites_grid.addWidget(btn, i // 2, (i % 2) * 2)
             desc_lbl = QLabel(desc)
             desc_lbl.setStyleSheet("color: rgba(255,255,255,0.4); font-size: 9px;")
             desc_lbl.setWordWrap(True)
-            sites_grid.addWidget(desc_lbl, row, col + 1)
+            sites_grid.addWidget(desc_lbl, i // 2, (i % 2) * 2 + 1)
         vlayout.addLayout(sites_grid)
-
-        # --- Info note ---
-        info = QLabel(
-            "Japan data is consolidated from pokekameshi.com and translated to English "
-            "aligned with Limitless deck names, so it can be compared directly with the "
-            "US meta and eventually merged by set list. Click column headers to sort. "
-            "Enable 'AI Translate' and use 'Hard Refresh' to re-run the AI translation "
-            "(uses API tokens, cached permanently)."
-        )
-        info.setStyleSheet("color: rgba(255,255,255,0.25); font-size: 9px;")
-        info.setWordWrap(True)
-        vlayout.addWidget(info)
-
         return outer
 
-    def _on_japan_timeframe_changed(self, idx):
-        """Re-render the Japan table when the timeframe filter changes."""
-        self._render_japan_table()
-
-    def _fetch_japan_data(self):
-        """Fetch Japan data in the background (uses cache unless hard refresh)."""
-        if not REQUESTS_AVAILABLE:
-            self.japan_status.setText("Error: requests support is not installed.")
-            return
-        api_key = load_api_key()
-        ai_enabled = self.japan_ai_toggle.isChecked() and bool(api_key)
-        self.japan_status.setText("Fetching Japan data from pokekameshi.com…")
-        self.japan_refresh_btn.setEnabled(False)
-        self.japan_hard_refresh_btn.setEnabled(False)
-        self._japan_fetcher = JapanFetcher(ai_enabled=ai_enabled, api_key=api_key, force=False)
-        self._japan_fetcher.data_ready.connect(self._on_japan_data)
-        self._japan_fetcher.error.connect(self._on_japan_error)
-        _start_thread(self._japan_fetcher)
-
-    def _japan_hard_refresh(self):
-        """Force a full re-fetch AND re-run the AI translation."""
-        if not REQUESTS_AVAILABLE:
-            self.japan_status.setText("Error: requests support is not installed.")
-            return
-        api_key = load_api_key()
-        if not api_key:
-            self.japan_status.setText(
-                "Hard Refresh needs an OpenAI API key to re-run AI translation. "
-                "Add a key in Advanced, or use ↻ Load for cached translations."
-            )
-            return
-        ai_enabled = self.japan_ai_toggle.isChecked()
-        self.japan_status.setText("Hard refresh: re-fetching and re-translating deck names (uses API tokens)…")
-        self.japan_refresh_btn.setEnabled(False)
-        self.japan_hard_refresh_btn.setEnabled(False)
-        self._japan_fetcher = JapanFetcher(ai_enabled=ai_enabled, api_key=api_key, force=True)
-        self._japan_fetcher.data_ready.connect(self._on_japan_data)
-        self._japan_fetcher.error.connect(self._on_japan_error)
-        _start_thread(self._japan_fetcher)
-
-    def _on_japan_data(self, source, data):
-        self.japan_refresh_btn.setEnabled(True)
-        self.japan_hard_refresh_btn.setEnabled(True)
-        rows = data.get("rows", [])
-        self._japan_rows = rows
-        fetched = data.get("fetched_at", 0)
-        ft = datetime.fromtimestamp(fetched).strftime('%H:%M:%S') if fetched else 'unknown'
-        self.japan_status.setText(
-            f"Loaded {len(rows)} archetypes from pokekameshi.com (last: {ft}). "
-            f"Deck names translated to English and aligned with Limitless."
-        )
-        self.japan_metric_labels["decks"].setText(str(len(rows)))
-        self.japan_metric_labels["entries"].setText(str(data.get("total_entries", 0)))
-        translated = sum(1 for r in rows if r.get("deck") and not _looks_japanese(r.get("deck", "")))
-        self.japan_metric_labels["translated"].setText(str(translated))
-        self._render_japan_table()
-
-    def _on_japan_error(self, source, msg):
-        self.japan_refresh_btn.setEnabled(True)
-        self.japan_hard_refresh_btn.setEnabled(True)
-        self.japan_status.setText(f"Error: {msg}")
-
     def _render_japan_table(self):
-        """Render the Japan meta table, applying the timeframe filter."""
-        rows = []
-        if hasattr(self, "japan_table"):
-            rows = list(getattr(self, "_japan_rows", []) or [])
-        # Map the combo label to a timeframe key for filtering.
-        tf_label = self.japan_timeframe_combo.currentText() if hasattr(self, "japan_timeframe_combo") else "Recent"
-        tf_map = {
-            "Recent": "recent",
-            "1 Week": "1w",
-            "1 Month": "1m",
-            "3 Months": "3m",
-            "All Time": "all",
-        }
-        tf = tf_map.get(tf_label, "recent")
-        rows = japan_data.filter_by_timeframe({"rows": rows}, tf)
-
-        sorting_enabled = self.japan_table.isSortingEnabled()
-        if sorting_enabled:
-            self.japan_table.setSortingEnabled(False)
-        self.japan_table.setRowCount(0)
-        for i, row in enumerate(rows[:50]):
-            # Japanese sources report top finishes, not match records, so
-            # win-rate columns would be meaningless (they showed 100%).
-            has_record = (row.get("losses") or 0) > 0 or (row.get("ties") or 0) > 0
-            summary = self._summarize_meta_record(row)
-            wins = float(row.get("wins", 0) or 0)
-            losses = float(row.get("losses", 0) or 0)
-            ties = float(row.get("ties", 0) or 0)
-            raw_pct = summary.get("observed", 0.0) * 100.0
-            bayes_pct = summary.get("bayes_mean", 0.0) * 100.0
-            ci_low = summary.get("ci_low", 0.0) * 100.0
-            ci_high = summary.get("ci_high", 0.0) * 100.0
-            prob_even = summary.get("probability_above_even", 0.0) * 100.0
-            self.japan_table.insertRow(i)
-            self.japan_table.setRowHeight(i, 46)
-            self._set_meta_item(self.japan_table, i, 0, str(i + 1), sort_value=i + 1)
-            self._set_meta_deck_cell(
-                self.japan_table,
-                i,
-                1,
-                row.get("deck", ""),
-                row.get("icons", []),
-                subtitle=(f"{int(row.get('count', 0) or 0)} finishes • {summary.get('confidence_label', 'n/a')}"
-                          if has_record else f"{row.get('count', 0)} weighted top finishes"),
-                sort_value=(row.get("deck", "") or "").lower(),
-            )
-            self._set_meta_item(self.japan_table, i, 2, str(row.get('count', 0)), sort_value=int(row.get('count', 0) or 0))
-            self._set_meta_item(self.japan_table, i, 3, f"{row.get('share', 0):.1f}%", sort_value=float(row.get('share', 0) or 0))
-            if not has_record:
-                for col in range(4, 10):
-                    self._set_meta_item(self.japan_table, i, col, "—", muted=True, sort_value=-1)
-                continue
-            self._set_meta_item(self.japan_table, i, 4, str(int(wins)), accent="#66BB6A", sort_value=wins)
-            self._set_meta_item(self.japan_table, i, 5, str(int(losses)), accent="#EF5350", sort_value=losses)
-            pct_color = "#66BB6A" if raw_pct >= 55 else "#EF5350" if raw_pct < 45 else "#F9A825"
-            self._set_meta_item(self.japan_table, i, 6, f"{raw_pct:.1f}%", accent=pct_color, sort_value=raw_pct)
-            bayes_color = "#66BB6A" if bayes_pct >= 55 else "#EF5350" if bayes_pct < 45 else "#F9A825"
-            self._set_meta_item(self.japan_table, i, 7, f"{bayes_pct:.1f}%", accent=bayes_color, sort_value=bayes_pct)
-            self._set_meta_item(self.japan_table, i, 8, f"{ci_low:.0f}–{ci_high:.0f}%", sort_value=(ci_high - ci_low))
-            prob_color = "#66BB6A" if prob_even >= 65 else "#EF5350" if prob_even < 45 else "#F9A825"
-            self._set_meta_item(self.japan_table, i, 9, f"{prob_even:.0f}%", accent=prob_color, sort_value=prob_even)
-        if sorting_enabled:
-            self.japan_table.setSortingEnabled(True)
+        """City League placings for the chosen period (from the event cache)."""
+        if not hasattr(self, "japan_table"):
+            return
+        from meta_sources import japan_view
+        key = self.japan_timeframe_combo.currentData()
+        days = next((d for k, _t, d in self.JAPAN_PERIODS if k == key), None)
+        since = (datetime.now() - timedelta(days=days)).date().isoformat() if days else None
+        sheet_rows = (self.limitless_standard_meta or {}).get("rows") or []
+        try:
+            view = japan_view(since, sheet_rows)
+        except Exception as e:
+            view = None
+            print(f"Japan view failed: {e}")
+        table = self.japan_table
+        table.setSortingEnabled(False)
+        table.setRowCount(0)
+        if not view or not view["rows"]:
+            self.japan_status.setText("No City League data in this period yet - press ↻ Refresh in the Meta tab once.")
+            for label in self.japan_metric_labels.values():
+                label.setText("–")
+            return
+        jp_set = view.get("jp_set") or {}
+        self.japan_status.setText(
+            f"{view['events']} City Leagues · {view['first']} → {view['last']} · Japanese format, newest set "
+            f"{jp_set.get('name', '?')} ({jp_set.get('code', '')}) · best-of-one, top 16 published, so these are "
+            f"placings, not win rates · source: Limitless (official results)")
+        self.japan_metric_labels["events"].setText(f"{view['events']:,}")
+        self.japan_metric_labels["placings"].setText(f"{view['placings']:,}")
+        self.japan_metric_labels["decks"].setText(str(len(view["rows"])))
+        rows = view["rows"][:80]
+        table.setUpdatesEnabled(False)
+        table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            table.setRowHeight(i, 40)
+            self._set_meta_item(table, i, 0, str(i + 1), sort_value=i + 1)
+            self._set_meta_deck_cell(table, i, 1, r["deck"], r["icons"],
+                                     subtitle=f"{r['events']} events · {r['win_rate_events']:.1f}% of events won",
+                                     sort_value=r["deck"].lower())
+            self._set_meta_item(table, i, 2, f"{r['points']:,}", sort_value=r["points"])
+            self._set_meta_item(table, i, 3, str(r["top16"]), sort_value=r["top16"])
+            self._set_meta_item(table, i, 4, f"{r['share']:.1f}%", sort_value=r["share"])
+            self._set_meta_item(table, i, 5, str(r["top4"]), sort_value=r["top4"], muted=not r["top4"])
+            self._set_meta_item(table, i, 6, str(r["wins"]), sort_value=r["wins"], muted=not r["wins"],
+                                accent="#FFD54F" if r["wins"] else None)
+            self._set_meta_item(table, i, 7, f"{r['avg_place']:.1f}", sort_value=-r["avg_place"])
+            trend = r.get("trend")
+            if trend is None:
+                self._set_meta_item(table, i, 8, "", muted=True, sort_value=0)
+            else:
+                acc = self.WINNING if trend >= 0.5 else self.LOSING if trend <= -0.5 else None
+                self._set_meta_item(table, i, 8, f"{trend:+.1f}", accent=acc, muted=acc is None, sort_value=trend)
+                table.item(i, 8).setToolTip(f"Share since {view['split']} minus share before it: {trend:+.2f} points")
+        table.setUpdatesEnabled(True)
+        table.setSortingEnabled(True)
 
     def create_pokedata_tab(self):
         """PokeData.ovh – embedded interactive tool with nav buttons."""
@@ -8510,26 +8492,32 @@ class StatsWindow(QWidget):
             # Method 2: Search all Python processes for TCGLiveMonitor
             if monitor_pid is None:
                 print("[Console Detection] Searching for TCGLiveMonitor process...")
-                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                # Only python processes need their command line read: list them
+                # from one fast Toolhelp snapshot (psutil.process_iter took seconds).
+                try:
+                    from game_window import process_list
+                    candidates = [pid for pid, name in process_list() if 'python' in name.lower()]
+                except Exception:
+                    candidates = [p.pid for p in psutil.process_iter(['name'])
+                                  if 'python' in (p.info.get('name') or '').lower()]
+                for pid in candidates:
                     try:
                         # Skip our own process
-                        if proc.info['pid'] == os.getpid():
+                        if pid == os.getpid():
                             continue
-                            
-                        if 'python' in proc.info['name'].lower():
-                            cmdline = ' '.join(proc.info['cmdline']) if proc.info['cmdline'] else ''
-                            if 'TCGLiveMonitor.py' in cmdline:
-                                monitor_pid = proc.info['pid']
-                                print(f"[Console Detection] ✓ Found TCGLiveMonitor: PID {monitor_pid}")
-                                print(f"[Console Detection]   Command: {cmdline}")
-                                # Update PID file with correct PID
-                                try:
-                                    with open(pid_file, 'w') as f:
-                                        f.write(str(monitor_pid))
-                                    print(f"[Console Detection] Updated PID file")
-                                except:
-                                    pass
-                                break
+                        cmdline = ' '.join(psutil.Process(pid).cmdline() or [])
+                        if 'TCGLiveMonitor.py' in cmdline:
+                            monitor_pid = pid
+                            print(f"[Console Detection] ✓ Found TCGLiveMonitor: PID {monitor_pid}")
+                            print(f"[Console Detection]   Command: {cmdline}")
+                            # Update PID file with correct PID
+                            try:
+                                with open(pid_file, 'w') as f:
+                                    f.write(str(monitor_pid))
+                                print(f"[Console Detection] Updated PID file")
+                            except:
+                                pass
+                            break
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
             
@@ -8953,6 +8941,15 @@ class StatsWindow(QWidget):
         self.app_settings["auto_export_battle_log"] = bool(checked)
         save_app_settings(self.app_settings)
 
+    def _save_limitless_key(self):
+        self.app_settings = load_app_settings()
+        key = self.limitless_key_input.text().strip()
+        if key:
+            self.app_settings["limitless_api_key"] = key
+        else:
+            self.app_settings.pop("limitless_api_key", None)
+        save_app_settings(self.app_settings)
+
     def save_parser_settings(self):
         key_value = (self.api_key_input.text() if hasattr(self, "api_key_input") else "").strip()
         self.app_settings = {**load_app_settings(), **self.app_settings}
@@ -9214,7 +9211,20 @@ class StatsWindow(QWidget):
         window_box.setCurrentIndex(max(0, window_box.findData(self.winrate_window)))
         window_box.setToolTip("Games in the dashed rolling line")
         window_box.currentIndexChanged.connect(lambda _i, box=window_box: self._set_winrate_window(box.currentData()))
-        row.addWidget(self.create_graph_card("WIN RATE", self.winrate_chart, header_widget=window_box,
+        # One deck or all of them (ignored decks are never in the charts).
+        self.winrate_deck_box = QComboBox()
+        self.winrate_deck_box.setObjectName("metaCombo")
+        self.winrate_deck_box.addItem("All decks", None)
+        self.winrate_deck_box.setToolTip("Show the win rate of one deck only")
+        self.winrate_deck_box.setMaxVisibleItems(20)
+        self.winrate_deck_box.currentIndexChanged.connect(lambda *_: self.update_winrate_graph())
+        boxes = QWidget()
+        boxes_row = QHBoxLayout(boxes)
+        boxes_row.setContentsMargins(0, 0, 0, 0)
+        boxes_row.setSpacing(6)
+        boxes_row.addWidget(self.winrate_deck_box)
+        boxes_row.addWidget(window_box)
+        row.addWidget(self.create_graph_card("WIN RATE", self.winrate_chart, header_widget=boxes,
                                              summary_label=self.winrate_summary_label), 1)
         outer.addLayout(row)
         return container
@@ -9255,6 +9265,29 @@ class StatsWindow(QWidget):
             pass
         self.update_elo_graph()
         self.update_winrate_graph()
+
+    def _filter_winrate_deck(self, battles):
+        """Keep the deck picker in step with the decks played (most games
+        first) and return only the chosen deck's games."""
+        box = getattr(self, "winrate_deck_box", None)
+        if box is None:
+            return battles
+        counts = {}
+        for b in battles:
+            if b.get("deck"):
+                counts[b["deck"]] = counts.get(b["deck"], 0) + 1
+        decks = sorted(counts, key=lambda d: (-counts[d], d.lower()))
+        if [box.itemData(i) for i in range(1, box.count())] != decks:
+            current = box.currentData()
+            box.blockSignals(True)
+            box.clear()
+            box.addItem("All decks", None)
+            for deck in decks:
+                box.addItem(f"{deck} ({counts[deck]})", deck)
+            box.setCurrentIndex(max(0, box.findData(current)) if current else 0)
+            box.blockSignals(False)
+        chosen = box.currentData()
+        return [b for b in battles if b.get("deck") == chosen] if chosen else battles
 
     def _set_winrate_window(self, size):
         try:
@@ -9672,6 +9705,7 @@ class StatsWindow(QWidget):
         """
         try:
             battles, _ranks = getattr(self, "_timeline", None) or self._load_timeline()
+            battles = self._filter_winrate_deck(battles)
             chart = self.winrate_chart
             size = self.winrate_window
             expansions = cached_expansions("en")
@@ -9737,7 +9771,8 @@ class StatsWindow(QWidget):
 
     def _update_winrate_summary(self, first, last, custom):
         self._update_chart_hint()
-        battles = (getattr(self, "_timeline", None) or ([], []))[0]
+        # The chart's games (one deck's when the deck filter is set).
+        battles = self._filter_winrate_deck((getattr(self, "_timeline", None) or ([], []))[0])
         games = battles[first:last + 1] if self.winrate_chart.points else []
         if not games:
             self.winrate_summary_label.setText("<span style='color:rgba(214,225,240,0.5)'>No games in this range</span>")

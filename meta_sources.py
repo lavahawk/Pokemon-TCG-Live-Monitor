@@ -28,6 +28,16 @@ already uses (deck, icons, share, wins, losses, ties, win_pct, ...), plus:
     sources   {online, in_person, japan}  number of events seen in
     top_share weighted share among in-person / JP top finishers (%)
     matchups  {opponent_key: [w, l, t]}   weighted, from online pairings
+    lists     number of decklists behind `cards`
+    cards     [{name, cat, set, number, incl, avg, per_list}] card usage from
+              public decklists (online: every player's list from the API;
+              in-person: every Day 2 list, one bulk page per event)
+
+Sources checked and left out because they repeat events already counted
+(they would double-count): RK9 (same in-person events as Labs), TrainerHill
+(built on Limitless data; used only for the Trend view), pokekameshi and
+pokemoncard.io City League posts (the same official top-16 lists Limitless
+mirrors), PTCG Legends (mostly retro formats).
 """
 
 import html
@@ -37,6 +47,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from datetime import date, datetime, timedelta
 
 from deck_analytics import normalize_deck_name, win_rate_posterior
@@ -61,8 +72,10 @@ def current_weights():
 WEIGHTS = current_weights()  # refreshed at the start of every build
 MIN_EXPANSION_CARDS = 90        # smaller products (starters, premium decks) aren't expansions
 ONLINE_MIN_PLAYERS = 32
-ONLINE_MAX_EVENTS = 80
-JP_MAX_EVENTS = 150
+ONLINE_MAX_EVENTS = 1500     # every 32+ player event in the era window (~170 a month)
+JP_MAX_EVENTS = 1000         # every City League in the era window
+CARD_MIN_INCL = 0.03         # cards in fewer lists than this are left out of `cards`
+CARD_MAX = 70
 EXPANSION_TTL = 24 * 3600
 REQUEST_WORKERS = 4
 TIMEOUT = (8, 20)        # (connect, read) seconds
@@ -77,10 +90,79 @@ def make_session():
     from version import VERSION
     session.headers["User-Agent"] = f"TCGLiveMonitor/{VERSION} (+https://github.com/lavahawk/Pokemon-TCG-Live-Monitor)"
     # Short, bounded retries: a slow endpoint must never stall the whole build.
+    # 429 isn't retried here: the play API's rate limit is handled by _api_get.
     retry = Retry(total=2, connect=2, read=1, backoff_factor=0.5,
-                  status_forcelist=(429, 500, 502, 503, 504), respect_retry_after_header=False)
+                  status_forcelist=(500, 502, 503, 504), respect_retry_after_header=False)
     session.mount("https://", HTTPAdapter(max_retries=retry, pool_maxsize=REQUEST_WORKERS * 2))
     return session
+
+
+# ── play.limitlesstcg.com API rate limit ───────────────────────────────────
+# Without a key the API allows 50 requests per 5 minutes ("RateLimit:
+# "50-in-5min"; r=<left>; t=<seconds to reset>"). Finished events are cached
+# forever, so the full window fills in over a few refreshes and after that a
+# refresh only needs the handful of new events. A key (Advanced → Preferences,
+# or LIMITLESS_API_KEY) raises the limit: play.limitlesstcg.com/account/settings/api
+class RateLimited(Exception):
+    pass
+
+
+class _ApiThrottle:
+    def __init__(self):
+        import threading
+        self.lock = threading.Lock()
+        self.remaining = None
+        self.reset_at = 0.0
+        self.deadline = None  # wall clock; waits that would pass it raise RateLimited
+
+    def before(self):
+        with self.lock:
+            now = time.time()
+            if self.remaining is not None and self.remaining <= 0 and now < self.reset_at:
+                wait = self.reset_at - now + 0.5
+                if self.deadline is not None and now + wait > self.deadline:
+                    raise RateLimited(f"rate limit, resets in {wait:.0f}s")
+                time.sleep(wait)  # holding the lock: the other workers wait too
+                self.remaining = None
+
+    def after(self, response):
+        header = response.headers.get("RateLimit") or ""
+        left = re.search(r"\br=(\d+)", header)
+        reset = re.search(r"\bt=(\d+)", header)
+        with self.lock:
+            if response.status_code == 429:
+                self.remaining = 0
+                self.reset_at = time.time() + float(response.headers.get("Retry-After") or (reset.group(1) if reset else 60))
+            elif left:
+                self.remaining = int(left.group(1))
+                self.reset_at = time.time() + float(reset.group(1) if reset else 300)
+
+
+API_THROTTLE = _ApiThrottle()
+
+
+def api_key():
+    key = os.environ.get("LIMITLESS_API_KEY")
+    if not key:
+        try:
+            from app_settings import load_app_settings
+            key = load_app_settings().get("limitless_api_key")
+        except Exception:
+            key = None
+    return (key or "").strip() or None
+
+
+def _api_get(session, path, params=None):
+    """GET play.limitlesstcg.com/api/<path> as JSON, within the rate limit."""
+    headers = {"X-Access-Key": api_key()} if api_key() else None
+    for _attempt in range(2):
+        API_THROTTLE.before()
+        response = session.get(f"{PLAY_API}/{path}", params=params, headers=headers, timeout=TIMEOUT)
+        API_THROTTLE.after(response)
+        if response.status_code != 429:
+            response.raise_for_status()
+            return response.json()
+    raise RateLimited("rate limit")
 
 
 def _soup(session, url):
@@ -208,6 +290,60 @@ def fetch_in_person_event(session, event):
                               "icons": icons, "count": count, "points": points})
         return {"event": event, "decks": decks}
     return _cached(f"inperson_v2_{event['id']}", build)
+
+
+CARD_CATS = {"pokemon": "P", "pokémon": "P", "trainer": "T", "energy": "E"}
+
+
+def _summarize_lists(lists):
+    """[(deck, [(cat, name, set, number, count)])] -> per deck
+    {"n": lists, "c": {"cat|name": [lists with it, copies, set, number]}}.
+    Prints are merged by name (reprints are the same card in play)."""
+    out = {}
+    for deck, cards in lists:
+        if not deck or not cards:
+            continue
+        entry = out.setdefault(deck, {"n": 0, "c": {}})
+        entry["n"] += 1
+        merged = {}
+        for cat, name, set_code, number, count in cards:
+            key = f"{cat}|{name}"
+            m = merged.setdefault(key, [0, set_code, number])
+            m[0] += count
+        for key, (count, set_code, number) in merged.items():
+            c = entry["c"].setdefault(key, [0, 0, set_code, number])
+            c[0] += 1
+            c[1] += count
+    return out
+
+
+_LIST_TOKEN = re.compile(r'decklist-column-heading">\s*([^<(]+?)\s*\('
+                         r'|class="decklist-card" data-set="([^"]*)" data-number="([^"]*)".*?'
+                         r'card-count">(\d+)</span>\s*<span class="card-name">([^<]+)<', re.S)
+
+
+def fetch_in_person_lists(session, event):
+    """Every published (Day 2) decklist of an in-person event from its bulk
+    decklists page: one request per event, summarized per archetype."""
+    def build():
+        response = session.get(f"{LIMITLESS}/tournaments/{event['id']}/decklists", timeout=(8, 60))
+        response.raise_for_status()
+        lists = []
+        for block in response.text.split('<div class="tournament-decklist">')[1:]:
+            title = re.search(r'decklist-title">\s*([^<]+?)\s*<', block)
+            if not title:
+                continue
+            cat, cards = "P", []
+            for heading, set_code, number, count, name in _LIST_TOKEN.findall(block):
+                if heading:
+                    cat = CARD_CATS.get(heading.strip().lower(), "T")
+                else:
+                    cards.append((cat, html.unescape(name).strip(), set_code, number, int(count)))
+            lists.append((html.unescape(title.group(1)), cards))
+        if not lists:
+            return None  # not published (yet): try again next build
+        return {"event": event, "lists": len(lists), "cards": _summarize_lists(lists)}
+    return _cached(f"inperson_lists_{event['id']}", build)
 
 
 def _labs_get(session, url):
@@ -368,15 +504,27 @@ def fetch_in_person_standings(session, event):
 
 
 # ── Japan City Leagues (limitlesstcg.com/tournaments/jp) ───────────────────
-def list_japan(session):
-    soup = _soup(session, f"{LIMITLESS}/tournaments/jp?time=3months&show=100")
-    events = []
-    for tr in soup.select("table.completed-tournaments tr[data-date]"):
-        link = tr.select_one("a[href*='/tournaments/jp/']")
-        if not link:
-            continue
-        events.append({"id": link["href"].rstrip("/").rsplit("/", 1)[-1], "date": tr["data-date"],
-                       "name": f"City League {tr.get('data-city', '')}".strip(), "players": 0})
+def list_japan(session, since_iso=None):
+    """Every City League back to `since_iso` (500 per page, newest first)."""
+    events, seen = [], set()
+    for page in range(1, 5):
+        soup = _soup(session, f"{LIMITLESS}/tournaments/jp?time=12months&show=500&page={page}")
+        rows = soup.select("table.completed-tournaments tr[data-date]")
+        for tr in rows:
+            link = tr.select_one("a[href*='/tournaments/jp/']")
+            if not link:
+                continue
+            tid = link["href"].rstrip("/").rsplit("/", 1)[-1]
+            if tid in seen:
+                continue
+            seen.add(tid)
+            events.append({"id": tid, "date": tr["data-date"],
+                           "name": f"City League {tr.get('data-city', '')}".strip(),
+                           "shop": tr.get("data-shop", ""), "players": 0})
+        if len(rows) < 500 or not since_iso or (rows and rows[-1]["data-date"] < since_iso):
+            break
+    if since_iso:
+        events = [e for e in events if e["date"] >= since_iso]
     return events[:JP_MAX_EVENTS]
 
 
@@ -400,11 +548,9 @@ def fetch_japan_event(session, event):
 # ── Online (play.limitlesstcg.com API) ─────────────────────────────────────
 def list_online(session, since_iso):
     events = []
-    for page in range(1, 8):
-        response = session.get(f"{PLAY_API}/tournaments",
-                               params={"game": "PTCG", "format": "STANDARD", "limit": 50, "page": page}, timeout=TIMEOUT)
-        response.raise_for_status()
-        batch = response.json() or []
+    for page in range(1, 16):
+        batch = _api_get(session, "tournaments",
+                         {"game": "PTCG", "format": "STANDARD", "limit": 500, "page": page}) or []
         if not batch:
             break
         for t in batch:
@@ -418,9 +564,10 @@ def list_online(session, since_iso):
 
 def fetch_online_event(session, event):
     def build():
-        standings = session.get(f"{PLAY_API}/tournaments/{event['id']}/standings", timeout=TIMEOUT).json() or []
+        standings = _api_get(session, f"tournaments/{event['id']}/standings") or []
         players = {}
         decks = []
+        lists = []
         for p in standings:
             deck = p.get("deck") or {}
             if isinstance(deck, str):
@@ -435,11 +582,28 @@ def fetch_online_event(session, event):
             decks.append(entry)
             if p.get("player"):
                 players[p["player"]] = name
+            decklist = p.get("decklist")
+            if isinstance(decklist, dict):
+                cards = [(CARD_CATS.get(section, "T"), (c.get("name") or "").strip(), c.get("set") or "",
+                          str(c.get("number") or ""), int(c.get("count") or 0))
+                         for section, entries in decklist.items() if isinstance(entries, list)
+                         for c in entries if isinstance(c, dict) and c.get("name")]
+                lists.append((name, cards))
+        # Events cached before decklists were kept (v2) already have their
+        # matchups: reuse them and save the pairings request.
+        old = _store_path(f"online_{event['id']}")
+        if os.path.exists(old):
+            try:
+                with open(old, "r", encoding="utf-8") as handle:
+                    matchups = json.load(handle).get("matchups") or {}
+                return {"event": event, "decks": decks, "matchups": matchups,
+                        "lists": len(lists), "cards": _summarize_lists(lists)}
+            except Exception:
+                pass
         matchups = {}
-        try:
-            pairings = session.get(f"{PLAY_API}/tournaments/{event['id']}/pairings", timeout=TIMEOUT).json() or []
-        except Exception:
-            pairings = []
+        # A failed pairings download raises, so the event isn't cached without
+        # matchups forever; it's retried on the next refresh.
+        pairings = _api_get(session, f"tournaments/{event['id']}/pairings") or []
         for m in pairings:
             a, b, winner = m.get("player1"), m.get("player2"), m.get("winner")
             da, db = players.get(a), players.get(b)
@@ -453,11 +617,40 @@ def fetch_online_event(session, event):
                     rec[0] += 1
                 else:
                     rec[1] += 1
-        return {"event": event, "decks": decks, "matchups": matchups}
-    return _cached(f"online_{event['id']}", build)
+        return {"event": event, "decks": decks, "matchups": matchups,
+                "lists": len(lists), "cards": _summarize_lists(lists)}
+    # v3: with decklists (card usage)
+    try:
+        return _cached(f"online_v3_{event['id']}", build)
+    except Exception:
+        # Offline rebuilds still use an event cached before v3 (no card usage).
+        old = _store_path(f"online_{event['id']}")
+        if isinstance(session, _NoNetwork) and os.path.exists(old):
+            with open(old, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        raise
 
 
 FETCH_BUDGET_S = 150  # per source; unfinished events are retried on the next refresh
+ONLINE_BUDGET_S = 240  # online downloads wait out the API rate limit up to this long
+
+
+def _fetch_online(session, online, exp_en, progress):
+    """Online events within the API rate limit: cached events first (free),
+    then the current format's biggest events, then older formats."""
+    def priority(ev):
+        cached = os.path.exists(_store_path(f"online_v3_{ev['id']}"))
+        return (not cached, era_of(ev["date"], exp_en), -int(ev.get("players") or 0))
+    ordered = sorted(online, key=priority)
+    missing = sum(1 for ev in ordered if priority(ev)[0])
+    if missing:
+        progress(f"  online: {missing} events to download (API limit 50 requests / 5 min"
+                 f"{'' if api_key() else ', no API key'}; the rest load on later refreshes)")
+    API_THROTTLE.deadline = time.time() + ONLINE_BUDGET_S
+    try:
+        return _fetch_all(session, fetch_online_event, ordered, "online", progress, budget=ONLINE_BUDGET_S + 15)
+    finally:
+        API_THROTTLE.deadline = None
 
 
 def _fetch_labs(session, in_person, progress):
@@ -474,7 +667,7 @@ def _fetch_labs(session, in_person, progress):
     return {d["event"]["id"]: d for d in done}
 
 
-def _fetch_all(session, fn, events, label, progress):
+def _fetch_all(session, fn, events, label, progress, budget=FETCH_BUDGET_S):
     """Fetch events in parallel within a time budget (cached ones are instant).
     Events that fail or don't finish in time are skipped for this build."""
     from concurrent.futures import as_completed, TimeoutError as FutureTimeout
@@ -484,8 +677,9 @@ def _fetch_all(session, fn, events, label, progress):
     pool = ThreadPoolExecutor(max_workers=REQUEST_WORKERS)
     futures = [pool.submit(fn, session, ev) for ev in events]
     done = 0
+    step = max(10, len(events) // 20)
     try:
-        for future in as_completed(futures, timeout=FETCH_BUDGET_S):
+        for future in as_completed(futures, timeout=budget):
             done += 1
             try:
                 data = future.result()
@@ -493,7 +687,7 @@ def _fetch_all(session, fn, events, label, progress):
                 data = None
             if data:
                 results.append(data)
-            if done % 10 == 0 or done == len(events):
+            if done % step == 0 or done == len(events):
                 progress(f"  {label}: {done}/{len(events)}")
     except FutureTimeout:
         progress(f"  {label}: time budget reached at {done}/{len(events)} - the rest load next refresh")
@@ -522,6 +716,7 @@ def _event_weight(kind, event, era):
     return w * max(0.5, min(3.0, size))
 
 
+@lru_cache(maxsize=4096)  # a few hundred names, looked up ~300k times per build
 def _key(name):
     return normalize_deck_name(re.sub(r"\bex\b", "", name or "", flags=re.IGNORECASE)) or (name or "").lower()
 
@@ -588,7 +783,7 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
 
     progress("Listing tournaments…")
     in_person = [e for e in list_in_person(session) if e["date"] >= since_en]
-    japan = [e for e in list_japan(session) if e["date"] >= since_jp]
+    japan = list_japan(session, since_jp)
     online = list_online(session, since_en)
 
     progress(f"Loading {len(online)} online, {len(in_person)} in-person and {len(japan)} Japanese events…")
@@ -596,8 +791,10 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
     standings_data = {d["event"]["id"]: d for d in
                       _fetch_all(session, fetch_in_person_standings, in_person, "in-person standings", progress)}
     labs_data = _fetch_labs(session, in_person, progress)
+    lists_data = {d["event"]["id"]: d for d in
+                  _fetch_all(session, fetch_in_person_lists, in_person, "in-person decklists", progress)}
     japan_data = _fetch_all(session, fetch_japan_event, japan, "Japan", progress)
-    online_data = _fetch_all(session, fetch_online_event, online, "online", progress)
+    online_data = _fetch_online(session, online, exp_en, progress)
     try:
         path = _store_path(INPUTS_FILE)
         with open(path + ".tmp", "w", encoding="utf-8") as handle:
@@ -607,7 +804,7 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
     except Exception:
         pass
     return _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data, japan_data, online_data, labs_data,
-                     use_weights, sources)
+                     use_weights, sources, lists_data)
 
 
 def rebuild_meta_sheet(use_weights=True, sources=ALL_SOURCES, progress=lambda msg: None):
@@ -625,14 +822,81 @@ def rebuild_meta_sheet(use_weights=True, sources=ALL_SOURCES, progress=lambda ms
     standings_data = {d["event"]["id"]: d for d in
                       _fetch_all(session, fetch_in_person_standings, inputs["in_person"], "in-person standings", progress)}
     labs_data = _fetch_labs(session, inputs["in_person"], progress)
+    lists_data = {d["event"]["id"]: d for d in
+                  _fetch_all(session, fetch_in_person_lists, inputs["in_person"], "in-person decklists", progress)}
     japan_data = _fetch_all(session, fetch_japan_event, inputs["japan"], "Japan", progress)
     online_data = _fetch_all(session, fetch_online_event, inputs["online"], "online", progress)
     return _assemble(inputs["exp_en"], inputs["exp_jp"], inputs["since_en"], inputs["since_jp"],
-                     inperson_data, standings_data, japan_data, online_data, labs_data, use_weights, sources)
+                     inperson_data, standings_data, japan_data, online_data, labs_data, use_weights, sources,
+                     lists_data)
+
+
+def japan_view(since_iso=None, sheet_rows=None):
+    """Japanese City Leagues (Limitless JP, cached events only) for the
+    Japan Data tab: top-16 placings per archetype since `since_iso`.
+
+    City Leagues are best-of-one with only the top 16 published, so these
+    are placings, not win rates. Names follow the meta sheet (same icons =
+    same archetype). Returns {"rows": [...], "events": n, "first", "last",
+    "placings", "jp_set", "en_set"} or None before the first full build."""
+    try:
+        with open(_store_path(INPUTS_FILE), "r", encoding="utf-8") as handle:
+            inputs = json.load(handle)
+    except Exception:
+        return None
+    events = [e for e in inputs.get("japan") or [] if not since_iso or e["date"] >= since_iso]
+    data = _fetch_all(_NoNetwork(), fetch_japan_event, events, "Japan", lambda m: None)
+    icon_names, by_pokemon = {}, {}
+    for r in sorted(sheet_rows or [], key=lambda r: r.get("count") or 0):
+        if r.get("icons"):
+            icon_names.setdefault(tuple(sorted(r["icons"])), r["deck"])
+        by_pokemon[_pokemon_signature(r["deck"])] = r["deck"]
+    dates = sorted(d["event"]["date"] for d in data)
+    mid = dates[len(dates) // 2] if dates else None  # trend: newer half vs older half of the events
+    archetypes, totals = {}, {"placings": 0, "new": 0, "old": 0}
+    for d in data:
+        newer = d["event"]["date"] >= mid
+        for p in d["placings"]:
+            sig = tuple(sorted(p["icons"]))
+            name = icon_names.get(sig)
+            if not name:
+                readable = _name_from_icons(p["icons"])
+                name = by_pokemon.setdefault(_pokemon_signature(readable), readable)
+                icon_names[sig] = name
+            a = archetypes.setdefault(name, {"deck": name, "icons": list(p["icons"]), "top16": 0, "wins": 0,
+                                             "top4": 0, "points": 0, "rank_sum": 0, "new": 0, "old": 0,
+                                             "events": set()})
+            a["top16"] += 1
+            a["wins"] += p["rank"] == 1
+            a["top4"] += p["rank"] <= 4
+            a["points"] += max(1, 17 - p["rank"])
+            a["rank_sum"] += p["rank"]
+            a["new" if newer else "old"] += 1
+            a["events"].add(d["event"]["id"])
+            totals["placings"] += 1
+            totals["new" if newer else "old"] += 1
+    rows = []
+    for a in archetypes.values():
+        share = 100.0 * a["top16"] / totals["placings"] if totals["placings"] else 0.0
+        trend = None
+        if totals["new"] and totals["old"]:
+            trend = round(100.0 * a["new"] / totals["new"] - 100.0 * a["old"] / totals["old"], 2)
+        rows.append({"deck": a["deck"], "icons": a["icons"], "top16": a["top16"], "share": round(share, 2),
+                     "wins": a["wins"], "top4": a["top4"], "points": a["points"],
+                     "avg_place": round(a["rank_sum"] / a["top16"], 1), "events": len(a["events"]),
+                     "trend": trend,
+                     "win_rate_events": round(100.0 * a["wins"] / len(data), 1) if data else 0.0})
+    rows.sort(key=lambda r: (-r["points"], -r["top16"]))
+    exp_jp = inputs.get("exp_jp") or []
+    exp_en = inputs.get("exp_en") or []
+    return {"rows": rows, "events": len(data), "placings": totals["placings"],
+            "first": dates[0] if dates else None, "last": dates[-1] if dates else None,
+            "jp_set": exp_jp[0] if exp_jp else None, "en_set": exp_en[0] if exp_en else None,
+            "split": mid}
 
 
 def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data, japan_data, online_data,
-              labs_data=None, use_weights=True, sources=ALL_SOURCES):
+              labs_data=None, use_weights=True, sources=ALL_SOURCES, lists_data=None):
     sources = set(sources or ALL_SOURCES)
 
     def event_weight(kind, event, era):
@@ -654,6 +918,8 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                                    "sw": 0.0, "sw2": 0.0, "pilots": [],
                                    "sources": {"online": 0, "in_person": 0, "japan": 0},
                                    "matchups": {},
+                                   # card usage: weighted / raw list counts, per card [lists, copies, set, no.]
+                                   "lists_w": 0.0, "lists_n": 0, "cards": {},
                                    # in-person placings (raw counts + weighted for conversion)
                                    "ip": {"day2": 0, "top32": 0, "top8": 0, "wins": 0, "best": None,
                                           "w_day2": 0.0, "w_top32": 0.0, "w_top8": 0.0}}
@@ -662,6 +928,24 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
         if url and not a["deck_url"]:
             a["deck_url"] = url
         return a
+
+    def list_weight(kind, event, era):
+        """Each decklist counts by format age and source, not event size
+        (the size factor is for shares: big events say more about the field)."""
+        w = event_weight(kind, event, era)
+        players = event.get("players") or 0
+        size = max(0.5, min(3.0, math.sqrt(players / 64.0))) if players else 1.0
+        return w / size if use_weights else w
+
+    def add_cards(a, summary, weight):
+        if weight <= 0 or not summary or not summary.get("n"):
+            return
+        a["lists_w"] += weight * summary["n"]
+        a["lists_n"] += summary["n"]
+        for key, (incl, copies, set_code, number) in summary["c"].items():
+            c = a["cards"].setdefault(key, [0.0, 0.0, set_code, number])
+            c[0] += weight * incl
+            c[1] += weight * copies
 
     # Icon signature -> archetype name (Japanese results only carry icons).
     icon_names = {}
@@ -712,6 +996,9 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
             if a["id"] not in seen:
                 a["sources"]["online"] += 1
                 seen.add(a["id"])
+        lw = list_weight("online", ev, era_of(ev["date"], exp_en))
+        for deck, summary in (data.get("cards") or {}).items():
+            add_cards(arch(deck), summary, lw)
         for me, opps in data.get("matchups", {}).items():
             a = arch(me)
             for opp, (w, l, t) in opps.items():
@@ -803,6 +1090,12 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                     rec[1] += weight * ol
                     rec[2] += weight * ot
                     a["mraw"][cell] = a["mraw"].get(cell, 0) + ow + ol + ot
+        # Day 2 decklists (card usage).
+        day2_lists = (lists_data or {}).get(ev["id"])
+        if day2_lists:
+            lw = list_weight("in_person", ev, era)
+            for title, summary in (day2_lists.get("cards") or {}).items():
+                add_cards(arch(resolve_in_person(title)), summary, lw)
         for d in data["decks"]:
             a = arch(resolve_in_person(d["deck"]), d["deck_id"], d["icons"],
                      f"{LIMITLESS}/decks/{d['deck_id']}" if d.get("deck_id") else None)
@@ -886,6 +1179,24 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
         total = sum(rec)
         return [x * games / total for x in rec] if total > 0 else [0.0, 0.0, 0.0]
 
+    def card_rows(a):
+        """Card usage: incl = % of lists with the card, avg = copies in the
+        lists that play it, per_list = copies per list overall."""
+        if a["lists_w"] <= 0:
+            return []
+        out = []
+        for key, (w_incl, w_copies, set_code, number) in a["cards"].items():
+            incl = w_incl / a["lists_w"]
+            if incl < CARD_MIN_INCL:
+                continue
+            cat, name = key.split("|", 1)
+            out.append({"name": name, "cat": cat, "set": set_code, "number": number,
+                        "incl": round(100.0 * incl, 1),
+                        "avg": round(w_copies / w_incl, 2) if w_incl else 0.0,
+                        "per_list": round(w_copies / a["lists_w"], 2)})
+        out.sort(key=lambda c: (-c["incl"], -c["avg"], c["name"]))
+        return out[:CARD_MAX]
+
     rows = []
     for a in archetypes.values():
         share = 100.0 * a["share_num"] / share_den if share_den else 0.0
@@ -923,6 +1234,8 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                          for k, v in a["matchups"].items() if a["mraw"].get(k)},
             "in_person": _in_person_summary(a["ip"], ip_totals),
             "record_source": "unified",
+            "lists": a["lists_n"],
+            "cards": card_rows(a),
         })
     rows.sort(key=lambda r: r["share"], reverse=True)
     sheet = {
@@ -933,6 +1246,7 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
         "fetched_at": time.time(),
         "events": events_used,
         "in_person_records": in_person_records,
+        "decklists": sum(a["lists_n"] for a in archetypes.values()),
         "tournaments_processed": sum(events_used.values()),
         "total_entries": sum(int(d["event"].get("players") or 0) for d in online_data)
                          + sum(int(e.get("players") or 0) for e in in_person_events),

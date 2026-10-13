@@ -54,7 +54,7 @@ Line numbers are from the 2026-10-11 snapshot.
 | BUG-037 | Critical | confirmed | fixed (v2.4) | [[BattleEndAutomation]] | Real game, home screen: BATTLE LOG template matched a dark bar beside PLAY (0.84) and clicked it twice; the wrong spot was then cached. Fix: OCR must read "BATTLE LOG" in the matched box before any click; unverified positions are never cached |
 | BUG-038 | High | confirmed | fixed (v2.4) | [[RankDetector and BattleState]] | Colour-patch HUD check matched an old layout: 3/3 "in battle" on the home screen, 1/3 during real matches. Replaced by a settings-gear template (battle 0.98–1.00, home 0.44); BATTLE LOG search no longer paused while the HUD shows |
 | BUG-039 | Med | confirmed | fixed (v2.4) | [[Startup and Installers]] | Script installers download Python, pip-install ~1 GB and fetch Tesseract on the user's PC, so they fail offline, behind proxies or with AV. Replaced by an offline Inno Setup bundle (Python 3.12 runtime + packages + minimal Tesseract) with a build-time smoke test |
-| BUG-040 | Low | confirmed | open | [[TCGLiveMonitor]] | Post-battle menu OCR read the deck but `rank=None` (2026-10-11 23:24, battle #46); the rank counter likely still animating |
+| BUG-040 | Low | confirmed | fixed (v2.5) | [[TCGLiveMonitor]] | Post-battle menu OCR read the deck but `rank=None` (battles #46, 48, 50, 52, 53): the points counter was still animating. `detect_menu_stats` now keeps reading until the value settles. Verified live: 13/13 after-battle reads stored a rank (#57–#69, 2026-10-12/13) |
 
 ## Details
 
