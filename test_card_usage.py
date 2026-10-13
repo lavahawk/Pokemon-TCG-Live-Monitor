@@ -137,6 +137,28 @@ def test_classify_prefers_the_deck_that_plays_the_cards():
     assert C.classify({"Ultra Ball"}, rows) == []  # no Pokémon seen: no call
 
 
+def test_copies_tell_main_line_from_tech():
+    def row(deck, share, cards):
+        return {"deck": deck, "share_en": share, "lists": 100,
+                "cards": [{"name": n, "cat": "P", "incl": incl, "avg": avg} for n, incl, avg in cards]}
+    rows = [row("Gengar", 5, [("Gastly", 100, 4), ("Gengar ex", 100, 3), ("Zorua", 8, 2), ("Zoroark ex", 8, 2)]),
+            row("Zoroark", 5, [("Zorua", 100, 4), ("Zoroark ex", 100, 4), ("Gastly", 4, 1), ("Gengar ex", 4, 1)])]
+    gengar = C.classify({"Gastly": 4, "Gengar ex": 3, "Zorua": 1, "Zoroark ex": 1}, rows)
+    zoroark = C.classify({"Gastly": 1, "Gengar ex": 1, "Zorua": 4, "Zoroark ex": 3}, rows)
+    assert gengar[0][0]["deck"] == "Gengar" and zoroark[0][0]["deck"] == "Zoroark"
+    text = C.explain(gengar, {"Gastly": 4, "Gengar ex": 3, "Zorua": 1, "Zoroark ex": 1}, rows)
+    assert text.startswith("Opponent revealed (copies seen): Gastly x4, Gengar ex x3")
+    assert "odd for it: Zorua (8%)" in text or "Zorua" in text
+
+
+def test_counts_cut_targets():
+    C.set_known_cards(["Munkidori", "Fezandipiti ex", "Mega Gengar ex", "Dreepy"])
+    log = ("opp played Dreepy to the Bench.\nopp played Dreepy to the Bench.\n"
+           "- opp moved 3 damage counters from opp's Fezandipiti ex to opp's Mega Gengar ex.\n")
+    counts = C.log_card_counts(log, "opp", "me")
+    assert counts["Dreepy"] == 2 and "Mega Gengar ex" not in counts
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

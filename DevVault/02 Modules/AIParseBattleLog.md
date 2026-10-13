@@ -35,3 +35,10 @@ Related: BUG-005, 008, 023, 030, 031, SEC-09.
 - **Local mode:** the card pick replaces "first Pokémon to the Active Spot": ≥ 85% → CARDS (shown), 50–85% → GUESS (prefilled, asks), else the old guess.
 - Measured on the 54 stored battles with logs: the cross-check would change 9 labels, and all 9 were wrong AI labels (e.g. #48 "Gengar" = the user's own deck vs N's Zoroark ex / Zorua / Reshiram; #52 "Dragapult" vs Mega Sharpedo ex / Toxtricity; #17 "Dragapult Dusknoir" vs Blaziken ex / Combusken). Known limits: hybrids (Dragapult + Mega Starmie), Japan-only decks with no English lists, games from rotated formats.
 - Needs the meta sheet with card data (built by Meta → ↻ Refresh); without it nothing changes. Old logs may be cp1252: always read them with `read_battlelog_file`.
+
+### Copies and explained evidence (2026-10-13, later)
+- `card_usage.log_card_counts`: copies seen per card (benched / played / evolved into / attached; bullet lists under "played them to the Bench"), capped at 4. Card names after " to / on / from / onto / with " are targets and ignored (PTCGL writes some targets with the wrong owner, e.g. Munkidori's damage move).
+- `classify` takes the counts: each copy beyond an archetype's usual count (+0.5 slack for replays) costs e^-2. Separates a Gengar deck with a 1-2 copy Zoroark tech from a Zoroark deck (Gengar main + 1 Zoroark → Gengar 100%; Zoroark x3 / Zorua x2 → N's Zoroark 95%).
+- `card_usage.explain` → the AI prompt (~200 tokens, max ~260): Pokemon with copies seen, then each top-3 candidate with the revealed cards that fit its usual list best (Pokemon first; % of lists, usual copies) and the odd ones. Plus: name the deck by its main line, not a 1-2 copy tech.
+- On the 54 stored battles the counts change no top-1 pick (distinct cards already decided them); they matter for close calls. The data is Limitless decklists, the same data TrainerHill's card pages are built on, so no TrainerHill call is needed.
+

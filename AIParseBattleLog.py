@@ -160,7 +160,7 @@ def card_evidence(battlelog, username, rows=None):
     among them, "ranked": [(archetype, probability)] best first} using the
     card usage of public decklists in the meta sheet (card_usage.classify).
     Empty when the sheet has no card data yet."""
-    empty = {"cards": set(), "pokemon": set(), "ranked": []}
+    empty = {"cards": set(), "pokemon": set(), "ranked": [], "explain": ""}
     rows = rows if rows is not None else load_meta_rows()
     if not battlelog or not any(r.get("cards") for r in rows):
         return empty
@@ -168,10 +168,13 @@ def card_evidence(battlelog, username, rows=None):
         import card_usage
         card_usage.set_known_cards(c["name"] for r in rows for c in r.get("cards") or [])
         opponent = parse_opponent_from_log(battlelog, username)
-        seen = card_usage.log_cards(battlelog, opponent, username)
+        copies = card_usage.log_card_counts(battlelog, opponent, username)
+        seen = set(copies)
         pokemon_names = {c["name"] for r in rows for c in r.get("cards") or [] if c.get("cat") == "P"}
-        ranked = [(r["deck"], p) for r, p in card_usage.classify(seen, rows)]
-        return {"cards": seen, "pokemon": seen & pokemon_names, "ranked": ranked}
+        ranked_rows = card_usage.classify(copies, rows)
+        return {"cards": seen, "pokemon": seen & pokemon_names, "copies": copies,
+                "ranked": [(r["deck"], p) for r, p in ranked_rows],
+                "explain": card_usage.explain(ranked_rows, copies, rows)}
     except Exception as exc:
         print(f"[Cards] evidence failed: {exc}")
         return empty
@@ -565,14 +568,16 @@ def ai_parse(battlelog, username, api_key):
     evidence = card_evidence(battlelog, username)
     evidence_text = ""
     if evidence["pokemon"]:
+        # ~150 tokens: what the opponent showed (with copies) and how each
+        # candidate's usual tournament list explains it - e.g. 1 Zoroark ex is
+        # a tech in a Gengar list, 4 make it a Zoroark deck.
         evidence_text = (
-            "\nCard evidence (computed from the log and thousands of public decklists):\n"
-            f"- Pokemon the OPPONENT revealed: {sorted(evidence['pokemon'])}\n"
-            + ("- Archetypes whose decklists best explain the opponent's cards: "
-               + ", ".join(f"{d} ({p * 100:.0f}%)" for d, p in evidence["ranked"]) + "\n"
-               if evidence["ranked"] else "")
-            + f"- {username}'s own cards are NOT evidence for the opponent's deck: never name the "
-            f"opponent's deck after Pokemon only {username} played.\n")
+            "\nCard evidence (from the log and ~95,000 tournament decklists; percentages = how likely "
+            "each archetype is given ALL the opponent's cards and their copy counts):\n"
+            + (evidence["explain"] or f"Opponent revealed: {sorted(evidence['pokemon'])}") + "\n"
+            + "Name the opponent's deck by its main line (the Pokemon with the most copies that the "
+            "archetype is built around), not by a 1-2 copy tech. Prefer a candidate name above when it fits.\n"
+            + f"{username}'s own cards are NOT evidence for the opponent's deck.\n")
     prompt = f"""
 You are identifying Pokemon TCG deck archetypes from an official battle log.
 

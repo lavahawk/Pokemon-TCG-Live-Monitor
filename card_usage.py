@@ -104,10 +104,31 @@ def log_cards(battlelog, player, other=None):
     played, benched, attached, evolved, searched or shown (mulligans), and
     the bullet lists under their lines. Text after the other player's name
     (targets: "... on Sanchomr's Smoochum") isn't theirs, so it's cut."""
+    return set(log_card_counts(battlelog, player, other))
+
+
+MAX_COPIES = 4
+
+
+def log_card_counts(battlelog, player, other=None):
+    """{card: copies seen} for `player`: how many times each card was put
+    into play (benched / played to the Active Spot / evolved into / played as
+    a Trainer / attached), capped at 4. Cards only shown (mulligan, search,
+    discard) count 1. A lower bound, apart from cards recycled and replayed:
+    "4 Gengar ex seen" says Gengar deck, "1 Zoroark ex" says a tech."""
     if not battlelog or not player:
-        return set()
+        return {}
     known = _known_card_pattern()
-    seen, actor = set(), None
+    counts, actor, bench_list = {}, None, False
+
+    def add(name, n=1):
+        if name and ":" not in name and not re.search(r"\d", name):
+            counts[name] = max(counts.get(name, 0), 0) + n
+
+    def shown(name):
+        if name and ":" not in name and not re.search(r"\d", name):
+            counts.setdefault(name, 0)
+
     for raw in battlelog.splitlines():
         line = raw.strip().replace("’", "'")
         if not line:
@@ -116,9 +137,7 @@ def log_cards(battlelog, player, other=None):
             if actor == player:
                 for item in line.lstrip("• ").split(","):
                     name = card_name(item)
-                    # card lists only, not "Base damage: 130 damage" breakdowns
-                    if name and ":" not in name and not re.search(r"\d", name):
-                        seen.add(name)
+                    (add if bench_list else shown)(name)  # "drew 2 cards and played them to the Bench"
             continue
         body = line[2:] if line.startswith("- ") else line
         if body.startswith(player):
@@ -126,13 +145,25 @@ def log_cards(battlelog, player, other=None):
             text = body[len(player):]
             if other and other in text:
                 text = text[:text.index(other)]
+            bench_list = "played them to the Bench" in text
+            evolved = re.match(r"\s+evolved (.+?) to (.+?)(?: in the | on the |\.?$)", text)
+            played = re.match(r"\s+(?:played|attached) (.+?)(?: to | in the |\.?$)", text)
+            if evolved:
+                add(card_name(evolved.group(2)))
+                shown(card_name(evolved.group(1)))
+            elif played:
+                add(card_name(played.group(1)))
             if known is not None:
-                seen.update(card_name(m) for m in known.findall(text))
+                # Only the subject part: after " to " / " on " / " from " come
+                # targets, and PTCGL sometimes prefixes those with the wrong
+                # owner ("moved damage counters ... to <opp>'s Mega Gengar ex").
+                for m in known.findall(re.split(r" (?:to|on|from|onto|with) ", text)[0]):
+                    shown(card_name(m))
         elif other and body.startswith(other):
-            actor = other
+            actor, bench_list = other, False
         elif not line.startswith("- "):
-            actor = None
-    return seen
+            actor, bench_list = None, False
+    return {name: min(MAX_COPIES, max(1, n)) for name, n in counts.items()}
 
 
 _PATTERN = {"names": None, "regex": None}
@@ -156,10 +187,16 @@ def classify(cards_seen, rows, top=3, floor=0.004):
     seen: log P(deck) + sum over seen cards of log P(card in a list of that
     deck). A card the archetype never plays counts as `floor` (0.4% of
     lists), so one odd tech doesn't rule a deck out. Cards that every deck
-    plays barely move the ranking. Returns [(row, probability)], best first,
-    or [] when no Pokémon card was seen."""
+    plays barely move the ranking.
+
+    cards_seen may be {card: copies seen} (log_card_counts): seeing more
+    copies than the archetype usually plays costs e^-2 per extra copy, so 4
+    Zoroark ex point to a Zoroark deck, 1 fits a Gengar deck's tech.
+    Returns [(row, probability)], best first, or [] when no Pokémon card
+    was seen."""
     import math
-    seen = set(cards_seen or ())
+    copies = dict(cards_seen) if isinstance(cards_seen, dict) else {c: 1 for c in cards_seen or ()}
+    seen = set(copies)
     candidates = [r for r in rows if r.get("cards") and r.get("lists", 0) >= 5]
     if not seen or not candidates:
         return []
@@ -170,6 +207,7 @@ def classify(cards_seen, rows, top=3, floor=0.004):
     scored = []
     for r in candidates:
         incl = {c["name"]: c["incl"] / 100.0 for c in r["cards"]}
+        avg = {c["name"]: c.get("avg") or 1.0 for c in r["cards"]}
         prior = max(1e-4, (r.get("share_en") or r.get("share") or 0.0) / total_share)
         score = math.log(prior)
         for name in seen:
@@ -177,9 +215,47 @@ def classify(cards_seen, rows, top=3, floor=0.004):
             if p is None and name not in pokemon:
                 continue  # a trainer/energy outside every top list says little
             score += math.log(max(floor, min(0.999, p or 0.0)))
+            k = copies.get(name, 1)
+            if p and k > avg[name] + 0.5 and not name.endswith(" Energy"):
+                # More copies than this deck plays: each extra copy beyond the
+                # usual count (+0.5 slack for a recovered card played again)
+                # costs e^-2 (4 Zorua seen vs ~2 in a Gengar list ≈ 0.07).
+                score -= 2.0 * (k - avg[name] - 0.5)
         scored.append((score, r))
     scored.sort(key=lambda s: -s[0])
     best = scored[0][0]
     weights = [math.exp(s - best) for s, _r in scored]
     norm = sum(weights)
     return [(r, w / norm) for (_s, r), w in list(zip(scored, weights))[:top]]
+
+
+def explain(ranked, copies, rows, max_fit=4, max_odd=3):
+    """Compact evidence for the AI parser (a few lines, ~150 tokens): the
+    opponent's Pokémon with copies seen, then each candidate archetype with
+    the revealed cards that fit its usual list best (share of lists, usual
+    copies) and the ones that are odd for it."""
+    if not ranked:
+        return ""
+    pokemon = {c["name"] for r in rows for c in r.get("cards") or [] if c["cat"] == "P"}
+    seen_p = sorted((n for n in copies if n in pokemon), key=lambda n: (-copies[n], n))
+    lines = ["Opponent revealed (copies seen): " + ", ".join(f"{n} x{copies[n]}" for n in seen_p)]
+    profiles = {r["deck"]: {c["name"]: c for c in r.get("cards") or []} for r, _p in ranked}
+    for i, (r, prob) in enumerate(ranked, 1):
+        mine = profiles[r["deck"]]
+        others = [profiles[o["deck"]] for o, _p in ranked if o is not r]
+
+        def lift(name):
+            here = mine[name]["incl"]
+            return here - max((o[name]["incl"] if name in o else 0.0) for o in others) if others else here
+        # Pokémon first (they name decks), then the most telling Trainers.
+        fits = sorted((n for n in copies if n in mine and mine[n]["incl"] >= 50.0),
+                      key=lambda n: (n not in pokemon, -lift(n), n))
+        odd = [n for n in seen_p if n not in mine or mine[n]["incl"] < 10.0]
+        fit_text = ", ".join(f"{n} ({mine[n]['incl']:.0f}% of lists, usually {mine[n]['avg']:.0f})"
+                             for n in fits[:max_fit]) or "none"
+        line = f"{i}. {r['deck']} {prob * 100:.0f}% - fits: {fit_text}"
+        if odd:
+            line += "; odd for it: " + ", ".join(
+                f"{n} ({mine[n]['incl']:.0f}%)" if n in mine else f"{n} (not played)" for n in odd[:max_odd])
+        lines.append(line)
+    return "\n".join(lines)
