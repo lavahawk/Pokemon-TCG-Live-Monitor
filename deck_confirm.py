@@ -39,8 +39,9 @@ def _write_json(path, data):
 def write_request(battle_id, deck, *, source, needs_input, my_deck=None, result=None):
     """Ask the overlay to show (or ask for) the opponent's deck of a saved battle.
 
-    source: "ai" (picked by the AI parser), "guess" (local guess from the log)
-            or "none" (nothing to go on).
+    source: "ai" (picked by the AI parser), "cards" (from the opponent's
+            revealed cards vs public decklists), "guess" (local guess from
+            the log) or "none" (nothing to go on).
     """
     _write_json(REQUEST_FILE, {
         "battle_id": battle_id,

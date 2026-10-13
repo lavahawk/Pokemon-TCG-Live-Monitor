@@ -94,6 +94,49 @@ def test_throttle_reads_rate_limit_header():
     assert t2.remaining == 12
 
 
+LOG = """Setup
+me drew 7 cards for the opening hand.
+- 7 drawn cards.
+   • Gastly, Ultra Ball, Basic Darkness Energy
+opp took a mulligan.
+- Cards revealed from Mulligan 1
+   • Ultra Ball, Basic Psychic Energy
+me played Gastly to the Active Spot.
+opp played Dreepy to the Active Spot.
+
+opp's Turn
+opp played Buddy-Buddy Poffin.
+- opp drew 2 cards and played them to the Bench.
+   • Dreepy, Duskull
+opp's Dreepy used Petty Grudge on me’s Gastly for 10 damage.
+- Damage breakdown:
+   • Base damage: 10 damage
+opp evolved Dreepy to Drakloak on the Bench.
+"""
+
+
+def test_log_cards_are_the_opponents_only():
+    C.set_known_cards(["Gastly", "Dreepy", "Drakloak", "Duskull", "Buddy-Buddy Poffin", "Ultra Ball"])
+    seen = C.log_cards(LOG, "opp", "me")
+    assert {"Dreepy", "Duskull", "Drakloak", "Buddy-Buddy Poffin", "Ultra Ball", "Psychic Energy"} <= seen
+    assert "Gastly" not in seen and "Darkness Energy" not in seen  # mine, or the target of their attack
+    assert not any("damage" in c for c in seen)
+    assert "Gastly" in C.log_cards(LOG, "me", "opp")
+
+
+def test_classify_prefers_the_deck_that_plays_the_cards():
+    def row(deck, share, cards):
+        return {"deck": deck, "share_en": share, "lists": 50,
+                "cards": [{"name": n, "cat": cat, "incl": incl} for n, cat, incl in cards]}
+    rows = [row("Dragapult Dusknoir", 10, [("Dreepy", "P", 100), ("Drakloak", "P", 100), ("Duskull", "P", 100),
+                                           ("Ultra Ball", "T", 95)]),
+            row("Dragapult", 20, [("Dreepy", "P", 100), ("Drakloak", "P", 100), ("Ultra Ball", "T", 95)]),
+            row("Gengar", 5, [("Gastly", "P", 100), ("Ultra Ball", "T", 90)])]
+    ranked = C.classify({"Dreepy", "Drakloak", "Duskull", "Ultra Ball"}, rows)
+    assert ranked[0][0]["deck"] == "Dragapult Dusknoir" and ranked[0][1] > 0.9
+    assert C.classify({"Ultra Ball"}, rows) == []  # no Pokémon seen: no call
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

@@ -209,10 +209,11 @@ class DeckConfirmPopup(QWidget):
         self.close_btn.setVisible(mode != "done")
         self.name.setContentsMargins(0, 0, 26 if mode == "done" else 0, 0)
         if mode == "show":
-            self.accent = BLUE if source == "ai" else AMBER
+            self.accent = BLUE if source in ("ai", "cards") else AMBER
             self.caption.setText("OPPONENT DECK" + (f"  ·  {result}" if result else ""))
-            self._set_chip("AI" if source == "ai" else "GUESS", self.accent)
-            self.chip.setVisible(source in ("ai", "guess"))
+            # cards = picked from the opponent's revealed cards vs public decklists
+            self._set_chip({"ai": "AI", "cards": "CARDS"}.get(source, "GUESS"), self.accent)
+            self.chip.setVisible(source in ("ai", "cards", "guess"))
             self._set_name(self.current or "Unknown")
             self.hint.setText("Wrong? Click to fix" if self.current else "Click to set the deck")
         elif mode == "edit":

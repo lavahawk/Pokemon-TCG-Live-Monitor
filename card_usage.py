@@ -18,12 +18,16 @@ CORE, COMMON = 90.0, 50.0  # % of lists: core card / common choice / tech
 
 
 def card_name(name):
-    """One spelling for both sources: PTCGL "Basic {D} Energy" = Limitless
-    "Darkness Energy", "Shadowy {D} Energy" = "Shadowy Darkness Energy"."""
-    name = " ".join((name or "").split())
+    """One spelling for every source: PTCGL exports "Basic {D} Energy" and
+    battle logs "Basic Darkness Energy" = Limitless "Darkness Energy";
+    "Shadowy {D} Energy" = "Shadowy Darkness Energy"; curly quotes = straight."""
+    name = " ".join((name or "").replace("’", "'").split())
     m = re.fullmatch(r"Basic \{(\w)\} Energy", name)
     if m:
         return f"{ENERGY_TYPES.get(m.group(1), m.group(1))} Energy"
+    m = re.fullmatch(r"Basic (\w+) Energy", name)
+    if m and m.group(1) in ENERGY_TYPES.values():
+        return f"{m.group(1)} Energy"
     return re.sub(r"\{(\w)\}", lambda t: ENERGY_TYPES.get(t.group(1), t.group(1)), name)
 
 
@@ -92,3 +96,90 @@ def summary(rows):
     missing = [r for r in rows if r["role"] == "core" and r["mine"] == 0]
     unusual = [r for r in rows if r["mine"] and r["incl"] < 10.0]
     return {"core": sum(1 for r in rows if r["role"] == "core"), "missing_core": missing, "unusual": unusual}
+
+
+# ── Opponent's deck from the cards in a battle log ────────────────────────
+def log_cards(battlelog, player, other=None):
+    """Distinct card names `player` revealed in a PTCGL battle log: cards
+    played, benched, attached, evolved, searched or shown (mulligans), and
+    the bullet lists under their lines. Text after the other player's name
+    (targets: "... on Sanchomr's Smoochum") isn't theirs, so it's cut."""
+    if not battlelog or not player:
+        return set()
+    known = _known_card_pattern()
+    seen, actor = set(), None
+    for raw in battlelog.splitlines():
+        line = raw.strip().replace("’", "'")
+        if not line:
+            continue
+        if line.startswith("•"):
+            if actor == player:
+                for item in line.lstrip("• ").split(","):
+                    name = card_name(item)
+                    # card lists only, not "Base damage: 130 damage" breakdowns
+                    if name and ":" not in name and not re.search(r"\d", name):
+                        seen.add(name)
+            continue
+        body = line[2:] if line.startswith("- ") else line
+        if body.startswith(player):
+            actor = player
+            text = body[len(player):]
+            if other and other in text:
+                text = text[:text.index(other)]
+            if known is not None:
+                seen.update(card_name(m) for m in known.findall(text))
+        elif other and body.startswith(other):
+            actor = other
+        elif not line.startswith("- "):
+            actor = None
+    return seen
+
+
+_PATTERN = {"names": None, "regex": None}
+
+
+def set_known_cards(names):
+    """Card names to look for in log lines (longest first, whole words)."""
+    names = sorted({n for n in names if n and len(n) > 2}, key=len, reverse=True)
+    if names != _PATTERN["names"]:
+        _PATTERN["names"] = names
+        alt = "|".join(re.escape(n).replace("\ ", r"\s+") for n in names)
+        _PATTERN["regex"] = re.compile(rf"(?<![\w'])({alt})(?![\w'])") if names else None
+
+
+def _known_card_pattern():
+    return _PATTERN["regex"]
+
+
+def classify(cards_seen, rows, top=3, floor=0.004):
+    """Rank meta archetypes by how well their decklists explain the cards
+    seen: log P(deck) + sum over seen cards of log P(card in a list of that
+    deck). A card the archetype never plays counts as `floor` (0.4% of
+    lists), so one odd tech doesn't rule a deck out. Cards that every deck
+    plays barely move the ranking. Returns [(row, probability)], best first,
+    or [] when no Pokémon card was seen."""
+    import math
+    seen = set(cards_seen or ())
+    candidates = [r for r in rows if r.get("cards") and r.get("lists", 0) >= 5]
+    if not seen or not candidates:
+        return []
+    pokemon = {c["name"] for r in candidates for c in r["cards"] if c["cat"] == "P"}
+    if not seen & pokemon:
+        return []
+    total_share = sum(r.get("share_en") or r.get("share") or 0.0 for r in candidates) or 1.0
+    scored = []
+    for r in candidates:
+        incl = {c["name"]: c["incl"] / 100.0 for c in r["cards"]}
+        prior = max(1e-4, (r.get("share_en") or r.get("share") or 0.0) / total_share)
+        score = math.log(prior)
+        for name in seen:
+            p = incl.get(name)
+            if p is None and name not in pokemon:
+                continue  # a trainer/energy outside every top list says little
+            score += math.log(max(floor, min(0.999, p or 0.0)))
+        scored.append((score, r))
+    scored.sort(key=lambda s: -s[0])
+    best = scored[0][0]
+    weights = [math.exp(s - best) for s, _r in scored]
+    norm = sum(weights)
+    return [(r, w / norm) for (_s, r), w in list(zip(scored, weights))[:top]]

@@ -27,3 +27,11 @@ Related: BUG-005, 008, 023, 030, 031, SEC-09.
 - After saving, `main` calls `deck_confirm.write_request(battle_id, deck, source, needs_input)`: source `ai` (card shows the pick) or `guess` / `none` (card asks).
 - The local-mode console prompt for the opponent deck is gone. Under the monitor stdout is captured, so that prompt was invisible and the parser sat until the 180 s timeout. The monitor now sets `PTCGL_NO_PROMPT=1`, so `_console_available()` is False for the remaining my-deck / result prompts too.
 - `deck_source` stored as AI only when the AI parse actually succeeded (it used to say AI whenever a key existed, even after falling back).
+
+
+## Opponent deck from revealed cards (2026-10-13)
+- `card_evidence(log, username)`: `card_usage.log_cards` collects the cards the **opponent** revealed (lines they start, `- opp …` sub-lines, the `•` lists under them; text after the user's name is cut so attack targets don't count; damage breakdowns are skipped). `card_usage.classify` ranks meta archetypes by log P(share) + Σ log P(card in that archetype's lists) from the sheet's `cards` (floor 0.4% for a Pokémon the archetype never plays).
+- **AI mode:** the prompt gets the opponent's revealed Pokémon, the card-based top 3 and "the user's own cards are not evidence". **Cross-check:** if the AI's name has Pokémon the opponent never showed and the card pick (≥ 85%, `CARD_PICK_MIN`) fits the revealed Pokémon, the card pick is stored (`deck_source` "Cards", overlay chip CARDS).
+- **Local mode:** the card pick replaces "first Pokémon to the Active Spot": ≥ 85% → CARDS (shown), 50–85% → GUESS (prefilled, asks), else the old guess.
+- Measured on the 54 stored battles with logs: the cross-check would change 9 labels, and all 9 were wrong AI labels (e.g. #48 "Gengar" = the user's own deck vs N's Zoroark ex / Zorua / Reshiram; #52 "Dragapult" vs Mega Sharpedo ex / Toxtricity; #17 "Dragapult Dusknoir" vs Blaziken ex / Combusken). Known limits: hybrids (Dragapult + Mega Starmie), Japan-only decks with no English lists, games from rotated formats.
+- Needs the meta sheet with card data (built by Meta → ↻ Refresh); without it nothing changes. Old logs may be cp1252: always read them with `read_battlelog_file`.

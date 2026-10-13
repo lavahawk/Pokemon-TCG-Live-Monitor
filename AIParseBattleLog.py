@@ -142,17 +142,59 @@ def ensure_username():
     return (username or "").strip()
 
 
+def load_meta_rows():
+    """Rows of the meta sheet (.meta_cache_limitless_standard.json), or []."""
+    try:
+        with open(LIMITLESS_STANDARD_CACHE_FILE, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        rows = payload.get("rows", []) if isinstance(payload, dict) else []
+        return rows if isinstance(rows, list) else []
+    except Exception:
+        return []
+
+
+def card_evidence(battlelog, username, rows=None):
+    """What the opponent's revealed cards say about their deck.
+
+    Returns {"cards": set of card names they showed, "pokemon": the Pokemon
+    among them, "ranked": [(archetype, probability)] best first} using the
+    card usage of public decklists in the meta sheet (card_usage.classify).
+    Empty when the sheet has no card data yet."""
+    empty = {"cards": set(), "pokemon": set(), "ranked": []}
+    rows = rows if rows is not None else load_meta_rows()
+    if not battlelog or not any(r.get("cards") for r in rows):
+        return empty
+    try:
+        import card_usage
+        card_usage.set_known_cards(c["name"] for r in rows for c in r.get("cards") or [])
+        opponent = parse_opponent_from_log(battlelog, username)
+        seen = card_usage.log_cards(battlelog, opponent, username)
+        pokemon_names = {c["name"] for r in rows for c in r.get("cards") or [] if c.get("cat") == "P"}
+        ranked = [(r["deck"], p) for r, p in card_usage.classify(seen, rows)]
+        return {"cards": seen, "pokemon": seen & pokemon_names, "ranked": ranked}
+    except Exception as exc:
+        print(f"[Cards] evidence failed: {exc}")
+        return empty
+
+
+def _deck_words(name):
+    return {w for w in re.findall(r"[a-z]+", (name or "").lower())
+            if w not in ("ex", "mega", "with", "box", "and", "s", "the", "deck", "control", "toolbox")}
+
+
+def deck_fits_cards(deck, pokemon_seen):
+    """True when every Pokemon word in a deck name shows up among the
+    Pokemon the opponent revealed ("Dragapult Dusknoir" needs both)."""
+    words = _deck_words(deck)
+    seen = set().union(*(_deck_words(p) for p in pokemon_seen)) if pokemon_seen else set()
+    return bool(words) and words <= seen
+
+
+CARD_PICK_MIN = 0.85  # a card-based pick replaces an AI name that contradicts the cards
+
+
 def load_possible_decks():
-    cache_rows = []
-    if os.path.exists(LIMITLESS_STANDARD_CACHE_FILE):
-        try:
-            with open(LIMITLESS_STANDARD_CACHE_FILE, "r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            rows = payload.get("rows", []) if isinstance(payload, dict) else []
-            if isinstance(rows, list):
-                cache_rows = rows
-        except Exception:
-            cache_rows = []
+    cache_rows = load_meta_rows()
 
     if cache_rows:
         ranked = sorted(
@@ -380,8 +422,16 @@ def local_fallback_parse(battlelog, username):
         )
 
     # The opponent's deck is asked for by the overlay's "Opponent deck" card
-    # after saving (deck_confirm.py); store the best guess until then.
-    inferred = infer_opponent_deck_from_log(battlelog)
+    # after saving (deck_confirm.py); store the best guess until then. The
+    # cards they revealed vs public decklists beat "first Pokemon played".
+    evidence = card_evidence(battlelog, username)
+    card_pick = evidence["ranked"][0] if evidence["ranked"] else None
+    if card_pick and card_pick[1] >= 0.5:
+        print(f"[Cards] {card_pick[0]} ({card_pick[1] * 100:.0f}%) from {len(evidence['cards'])} revealed cards")
+        # A clear pick is shown as CARDS; a close call is a GUESS the overlay asks you to confirm.
+        inferred, source = card_pick[0], ("cards" if card_pick[1] >= CARD_PICK_MIN else "guess")
+    else:
+        inferred, source = infer_opponent_deck_from_log(battlelog), "guess"
     opponents_deck = inferred or "Unknown (local mode)"
 
     win_or_loss = parse_result_from_log(battlelog, username)
@@ -400,13 +450,15 @@ def local_fallback_parse(battlelog, username):
         confidence = min(confidence, 75)
     if not inferred:
         confidence = min(confidence, 60)
+    elif card_pick and inferred == card_pick[0]:
+        confidence = min(confidence, int(round(card_pick[1] * 100)))
 
     return {
         "My_deck": (my_deck or "").strip() or "Unknown Deck",
         "OpponentsDeck": (opponents_deck or "").strip(),
         "Win_or_Loss": (win_or_loss or "").strip().title(),
         "Confidence": confidence,
-        "deck_source": "guess" if inferred else "none",
+        "deck_source": source if inferred else "none",
     }
 
 
@@ -509,6 +561,17 @@ def ai_parse(battlelog, username, api_key):
 
     client = OpenAI(api_key=api_key, timeout=45.0, max_retries=1)
     possible_decks = load_possible_decks()
+    evidence = card_evidence(battlelog, username)
+    evidence_text = ""
+    if evidence["pokemon"]:
+        evidence_text = (
+            "\nCard evidence (computed from the log and thousands of public decklists):\n"
+            f"- Pokemon the OPPONENT revealed: {sorted(evidence['pokemon'])}\n"
+            + ("- Archetypes whose decklists best explain the opponent's cards: "
+               + ", ".join(f"{d} ({p * 100:.0f}%)" for d, p in evidence["ranked"]) + "\n"
+               if evidence["ranked"] else "")
+            + f"- {username}'s own cards are NOT evidence for the opponent's deck: never name the "
+            f"opponent's deck after Pokemon only {username} played.\n")
     prompt = f"""
 You are identifying Pokemon TCG deck archetypes from an official battle log.
 
@@ -535,7 +598,7 @@ STRICT RULES for deck identification:
 
 Also determine the winner of the battle and a confidence value 0-100 for each
 deck identification.
-
+{evidence_text}
 Export the data as JSON with these fields: My_deck, OpponentsDeck, Win_or_Loss, Confidence
 Battlelog:
 <<<BEGIN BATTLELOG>>>
@@ -565,12 +628,24 @@ Battlelog:
                 Confidence=_coerce_confidence_value(payload.get("Confidence")),
             )
             print(f"[AI] Parsed using model: {model}")
-            return {
+            result = {
                 "My_deck": parsed.My_deck,
                 "OpponentsDeck": parsed.OpponentsDeck,
                 "Win_or_Loss": parsed.Win_or_Loss,
                 "Confidence": parsed.Confidence,
+                "deck_source": "ai",
             }
+            # Cross-check: an AI name whose Pokemon the opponent never showed,
+            # while the revealed cards clearly point to one archetype (seen in
+            # real logs: the AI named the user's own deck).
+            pick = evidence["ranked"][0] if evidence["ranked"] else None
+            if (pick and pick[1] >= CARD_PICK_MIN and evidence["pokemon"]
+                    and not deck_fits_cards(parsed.OpponentsDeck, evidence["pokemon"])
+                    and deck_fits_cards(pick[0], evidence["pokemon"])):
+                print(f"[Cards] AI said {parsed.OpponentsDeck!r}, but the opponent's cards say "
+                      f"{pick[0]} ({pick[1] * 100:.0f}%) - using the cards.")
+                result.update(OpponentsDeck=pick[0], Confidence=int(round(pick[1] * 100)), deck_source="cards")
+            return result
         except Exception as exc:
             last_error = exc
             print(f"[AI] Model {model} failed: {exc}. Trying next...")
@@ -610,7 +685,6 @@ def main():
     else:
         try:
             response_dict = ai_parse(battlelog, username, api_key)
-            response_dict["deck_source"] = "ai"
         except Exception as exc:
             print(f"AI parse failed: {exc}")
             print("Falling back to local-only parsing.")
@@ -667,18 +741,19 @@ def main():
 
     try:
         deck_source = response_dict.get("deck_source") or "none"
-        if deck_source == "ai" and not (response_dict.get("OpponentsDeck") or "").strip():
-            deck_source = "none"  # AI gave no deck: ask on the overlay card
+        if deck_source in ("ai", "cards") and not (response_dict.get("OpponentsDeck") or "").strip():
+            deck_source = "none"  # no deck: ask on the overlay card
         battle_id = save_to_database(my_deck, opponents_deck, win_or_loss, confidence, explicit_log_path,
                                      is_tournament=tournament, battle_hash=battle_hash,
-                                     deck_source="AI" if deck_source == "ai" else "Local")
+                                     deck_source={"ai": "AI", "cards": "Cards"}.get(deck_source, "Local"))
         if battle_id:
             print(f"Battle saved to database{' (Limitless tournament)' if tournament else ''}.")
             print(f"BATTLE_ID={battle_id}")
             try:
                 # Overlay card: shows the AI's pick (click to fix) or asks for the deck.
                 from deck_confirm import write_request
-                write_request(battle_id, opponents_deck, source=deck_source, needs_input=deck_source != "ai",
+                write_request(battle_id, opponents_deck, source=deck_source,
+                              needs_input=deck_source not in ("ai", "cards"),
                               my_deck=my_deck, result=win_or_loss)
             except Exception as exc:
                 print(f"Warning: Could not request the deck confirmation card: {exc}")
