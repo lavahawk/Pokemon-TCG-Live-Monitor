@@ -223,3 +223,17 @@ git push
 
 ## 2026-10-12 — Claude (Spin box arrows)
 - The spin-box arrows were painted as white squares: `SPIN_STYLE` used the CSS border-triangle trick (zero-size box with coloured borders), which Qt style sheets don't support. `_arrow_icon()` writes small chevron SVGs to `.ui_cache/` (gitignored; qsvg plugin ships with PySide6) and the style uses `image: url(...)`. The same chevron now appears on `metaCombo` drop-downs and the import date box. Disabled spin boxes hide their arrows.
+
+## 2026-10-13 — Claude (Data sources, card usage, open items)
+**Committed:** `32795fb` (the 2026-10-12 evening batch), `02c284c` (data + UI), `602ff38` (opponent deck from cards).
+- **Data source survey** → new [[Data Sources]] note: what's used, speed and limits, and the mirrors left out because they'd double-count (RK9, pokekameshi, pokemoncard.io, TrainerHill for the sheet, PTCG Legends).
+- **Coverage:** the sheet used only the newest **80 online events (~12 days)** and the newest **100 City Leagues**, while its window starts at Chaos Rising (2026-05-22). Now: every 32+ player online event in the window (~870) and every City League (~230, all since the JP season restarted 2026-09-26).
+- **Limitless API rate limit found:** 50 requests / 5 min without a key (`RateLimit` header). The first full build got 429s and only 62 events. Added `_api_get` + `_ApiThrottle` (waits within the budget, else stops; the rest loads on later hourly refreshes; current format and biggest events first), dropped the `/details` call, reuse v2 caches' matchups, an optional API key (Advanced → Meta Data). Backfilled the cache in the background (`scratchpad/backfill.py`).
+- **Card usage:** online standings carry every player's decklist; in-person Day 2 lists come from one bulk page per event (`/tournaments/<id>/decklists`). Sheet rows get `lists` + `cards` (incl %, avg copies, per list). New **Meta → Cards** view compares an archetype's typical list with your PTCGL exports (`card_usage.py`).
+- **Opponent deck from revealed cards** (see [[AIParseBattleLog]]): 9 of 54 stored AI labels contradict the opponent's own cards (some name the user's own deck); the cross-check catches all 9.
+- **Japan Data tab** rebuilt on Limitless City Leagues (`meta_sources.japan_view`); `japan_data.py` (pokekameshi scraper) removed.
+- **Open items done:** deck-page win-rate chart → `SeriesChart` (now weighted like the card), dashboard win-rate deck filter, overlay today W-L skips ignored decks, console detection without `psutil.process_iter`, BUG-040 closed (13/13 live reads).
+- **Perf:** `_key` memoized (rebuild 2.9 → 1.2 s at 220 events); alternative Meta views build on a `CallFetcher` thread.
+- **Bug caught by the new tests:** `card_usage.compare` treated "no list" as an empty list (every core card red).
+- Tests: `test_card_usage.py` 8/8, `test_rank_weighted.py` pass; every manifest module imports offscreen; Meta → Cards, Japan, deck page and dashboard rendered offscreen at 1127×668.
+- **Final build** after the backfill (804 events in 80 min, 0 failures): 849 online + 9 in-person + 232 Japan events, 590k real games (was 178k), 95,559 decklists, build 4.3 s from cache. Shares now reflect the whole window (Dragapult 13.8% → 9.4%). Installed as `.meta_cache_limitless_standard.json` (old one in `Backups/`). Local-mode card picks need the deck's own Pokémon to be seen to count as CARDS (else GUESS).

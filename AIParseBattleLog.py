@@ -429,7 +429,8 @@ def local_fallback_parse(battlelog, username):
     if card_pick and card_pick[1] >= 0.5:
         print(f"[Cards] {card_pick[0]} ({card_pick[1] * 100:.0f}%) from {len(evidence['cards'])} revealed cards")
         # A clear pick is shown as CARDS; a close call is a GUESS the overlay asks you to confirm.
-        inferred, source = card_pick[0], ("cards" if card_pick[1] >= CARD_PICK_MIN else "guess")
+        firm = card_pick[1] >= CARD_PICK_MIN and deck_fits_cards(card_pick[0], evidence["pokemon"])
+        inferred, source = card_pick[0], ("cards" if firm else "guess")
     else:
         inferred, source = infer_opponent_deck_from_log(battlelog), "guess"
     opponents_deck = inferred or "Unknown (local mode)"

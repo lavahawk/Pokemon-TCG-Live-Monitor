@@ -1,6 +1,6 @@
 ---
 tags: [index, handoff]
-updated: 2026-10-12
+updated: 2026-10-13
 ---
 # PTCGL Monitor — Dev Vault (Start Here)
 
@@ -12,7 +12,7 @@ This vault is the shared engineering notebook for **Pokemon TCG Live Monitor** (
 > **Phase 3: real-game verification + v2.4 follow-ups. DONE (2026-10-12).** Auto-export, blocker, rank OCR verified in real matches; unified meta sheet, statistics rework, Meta / In Person tabs, preferences.
 > **Phase 3b: dashboard + statistics overhaul. DONE (2026-10-12, afternoon).** Interactive charts, deck pin/star/ignore, hierarchical Bayesian Deck Score ([[deck_score]]), opponent-strength weighting, Meta tab data filters, hover formulas.
 > **v2.5.0 released (2026-10-12):** installer rebuilt and install-tested, hidden monitor verified, pushed and published.
-> **Phase 4 (next): restart the monitor on the PC and check the new dashboard, then the open items.** → **[[Handoff 2026-10-12]]** (read this first).
+> **Phase 4: data sources + card usage. DONE (2026-10-13).** Whole-window online + City League data, decklist card usage, Meta → Cards, opponent deck from revealed cards, Japan tab on Limitless. → **[[Handoff 2026-10-13]]** (read this first), sources in [[Data Sources]].
 
 ## Map of this vault
 | Area | Note | What's in it |
@@ -26,7 +26,8 @@ This vault is the shared engineering notebook for **Pokemon TCG Live Monitor** (
 | Findings | [[Data Integrity Audit]] | What's actually wrong in `tcg_battles.db` and `Logs/` today |
 | Dev | [[Dev Environment and Test Harness]] | How the code was run off-Windows, scripts in `04 Dev/scripts/` |
 | Dev | [[Session Log]] | Dated log of every work session — **append to it** |
-| Dev | [[Handoff 2026-10-12]] | Latest handoff: what changed since v2.4.0, open items, how to verify |
+| Dev | [[Handoff 2026-10-13]] | Latest handoff (previous: [[Handoff 2026-10-12]]) |
+| Architecture | [[Data Sources]] | Every meta data source: used, rejected (double counting), limits |
 
 ## Headline findings (details in [[Bug Register]])
 1. **Limitless auto check-in and match-chat polling never start.** Part of `LimitlessDashboardManager.__init__` was accidentally indented into `_tournament_poll` (BUG-001). Reproduced.
