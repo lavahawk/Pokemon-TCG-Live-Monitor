@@ -1967,12 +1967,15 @@ class HoverCard(QFrame):
 
 class ResultStrip(QWidget):
     """Last-N results as small green/red squares (oldest left, newest right).
-    Hovering a square shows that game."""
+    Hovering a square shows that game; clicking emits its index."""
+
+    clicked = Signal(int)
 
     def __init__(self, games):
         super().__init__()
         self.games = list(games)  # [(won: bool, tooltip_text)], oldest first
         self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(18)
         self._hover = -1
 
@@ -2016,6 +2019,13 @@ class ResultStrip(QWidget):
         self._hover = -1
         self.update()
         super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._hover >= 0:
+            self.clicked.emit(self._hover)
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 class WeightScale(QWidget):
@@ -4004,7 +4014,7 @@ class StatsWindow(QWidget):
         layout.addStretch()
         return card
 
-    def _create_mini_stat(self, title, value_text, accent, tooltip, extra_widget=None):
+    def _create_mini_stat(self, title, value_text, accent, tooltip, extra_widget=None, caption=None):
         card = HoverCard(accent)
         card.setToolTip(tooltip)
         layout = QVBoxLayout(card)
@@ -4013,6 +4023,8 @@ class StatsWindow(QWidget):
         layout.addWidget(self._card_label(title, "color: rgba(168,182,204,0.75); font-size: 9px; font-weight: 700; letter-spacing: 1px;"))
         if value_text:
             layout.addWidget(self._card_label(value_text, f"color: {accent}; font-size: 15px; font-weight: 700;"))
+        if caption:
+            layout.addWidget(self._card_label(caption, "color: rgba(168,182,204,0.70); font-size: 9px;"))
         if extra_widget is not None:
             layout.addWidget(extra_widget)
         return card
@@ -4114,12 +4126,14 @@ class StatsWindow(QWidget):
         own = (score or {}).get("own")
         if own and score.get("eff_games", 0) > 0:
             own_rank = f" · {self._rank_text(own, with_range=False)}" if own.get("rank") else ""
+            caption = (f"Your games only (no Limitless data) · would rank {self._rank_text(own, with_range=False)} "
+                       f"of {score_info.get('ranked', 0)}" if own.get("rank") else "Your games only (no Limitless data)")
             adv.addWidget(self._create_mini_stat(
-                "OWN GAMES SCORE", f"{own['score'] * 100:.0f}{own_rank}", "#B39DDB",
+                "SCORE · YOUR GAMES", f"{own['score'] * 100:.0f}", "#B39DDB",
                 f"<b>Own games only: {own['score'] * 100:.1f}</b> · range {_pct_range(own['low'], own['high'])}"
                 + (f" · {'would rank' if own.get('ranked') else 'predicted'} {self._rank_text(own)} of "
                    f"{score_info.get('ranked', 0)}" if own_rank else "")
-                + "<br>" + formulas.own_score(own, score_info)), 0, 0)
+                + "<br>" + formulas.own_score(own, score_info), caption=caption), 0, 0)
         else:
             rw = rank_summary.get("weighted_winrate", 0.0) * 100.0
             adv.addWidget(self._create_mini_stat(
@@ -4128,10 +4142,14 @@ class StatsWindow(QWidget):
                 + (f" (avg rank {rank_summary['avg_rank']:.0f})." if rank_summary.get("avg_rank") is not None else ".")), 0, 0)
         form = analysis.get("recent_form") or {}
         strip = ResultStrip(form.get("games_list", [])) if form.get("games") else None
+        if strip is not None:
+            count = len(strip.games)
+            strip.clicked.connect(lambda i, s=strip, n=count: self._jump_to_recent_game(s, n - 1 - i))
         adv.addWidget(self._create_mini_stat(
             f"LAST {form.get('games', 0)}" if form.get("games") else "RECENT",
             f"{form['wins']}-{form['games'] - form['wins']}" if form.get("games") else "--",
-            self.NEUTRAL, "Oldest on the left, newest on the right. Hover a square for the game.",
+            self.NEUTRAL, "Oldest on the left, newest on the right. Hover a square for the game, "
+                          "click it to jump to it below.",
             extra_widget=strip), 0, 1)
         if limitless_wr is not None:
             edge = est - limitless_wr * 100.0
@@ -4425,7 +4443,7 @@ class StatsWindow(QWidget):
         elif field_benchmark is not None:
             delta_vs_meta = bayes_pct - field_benchmark
 
-        recent_battles = self.db.get_deck_recent_battles(deck_name, limit=6)
+        recent_battles = self.db.get_deck_recent_battles(deck_name, limit=10)  # = the Last 10 strip
         deck_icons = self._resolved_deck_icons(deck_name, (matched_row or {}).get("icons", []))
 
         # ── v2.4.1 statistics (see deck_analytics) ──
@@ -4781,14 +4799,8 @@ class StatsWindow(QWidget):
             return card
 
         for timestamp, my_deck, opp_deck, result, my_rank, log_file, is_tournament in recent:
-            row = ClickableFrame() if log_file else QFrame()
+            row = QFrame()
             row.setObjectName("deckRecentBattleRow")
-            if log_file:
-                row.setCursor(Qt.CursorShape.PointingHandCursor)
-                row.setToolTip(
-                    f"Open this battle in PTCGL Replay: {os.path.basename(log_file) if log_file else 'N/A'}"
-                )
-                row.clicked.connect(lambda lf=log_file: self.open_battle_replay(lf))
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(10, 6, 10, 6)
             row_layout.setSpacing(10)
@@ -4827,9 +4839,114 @@ class StatsWindow(QWidget):
                 """)
                 row_layout.addWidget(tourney_tag)
             row_layout.addStretch()
+            for label, tip, callback in (
+                    ("Replay", "Open this battle in the Replay tab",
+                     (lambda _c=False, lf=log_file: self.open_battle_replay(lf)) if log_file else None),
+                    ("Cards played", "Every card you and your opponent showed in this game",
+                     (lambda _c=False, lf=log_file, o=opp_deck: self.show_cards_played(lf, o)) if log_file else None),
+                    ("Deck archetype", f"TrainerHill deck profile (pick {opp_deck} there)",
+                     lambda _c=False: self.open_trainerhill_tool("dashboards/deck-profile/"))):
+                button = QPushButton(label)
+                button.setObjectName("battleMgmtReplayBtn")
+                button.setToolTip(tip if callback else "No battle log saved for this game")
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                button.setFixedHeight(24)
+                button.setStyleSheet("padding: 0px 9px; font-size: 10px;")
+                button.setEnabled(callback is not None)
+                if callback is not None:
+                    button.clicked.connect(callback)
+                row_layout.addWidget(button)
             layout.addWidget(row)
 
         return card
+
+    def _jump_to_recent_game(self, source, index):
+        """Last-10 square → scroll to that game in "Recent with this deck" and flash it."""
+        page = source
+        while page is not None and page.parentWidget() is not None and not isinstance(page, QScrollArea):
+            page = page.parentWidget()
+        if page is None:
+            return
+        rows = page.findChildren(QFrame, "deckRecentBattleRow")
+        if not 0 <= index < len(rows):
+            return
+        from PySide6.QtCore import QVariantAnimation
+        row = rows[index]
+        if isinstance(page, QScrollArea):
+            page.ensureWidgetVisible(row, 0, 120)
+        anim = QVariantAnimation(row)
+        anim.setDuration(1400)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+
+        def paint(value):
+            v = float(value)
+            # two soft pulses fading out
+            alpha = max(0.0, math.sin(v * math.pi * 2)) * (1.0 - v) * 0.55 + (1.0 - v) * 0.10
+            row.setStyleSheet(f"QFrame#deckRecentBattleRow {{ background: rgba(74,159,216,{alpha:.3f}); "
+                              f"border: 1px solid rgba(74,159,216,{min(0.9, alpha * 1.6):.3f}); border-radius: 6px; }}")
+        anim.valueChanged.connect(paint)
+        anim.finished.connect(lambda: row.setStyleSheet(""))
+        anim.start()
+
+    def show_cards_played(self, log_file, opponent_deck=""):
+        """Dialog: every card each player showed in one battle (copies seen)."""
+        from PySide6.QtWidgets import QDialog
+        from app_settings import load_username
+        import card_usage
+        path = self._resolve_log_file_path(log_file)
+        try:
+            with open(path, "rb") as handle:
+                raw = handle.read()
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("cp1252", errors="replace")
+        except Exception as exc:
+            QMessageBox.warning(self, "Cards played", f"Couldn't read the battle log:\n{exc}")
+            return
+        username = load_username() or ""
+        try:
+            from AIParseBattleLog import load_meta_rows, parse_opponent_from_log
+            rows = load_meta_rows()
+            card_usage.set_known_cards(c["name"] for r in rows for c in r.get("cards") or [])
+            opponent = parse_opponent_from_log(text, username) or "Opponent"
+        except Exception:
+            opponent = "Opponent"
+        mine = card_usage.log_card_counts(text, username, opponent)
+        theirs = card_usage.log_card_counts(text, opponent, username)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Cards played")
+        dialog.setStyleSheet("QDialog { background: #11161F; } QLabel { color: rgba(236,242,252,0.92); }")
+        dialog.resize(620, 560)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(14, 12, 14, 12)
+        head = QLabel(f"<b>{os.path.basename(path)}</b>"
+                      + (f" · vs {opponent_deck}" if opponent_deck else "")
+                      + "<br><span style='color:#8A97AA;font-size:10px'>Copies seen = how many times a card "
+                        "was played or shown (a lower bound, max 4).</span>")
+        outer.addWidget(head)
+        columns = QHBoxLayout()
+        for title, counts in ((f"You ({username or 'you'})", mine), (opponent, theirs)):
+            table = self._make_meta_table([title, "Seen"], None, sortable=False, stretch_last=False)
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+            table.setColumnWidth(1, 52)
+            items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            table.setRowCount(len(items))
+            for r, (name, n) in enumerate(items):
+                table.setItem(r, 0, QTableWidgetItem(name))
+                cell = QTableWidgetItem(str(n))
+                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                table.setItem(r, 1, cell)
+            columns.addWidget(table)
+        outer.addLayout(columns)
+        self.begin_protected_interaction()
+        try:
+            dialog.exec()
+        finally:
+            self.end_protected_interaction()
 
     def _create_deck_dashboard_page(self, analysis):
         scroll = PageScrollArea()
