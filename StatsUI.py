@@ -5072,45 +5072,61 @@ class StatsWindow(QWidget):
 
     # ── Deck Snapshot: decklist ──
     def _create_decklist_button(self, deck_name, matched_row):
-        """"Import decklist" when the deck has no list; otherwise a menu of
+        """"＋ Import decklist" when the deck has no list; otherwise a menu of
         the tools a full list unlocks."""
-        from PySide6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu, QWidgetAction
         from decklists import decklist_for_deck
         entry = decklist_for_deck(deck_name)
         button = QToolButton()
         button.setObjectName("deckListBtn")
         button.setFixedHeight(30)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setStyleSheet(
             "QToolButton#deckListBtn { background: rgba(74,159,216,0.22); border: 1px solid rgba(74,159,216,0.40);"
             " border-radius: 6px; color: rgba(255,255,255,0.95); font-size: 11px; font-weight: 600; padding: 0 12px; }"
             "QToolButton#deckListBtn:hover { background: rgba(74,159,216,0.34); }"
             "QToolButton#deckListBtn::menu-indicator { image: none; width: 0; }")
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
         if entry is None:
             button.setText("＋ Import decklist")
-            button.setToolTip("Paste this deck's list (PTCGL: Decks → deck → Export → Copy to clipboard) to unlock "
-                              "card suggestions, Meta → Cards comparison and TrainerHill tools.")
+            button.setToolTip("Link this deck's list to unlock card suggestions and list tools.")
             button.clicked.connect(lambda: self._import_decklist_dialog(deck_name))
             return button
-        button.setText(f"Decklist ✓ {entry.get('cards') or ''}".strip() + "  ▾")
+        button.setText(f"Decklist · {entry.get('cards') or '?'}  ▾")
         button.setToolTip(f"{entry['name']} · exported {(entry.get('captured_at') or '')[:16]}")
         button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(button)
-        menu.setStyleSheet("QMenu { background: #151B26; color: #E6ECF5; border: 1px solid rgba(255,255,255,0.12); }"
-                           "QMenu::item { padding: 5px 18px; } QMenu::item:selected { background: rgba(74,159,216,0.30); }"
-                           "QMenu::separator { height: 1px; background: rgba(255,255,255,0.10); margin: 4px 8px; }")
-        menu.addAction("View decklist", lambda: self._view_decklist(entry))
+        menu.setStyleSheet(
+            "QMenu { background: #121823; color: #E6ECF5; border: 1px solid rgba(255,255,255,0.10);"
+            " border-radius: 8px; padding: 6px 0; }"
+            "QMenu::item { padding: 6px 22px 6px 16px; font-size: 11px; }"
+            "QMenu::item:selected { background: rgba(74,159,216,0.28); }"
+            "QMenu::separator { height: 1px; background: rgba(255,255,255,0.08); margin: 5px 10px; }")
+
+        def header(text):
+            label = QLabel(text)
+            label.setStyleSheet("color: rgba(168,182,204,0.70); font-size: 9px; font-weight: 700;"
+                                " letter-spacing: 1px; padding: 6px 16px 2px 16px; background: transparent;")
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(label)
+            action.setEnabled(False)
+            menu.addAction(action)
+
+        def copy_then(path):
+            QApplication.clipboard().setText(entry.get("text") or "")
+            self.open_trainerhill_tool(path)
+
+        header(entry["name"].upper())
+        menu.addAction("View list", lambda: self._view_decklist(entry))
         menu.addAction("Card suggestions", lambda: self._show_card_suggestions(deck_name, matched_row, entry))
-        menu.addAction("Compare in Meta → Cards", lambda: self._open_cards_compare(entry["id"]))
+        menu.addAction("Compare with the meta", lambda: self._open_cards_compare(entry["id"]))
         menu.addSeparator()
-        for label, path in (("TrainerHill · Deck Diff", "dashboards/deck-diff/"),
-                            ("TrainerHill · Card Usage", "dashboards/card-usage/"),
-                            ("TrainerHill · Deck Profile", "dashboards/deck-profile/")):
-            menu.addAction(label, lambda p=path: (QApplication.clipboard().setText(entry.get("text") or ""),
-                                                  self.open_trainerhill_tool(p)))
+        header("TRAINERHILL  ·  LIST COPIED, PASTE IT THERE")
+        menu.addAction("Deck diff", lambda: copy_then("dashboards/deck-diff/"))
+        menu.addAction("Card usage", lambda: copy_then("dashboards/card-usage/"))
+        menu.addAction("Deck profile", lambda: copy_then("dashboards/deck-profile/"))
         menu.addSeparator()
-        menu.addAction("Replace list…", lambda: self._import_decklist_dialog(deck_name))
-        menu.addAction("Unlink list", lambda: self._link_decklist(deck_name, None))
+        menu.addAction("Change list…", lambda: self._import_decklist_dialog(deck_name))
+        menu.addAction("Unlink", lambda: self._link_decklist(deck_name, None))
         button.setMenu(menu)
         return button
 
@@ -5121,50 +5137,159 @@ class StatsWindow(QWidget):
         QTimer.singleShot(0, self._refresh_deck_dashboards)
 
     def _import_decklist_dialog(self, deck_name):
+        """Pick the list for a deck. Watches the clipboard while open: export
+        the deck in PTCGL (Export → Copy to clipboard) and it's picked up."""
         from PySide6.QtWidgets import QDialog, QPlainTextEdit
-        from decklists import all_decklists, card_count, import_decklist, is_ptcgl_decklist
+        from decklists import all_decklists, auto_name, card_count, import_decklist, is_ptcgl_decklist, link_decklist
+
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Decklist · {deck_name}")
-        dialog.setStyleSheet("QDialog { background: #11161F; } QLabel { color: rgba(236,242,252,0.88); }"
-                             "QPlainTextEdit { background: rgba(255,255,255,0.05); color: #E6ECF5; "
-                             "border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; font-family: Consolas; }")
-        dialog.resize(460, 560)
+        dialog.setWindowTitle("Import decklist")
+        dialog.setStyleSheet(
+            "QDialog { background: #0F141D; }"
+            "QLabel { color: rgba(236,242,252,0.90); background: transparent; }"
+            "QListWidget { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);"
+            " border-radius: 8px; color: #E6ECF5; font-size: 11px; outline: none; padding: 4px; }"
+            "QListWidget::item { padding: 7px 8px; border-radius: 6px; }"
+            "QListWidget::item:selected { background: rgba(74,159,216,0.26); color: #FFFFFF; }"
+            "QListWidget::item:hover { background: rgba(255,255,255,0.05); }"
+            "QPlainTextEdit { background: rgba(255,255,255,0.04); color: #E6ECF5; border: 1px solid"
+            " rgba(255,255,255,0.10); border-radius: 6px; font-family: Consolas; font-size: 10px; }"
+            "QPushButton#ghost { background: transparent; border: none; color: rgba(168,182,204,0.85);"
+            " font-size: 10px; text-align: left; padding: 2px 0; }"
+            "QPushButton#ghost:hover { color: #FFFFFF; }"
+            "QPushButton#primary { background: rgba(74,159,216,0.85); border: none; border-radius: 6px;"
+            " color: white; font-weight: 700; padding: 7px 18px; }"
+            "QPushButton#primary:disabled { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.35); }"
+            "QPushButton#secondary { background: transparent; border: 1px solid rgba(255,255,255,0.16);"
+            " border-radius: 6px; color: #D6DAE0; padding: 7px 16px; }")
+        dialog.resize(440, 420)
         col = QVBoxLayout(dialog)
-        col.addWidget(QLabel("In PTCGL: <b>Decks → this deck → Export → Copy to clipboard</b>, then paste here."))
-        saved = QComboBox()
-        saved.setObjectName("metaCombo")
-        saved.addItem("…or pick a list you exported before", None)
-        for e in all_decklists():
-            saved.addItem(f"{e['name']}  ({(e.get('captured_at') or '')[:10]})", e.get("text"))
-        col.addWidget(saved)
-        edit = QPlainTextEdit()
-        clip = QApplication.clipboard().text() or ""
-        if is_ptcgl_decklist(clip):
-            edit.setPlainText(clip.strip())
-        col.addWidget(edit, 1)
-        saved.currentIndexChanged.connect(lambda _i: saved.currentData() and edit.setPlainText(saved.currentData()))
-        status = QLabel("")
+        col.setContentsMargins(18, 16, 18, 14)
+        col.setSpacing(10)
+
+        title = QLabel(f"<span style='font-size:15px;font-weight:700'>Import decklist</span><br>"
+                       f"<span style='color:#8A97AA;font-size:11px'>for {deck_name}</span>")
+        col.addWidget(title)
+
+        status = QLabel()
+        status.setWordWrap(True)
+        status.setTextFormat(Qt.TextFormat.RichText)
         col.addWidget(status)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        col.addWidget(buttons)
+
+        lists_label = QLabel("YOUR EXPORTED LISTS")
+        lists_label.setStyleSheet("color: rgba(168,182,204,0.70); font-size: 9px; font-weight: 700; letter-spacing: 1px;")
+        col.addWidget(lists_label)
+        choices = QListWidget()
+        col.addWidget(choices, 1)
+
+        manual_btn = QPushButton("▸ Paste a list manually")
+        manual_btn.setObjectName("ghost")
+        manual_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        col.addWidget(manual_btn)
+        edit = QPlainTextEdit()
+        edit.setPlaceholderText("Pokémon: 15\n4 Dreepy TWM 128\n…")
+        edit.setVisible(False)
+        edit.setFixedHeight(150)
+        col.addWidget(edit)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setObjectName("secondary")
+        link = QPushButton("Link list")
+        link.setObjectName("primary")
+        for b in (cancel, link):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            row.addWidget(b)
+        col.addLayout(row)
+
+        def set_status(found=None):
+            if found:
+                status.setText(f"<span style='color:#66BB6A;font-weight:700'>✓ Decklist found on your clipboard</span>"
+                               f"<br><span style='color:#8A97AA'>{auto_name(found)} · {card_count(found)} cards"
+                               f"</span>")
+            else:
+                status.setText("<span style='color:#6BB6E8'>●</span> Waiting for a list… In Pokémon TCG Live: "
+                               "<b>Decks → this deck → Export → Copy to clipboard</b>. It shows up here by itself.")
+
+        def add_choice(text, label, select=False, top=False):
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, text)
+            if top:
+                choices.insertItem(0, item)
+            else:
+                choices.addItem(item)
+            if select:
+                choices.setCurrentItem(item)
+
+        stored = all_decklists()
+        known = {(e.get("text") or "").strip() for e in stored}
+        for e in stored:
+            stamp = (e.get("captured_at") or "")[5:16].replace("-", "/")
+            add_choice(e.get("text") or "", f"{e['name']}   ·   {e.get('cards', '?')} cards   ·   {stamp}",
+                       select=e.get("menu_deck") == deck_name and choices.currentItem() is None)
+        lists_label.setVisible(bool(stored))
+        choices.setVisible(bool(stored))
+
+        def check_clipboard():
+            text = (QApplication.clipboard().text() or "").strip()
+            if not is_ptcgl_decklist(text):
+                return
+            set_status(text)
+            if text not in known:
+                known.add(text)
+                add_choice(text, f"{auto_name(text)}   ·   {card_count(text)} cards   ·   from clipboard",
+                           select=True, top=True)
+                lists_label.setVisible(True)
+                choices.setVisible(True)
+            else:
+                for i in range(choices.count()):
+                    if choices.item(i).data(Qt.ItemDataRole.UserRole).strip() == text:
+                        choices.setCurrentRow(i)
+            update_link()
+
+        def update_link(*_):
+            text = edit.toPlainText().strip() if edit.isVisible() else ""
+            link.setEnabled(is_ptcgl_decklist(text) or choices.currentItem() is not None)
+
+        def toggle_manual():
+            show = not edit.isVisible()
+            edit.setVisible(show)
+            manual_btn.setText(("▾ " if show else "▸ ") + "Paste a list manually")
+            update_link()
 
         def accept():
-            text = edit.toPlainText().strip()
+            text = edit.toPlainText().strip() if edit.isVisible() and edit.toPlainText().strip() else (
+                choices.currentItem().data(Qt.ItemDataRole.UserRole) if choices.currentItem() else "")
             if not is_ptcgl_decklist(text):
-                status.setText("<span style='color:#EF9A9A'>That doesn't look like a PTCGL deck export "
+                status.setText("<span style='color:#EF9A9A'>That isn't a PTCGL deck export "
                                "(Pokémon: / Trainer: / Energy: sections).</span>")
                 return
-            import_decklist(text, deck_name)
-            if card_count(text) != 60:
-                QMessageBox.information(dialog, "Decklist", f"Saved, but it has {card_count(text)} cards, not 60.")
+            entry = import_decklist(text, deck_name)
+            link_decklist(deck_name, entry["id"])
             dialog.accept()
-        buttons.accepted.connect(accept)
-        buttons.rejected.connect(dialog.reject)
+
+        set_status()
+        clipboard = QApplication.clipboard()
+        clipboard.dataChanged.connect(check_clipboard)
+        check_clipboard()
+        choices.currentItemChanged.connect(update_link)
+        choices.itemDoubleClicked.connect(lambda *_: accept())
+        edit.textChanged.connect(update_link)
+        manual_btn.clicked.connect(toggle_manual)
+        cancel.clicked.connect(dialog.reject)
+        link.clicked.connect(accept)
+        update_link()
+
         self.begin_protected_interaction()
         try:
             ok = dialog.exec()
         finally:
             self.end_protected_interaction()
+            try:
+                clipboard.dataChanged.disconnect(check_clipboard)
+            except (RuntimeError, TypeError):
+                pass
         if ok:
             self._deck_dashboards_dirty = True
             QTimer.singleShot(0, self._refresh_deck_dashboards)
@@ -7053,25 +7178,13 @@ class StatsWindow(QWidget):
         self.meta_status.setStyleSheet("color: rgba(255,255,255,0.45); font-size: 10px;")
         vlayout.addWidget(self.meta_status)
 
-        key = QLabel(
-            "<span style='color:#FFD54F'>⚖</span> weighted by your Preferences (event type · expansion · size) &nbsp;│&nbsp; "
-            "<span style='color:#6BB6E8'>●</span> online: W/L, Win %, matchups &nbsp; "
-            "<span style='color:#FFD54F'>●</span> in-person: W/L, matchups, share, top cut &nbsp; "
-            "<span style='color:#EF7A9A'>●</span> Japan: share, top cut &nbsp; "
-            "<span style='color:#B39DDB'>★</span> your games")
-        key.setTextFormat(Qt.TextFormat.RichText)
-        key.setStyleSheet("color: rgba(255,255,255,0.55); font-size: 10px;")
-        key.setToolTip("Win % and records come from online events and in-person pairings (Limitless Labs: every "
-                       "round, nearly every player's deck). Japanese City Leagues publish placings, not match "
-                       "records. Shares blend all sources.")
-        vlayout.addWidget(key)
 
         self.meta_views = QTabWidget()
         self.meta_views.setObjectName("deckTabs")
         self.meta_views.setDocumentMode(True)
 
         self.meta_arch_table = self._make_meta_table(
-            ["#", "Deck", "Score", "Range", "Share ⚖", "Top cut ⚖", "Record", "Win % ⚖", "Converts ⚖", "Sources"],
+            ["#", "Deck", "Score", "Range", "Share", "Top cut", "Record", "Win %", "Converts", "Sources"],
             [40, None, 86, 170, 72, 80, 126, 70, 86, 74], sortable=True, stretch_last=False)
         self.meta_arch_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         # The range bars are cell widgets (no content width): pin the column so
@@ -7081,9 +7194,9 @@ class StatsWindow(QWidget):
         self.meta_arch_table.cellDoubleClicked.connect(lambda row, col: self._open_table_row_link(self.meta_arch_table, row))
         self._meta_row_delegate = MineRowDelegate(self.meta_arch_table)
         self.meta_arch_table.setItemDelegate(self._meta_row_delegate)
-        for col, tip in enumerate([
-                "Rank by Score (decks with enough games). ★ = your deck.",
-                "Double-click to open the archetype on Limitless. ★ rows are your own decks.",
+        self._meta_header_tips = [
+                "Rank by Score. ~ = predicted (not enough games for a firm rank). ★ = your deck.",
+                "Double-click a row to open the archetype on Limitless.<br>★ rows are your own decks.",
                 "<b>Score</b> = expected win rate vs today's meta<br>"
                 + formulas.F + "Score = Σ share × matchup estimate" + formulas.END + "<br>"
                 + formulas.F + "matchup estimate = (k·θ + wins) / (k + games)" + formulas.END + "<br>"
@@ -7098,9 +7211,12 @@ class StatsWindow(QWidget):
                 + "<br><span style='color:#8A97AA'>★ rows: your games, weighted by your Preferences.</span>",
                 "Raw result rate under the selected tie rule · from the weighted record.",
                 "<b>Top 32 conversion</b> (in-person only)<br>" + formulas.CONVERTS,
-                "● online  ● in-person  ● Japan  ★ you"]):
-            if tip and self.meta_arch_table.horizontalHeaderItem(col):
-                self.meta_arch_table.horizontalHeaderItem(col).setToolTip(tip)
+                "<b>Where the data comes from</b><br>"
+                "<span style='color:#6BB6E8'>●</span> online events: W/L, Win %, matchups<br>"
+                "<span style='color:#FFD54F'>●</span> in-person: W/L, matchups, share, top cut<br>"
+                "<span style='color:#EF7A9A'>●</span> Japan City Leagues: share, top cut (placings only)<br>"
+                "<span style='color:#B39DDB'>★</span> your own games"]
+        self._apply_meta_header_tips(True)
         self.meta_views.addTab(self.meta_arch_table, "Archetypes")
 
         self.meta_matrix = QTableWidget()
@@ -7310,6 +7426,18 @@ class StatsWindow(QWidget):
     def _score_is_uncertain(cls, res):
         return "low" in res and (res["high"] - res["low"]) * 50.0 > cls.SCORE_FLAG_PTS
 
+    META_WEIGHTED_COLS = (4, 5, 7, 8)  # Share, Top cut, Win %, Converts
+
+    def _apply_meta_header_tips(self, use_weights):
+        table = getattr(self, "meta_arch_table", None)
+        for col, tip in enumerate(getattr(self, "_meta_header_tips", [])):
+            item = table.horizontalHeaderItem(col) if table is not None else None
+            if item is None or not tip:
+                continue
+            if use_weights and col in self.META_WEIGHTED_COLS:
+                tip += "<br><span style='color:#FFD54F'>Weighted by your custom weights (Preferences).</span>"
+            item.setToolTip(tip)
+
     @classmethod
     def _uncertain_note(cls, res):
         """Hover header for a Score marked * (wide 90% range)."""
@@ -7328,6 +7456,23 @@ class StatsWindow(QWidget):
         if with_range and res.get("rank_low") is not None:
             text += f" (#{res['rank_low']}–#{res['rank_high']})"
         return text
+
+    def _score_brief(self, name, res, info, is_mine):
+        """Short hover for a Score cell: the number, its range, rank and the
+        odds it beats the field. Formulas live on the Score heading."""
+        res = res.get("own_of", res)
+        lines = [f"<b>{name}</b> · {res['score'] * 100:.1f} (range {res['low'] * 100:.1f}–{res['high'] * 100:.1f})"]
+        if res.get("rank"):
+            lines.append(f"{'Rank' if res.get('ranked') else 'Predicted rank'} #{res['rank']} of "
+                         f"{info.get('ranked', 0)} · likely #{res.get('rank_low')}–#{res.get('rank_high')}")
+        p = res["p_above_even"]
+        lines.append((">99%" if p > 0.99 else "<1%" if p < 0.01 else f"{p * 100:.0f}%") + " chance it beats the field")
+        if self._score_is_uncertain(res):
+            lines.append("<span style='color:#FFB74D'>* few games: wide range</span>")
+        own = res.get("own") if is_mine else None
+        if own:
+            lines.append(f"Your games only: {own['score'] * 100:.1f}")
+        return "<br>".join(lines)
 
     def _score_tooltip(self, name, res, info, is_mine):
         level = int(round(info.get("level", 0.9) * 100))
@@ -7403,15 +7548,20 @@ class StatsWindow(QWidget):
         exp = ((data.get("expansions") or {}).get("en") or [{}])[0]
         fetched = data.get("fetched_at")
         stamp = datetime.fromtimestamp(fetched).strftime("%b %d %H:%M") if fetched else "?"
+        total_events = sum(int(events.get(k, 0) or 0) for k in ("online", "in_person", "japan"))
         self.meta_status.setText(
-            f"{len(rows)} archetypes · {events.get('online', 0)} online · {events.get('in_person', 0)} in-person"
-            + (f" ({data.get('in_person_records')} with results)" if data.get("in_person_records") else "") + " · "
-            f"{events.get('japan', 0)} Japan events"
+            f"{len(rows)} archetypes · {total_events:,} events"
             + (f" · {data['decklists']:,} decklists" if data.get("decklists") else "")
-            + f" · set: {exp.get('name', '?')} · ties: {mode_name} · updated {stamp}"
-            + (f" · sorted by Score ({score_info.get('ranked', 0)} ranked)" if score_info.get("ranked") else
-               " · no Score here: Japan publishes placings, not match records")
-            + ("" if use_weights else " · raw data (custom weights off)"))
+            + f" · updated {stamp}"
+            + ("" if score_info.get("ranked") else " · no Score: Japan publishes placings only"))
+        self.meta_status.setToolTip(
+            f"<b>Events</b>: {events.get('online', 0)} online · {events.get('in_person', 0)} in-person"
+            + (f" ({data.get('in_person_records')} with results)" if data.get("in_person_records") else "")
+            + f" · {events.get('japan', 0)} Japan<br>"
+            f"<b>Format</b>: {exp.get('name', '?')} · <b>ties</b>: {mode_name}<br>"
+            + (f"Sorted by Score · {score_info.get('ranked', 0)} decks firmly ranked<br>" if score_info.get("ranked") else "")
+            + ("Custom weights on (Preferences)." if use_weights else "Raw data (custom weights off)."))
+        self._apply_meta_header_tips(use_weights)
 
         table = self.meta_arch_table
         sorting = table.isSortingEnabled()
@@ -7465,11 +7615,8 @@ class StatsWindow(QWidget):
                                 sort_value=rank or 9999, link=link)
             if rank:
                 table.item(i, 0).setToolTip(
-                    f"{'Rank' if res.get('ranked') else 'Predicted rank'} #{rank} · 90% range "
-                    f"#{res.get('rank_low')}–#{res.get('rank_high')}"
-                    + ("" if res.get("ranked") else
-                       f"<br>~ = predicted: evidence {res.get('eff_games', 0):.1f} of the "
-                       f"{score_info.get('n_needed', 0):.0f} needed for a firm rank"))
+                    f"{'Rank' if res.get('ranked') else 'Predicted'} #{rank} (likely #{res.get('rank_low')}–"
+                    f"#{res.get('rank_high')})" + ("" if res.get("ranked") else " · needs more games"))
             table.item(i, 0).setData(MINE_ROLE, is_mine)
             basis = "own games" if (is_mine and own_basis) else "with archetype"
             eff = res.get("eff_games", 0)
@@ -7484,8 +7631,7 @@ class StatsWindow(QWidget):
                 half = (res["high"] - res["low"]) * 50.0
                 self._set_meta_item(table, i, 2, f"{sc * 100:.1f} ±{half:.1f}" + ("*" if wide else ""),
                                     accent=sacc, sort_value=sc, link=link)
-                tip = self._uncertain_note(res) + self._score_tooltip(
-                    r.get("deck", ""), res.get("own_of", res), score_info, is_mine)
+                tip = self._score_brief(r.get("deck", ""), res, score_info, is_mine)
                 table.item(i, 2).setToolTip(tip)
                 bar_wrap = QWidget()
                 bar_layout = QHBoxLayout(bar_wrap)
@@ -7523,20 +7669,19 @@ class StatsWindow(QWidget):
                 rec_item = table.item(i, 6)
                 if rec_item is not None:
                     rec_item.setToolTip(
-                        f"<b>Your games, weighted</b> ({r.get('raw_games', 0)} played)<br>{formulas.game_weights()}"
-                        if is_mine and use_weights else
-                        f"Your games, unweighted ({r.get('raw_games', 0)} played)." if is_mine else
-                        f"<b>{r.get('raw_games', 0):,} games played</b> (online + in-person)<br>"
-                        f"Weighted by event: {w:,.0f}-{l:,.0f}-{t:,.0f} (Win % and Score use these)<br>"
-                        f"{formulas.event_weights()}<br>"
-                        f"{formulas.effective_games(r, data.get('pilot_sd'))}")
+                        f"{r.get('raw_games', 0)} of your games" + (" (weighted)" if use_weights else "")
+                        if is_mine else
+                        f"{r.get('raw_games', 0):,} games played"
+                        + (f" · weighted {w:,.0f}-{l:,.0f}-{t:,.0f}" if use_weights else ""))
                 self._set_meta_item(table, i, 7, f"{rate * 100:.1f}%", sort_value=rate, link=link)
             conv = (scores.get(r["id"]) or {}).get("conversion")
             if conv and not is_mine:
                 p1 = conv["p_above_1"]
                 cacc = self.WINNING if p1 >= 0.8 else self.LOSING if p1 <= 0.2 else self.UNCLEAR
                 self._set_meta_item(table, i, 8, f"{conv['mean']:.2f}×", accent=cacc, sort_value=conv["mean"], link=link)
-                table.item(i, 8).setToolTip(f"<b>{r.get('deck', '')}</b> · Top 32 conversion<br>" + formulas.conversion(conv))
+                table.item(i, 8).setToolTip(
+                    f"Makes Top 32 {conv['mean']:.2f}× as often as its share predicts "
+                    f"({conv['low']:.2f}–{conv['high']:.2f}×) · {conv['top32']:.0f} of {conv['day2']:.0f} Day 2 finishes")
             else:
                 self._set_meta_item(table, i, 8, "", muted=True, sort_value=-1, link=link)
             src = r.get("sources") or {}
@@ -7726,18 +7871,19 @@ class StatsWindow(QWidget):
         hide = self.cards_hide_rare.isChecked()
         shown = [c for c in result if not hide or c["incl"] >= 10.0 or c["mine"]]
         info = card_usage.summary(result)
-        text = (f"<b>{esc(row['deck'])}</b> · {row.get('lists', 0):,} decklists (online events + in-person "
-                f"Day 2), weighted by format age · {info['core']} core cards")
+        text = f"<b>{esc(row['deck'])}</b> · {row.get('lists', 0):,} lists · {info['core']} core cards"
+        tip = "Decklists from online events and in-person Day 2, weighted by format age."
         if mine is not None:
             match = card_usage.similarity(row.get("cards"), mine)
-            text += f"<br>Your list <b>{esc(entry['name'])}</b>: {match * 100:.0f}% like the typical list"
+            text += f" · yours: <b>{match * 100:.0f}%</b> typical"
             if info["missing_core"]:
-                text += (" · <span style='color:#EF5350'>missing core: "
-                         + ", ".join(esc(c["name"]) for c in info["missing_core"][:6]) + "</span>")
+                text += f" · <span style='color:#EF5350'>{len(info['missing_core'])} core missing</span>"
+                tip += "<br><b>Missing core:</b> " + ", ".join(esc(c["name"]) for c in info["missing_core"])
             if info["unusual"]:
-                text += (" · <span style='color:#F9A825'>rare picks: "
-                         + ", ".join(esc(c["name"]) for c in info["unusual"][:6]) + "</span>")
+                text += f" · <span style='color:#F9A825'>{len(info['unusual'])} rare picks</span>"
+                tip += "<br><b>Rare picks:</b> " + ", ".join(esc(c["name"]) for c in info["unusual"])
         self.cards_summary.setText(text)
+        self.cards_summary.setToolTip(tip)
         role_color = {"core": "#EEF4FF", "common": "#6BB6E8", "tech": "#9BA8BC", "only yours": "#B39DDB"}
         table.setUpdatesEnabled(False)
         table.setRowCount(len(shown))
