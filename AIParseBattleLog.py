@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from BattleDatabase import BattleDatabase, log_hash
 from app_settings import (
+    is_ai_anonymize_names,
     is_local_only_mode,
     load_api_key,
     load_username,
@@ -81,8 +82,16 @@ def parse_opponent_from_log(battlelog, username):
     if not battlelog or not username:
         return None
     own = normalize_name(username)
+    for candidate in log_player_names(battlelog):
+        if normalize_name(candidate) != own:
+            return candidate
+    return None
+
+
+def log_player_names(battlelog):
+    """Every player name seen in the log's turn headers and coin-flip lines."""
     candidates = []
-    text = battlelog.replace("\r\n", "\n")
+    text = (battlelog or "").replace("\r\n", "\n")
     patterns = (
         r"(?m)^Turn #\s*\d+\s*-\s*(.+?)'s Turn\s*$",
         r"(?m)^(.{1,40})'s Turn\s*$",
@@ -95,10 +104,38 @@ def parse_opponent_from_log(battlelog, username):
             name = match.strip()
             if name and name not in candidates:
                 candidates.append(name)
-    for candidate in candidates:
-        if normalize_name(candidate) != own:
-            return candidate
-    return None
+    return candidates
+
+
+# Placeholders used when names are stripped before sending a log to OpenAI.
+# "Opponent" matches the game's own wording ("Opponent conceded. X wins.").
+AI_SELF_PLACEHOLDER = "Player"
+AI_OPPONENT_PLACEHOLDER = "Opponent"
+
+
+def anonymize_battlelog(battlelog, username):
+    """Replace both usernames in a log with Player / Opponent placeholders.
+
+    The user's own name becomes AI_SELF_PLACEHOLDER; every other player name
+    found in the log becomes AI_OPPONENT_PLACEHOLDER. Matches are whole-name
+    only (not inside card names), longest name first.
+    """
+    if not battlelog:
+        return battlelog
+    own = normalize_name(username) if username else ""
+    mapping = {}
+    for name in log_player_names(battlelog):
+        is_self = bool(own) and normalize_name(name) == own
+        mapping[name] = AI_SELF_PLACEHOLDER if is_self else AI_OPPONENT_PLACEHOLDER
+    if username and username.strip():
+        mapping.setdefault(username.strip(), AI_SELF_PLACEHOLDER)
+    text = battlelog
+    for name in sorted(mapping, key=len, reverse=True):
+        if name in (AI_SELF_PLACEHOLDER, AI_OPPONENT_PLACEHOLDER):
+            continue
+        text = re.sub(r"(?<!\w)" + re.escape(name) + r"(?!\w)",
+                      lambda _m, repl=mapping[name]: repl, text, flags=re.IGNORECASE)
+    return text
 
 
 def is_tournament_battle(battlelog, username):
@@ -605,12 +642,23 @@ AI_MODELS = [
 ]
 
 
-def ai_parse(battlelog, username, api_key):
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key, timeout=45.0, max_retries=1)
+def ai_parse(battlelog, username, api_key, anonymize=None, client=None):
+    if client is None:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key, timeout=45.0, max_retries=1)
     possible_decks = load_possible_decks()
+    # Card evidence is computed locally from the real log and names.
     evidence = card_evidence(battlelog, username)
+    if anonymize is None:
+        anonymize = is_ai_anonymize_names()
+    you_note = ""
+    if anonymize:
+        # SEC-09: neither username leaves the machine. "Player" is the user,
+        # so My_deck / Win_or_Loss keep their meaning in the reply.
+        battlelog = anonymize_battlelog(battlelog, username)
+        username = AI_SELF_PLACEHOLDER
+        you_note = (f"Player names are anonymized: \"{AI_SELF_PLACEHOLDER}\" (also \"You\" in the log) is me, "
+                    f"\"{AI_OPPONENT_PLACEHOLDER}\" is the opponent.\n")
     evidence_text = ""
     if evidence["pokemon"]:
         # ~150 tokens: what the opponent showed (with copies) and how each
@@ -653,7 +701,7 @@ Also determine the winner of the battle.
 card evidence, and go low when the opponent showed little or it's a close call.
 "Candidates" = the 3 most likely opponent archetypes, best first (the first is
 OpponentsDeck), each {{"deck": name, "probability": 0-100}}, summing to <= 100.
-{evidence_text}
+{evidence_text}{you_note}
 Export the data as JSON with these fields: My_deck, OpponentsDeck, Win_or_Loss, Confidence, Candidates
 Battlelog:
 <<<BEGIN BATTLELOG>>>
