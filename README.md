@@ -3,6 +3,7 @@
 A companion app for Pokemon TCG Live that keeps track of your games for you.
 
 It runs quietly in the background while you play. After every match it grabs the battle log, works out what you and your opponent were playing and who won, and saves it. A small overlay sits in the corner of the game showing your rank and today's record, and there's a full dashboard when you want to dig into how your decks are actually doing.
+<img width="855" height="582" alt="pythonw_qmWVlQyOFj" src="https://github.com/user-attachments/assets/b1d38087-99b6-4a97-9606-f8d75b8fa139" />
 
 ## What it do tho
 
