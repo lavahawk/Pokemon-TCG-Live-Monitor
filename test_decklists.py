@@ -79,6 +79,11 @@ Energy: 10
 
 
 # ── recognising and naming exports ─────────────────────────────────────────
+
+def _latest():
+    lists = D.all_decklists()
+    return lists[0] if lists else None
+
 def test_is_ptcgl_decklist():
     assert D.is_ptcgl_decklist(DRAGAPULT) and D.is_ptcgl_decklist(GENGAR)
     assert D.is_ptcgl_decklist(DRAGAPULT.replace("\n", "\r\n"))  # CRLF clipboard
@@ -116,7 +121,7 @@ def test_save_same_list_keeps_name_and_moves_first():
     again = D.save_decklist(DRAGAPULT_SHUFFLED, "something else")
     assert again["new"] is False and again["id"] == a["id"] and again["name"] == "My Pult"
     assert again["menu_deck"] == "Menu Dragapult"  # the first capture's hint stays
-    assert D.latest_decklist()["id"] == a["id"] and len(D.all_decklists()) == 2
+    assert _latest()["id"] == a["id"] and len(D.all_decklists()) == 2
     assert not os.path.exists(D.STORE_FILE + ".tmp")  # atomic replace
 
 
@@ -132,13 +137,13 @@ def test_rename_and_delete():
     reset_store()
     e = D.save_decklist(DRAGAPULT)
     D.rename_decklist(e["id"], "   ")  # blank name: ignored
-    assert D.latest_decklist()["name"] == "Dragapult ex"
+    assert _latest()["name"] == "Dragapult ex"
     D.rename_decklist(e["id"], "Pult")
-    assert D.latest_decklist()["name"] == "Pult" and D.latest_decklist()["named_by"] == "user"
+    assert _latest()["name"] == "Pult" and _latest()["named_by"] == "user"
     D.delete_decklist("not-an-id")
     assert len(D.all_decklists()) == 1
     D.delete_decklist(e["id"])
-    assert D.all_decklists() == [] and D.latest_decklist() is None
+    assert D.all_decklists() == [] and _latest() is None
 
 
 def test_missing_or_corrupt_store():
