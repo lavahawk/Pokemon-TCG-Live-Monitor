@@ -43,3 +43,7 @@ Related: BUG-005, 008, 023, 030, 031, SEC-09.
 - On the 54 stored battles the counts change no top-1 pick (distinct cards already decided them); they matter for close calls. The data is Limitless decklists, the same data TrainerHill's card pages are built on, so no TrainerHill call is needed.
 - **Popularity decides close calls** (user rule, 2026-10-13): the prior is `share_recent` = share of all players in the last 21 days of online (PTCGL) events (sheet field, `meta_sources.RECENT_DAYS`; falls back to `share_en`). When the top pick is under 2/3, the most popular candidate with at least 25% goes first (`card_usage.CLOSE_CALL` / `CLOSE_CONTENDER`); probabilities are unchanged. Such picks stay below the 85% needed to override the AI or show as CARDS, so they're a GUESS. The AI sees each candidate's popularity and is told to pick the more popular one in a close call. On the 54 stored battles this changes one pick (#62, Dusknoir line only → Alakazam Dusknoir, matching its label).
 
+
+## 2026-10-14
+- The AI prompt also asks for `Candidates` (3 × {deck, probability}). `merge_candidates(pick, p, ai_alts, card_ranked)` → top 3 for the overlay (`deck_confirm.write_request(..., confidence, candidates)`).
+- `deck_confidence(ai, deck, ranked)` = mean of the AI's number and the cards' probability for that deck. Local mode: the card probability, 35 for a first-Pokémon guess, 0 for none. The stored `confidence` no longer gets the 90/95 bump from the log result, so older rows read ~90 and newer ones vary.

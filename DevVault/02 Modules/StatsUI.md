@@ -70,3 +70,9 @@ Embedded tools.trainerhill.com (`create_trainerhill_tab`, `_ensure_trainerhill_v
 - **Advanced → Meta Data:** optional Limitless API key (`limitless_api_key`).
 - Console detection lists processes with `game_window.process_list()` (Toolhelp snapshot, ~25 ms) and reads command lines only for python processes (was `psutil.process_iter` with cmdline for every process).
 - Meta status line shows the number of decklists.
+
+## 2026-10-14
+- Advanced: `_create_sound_prefs_card`. Battle DB editor: `_populate_battle_mgmt_actions`, `_refresh_battle_mgmt_if_stale` (data_signature; on tab open + load_stats), `BATTLE_MGMT_LIMIT` 50.
+- Deck page: `ResultStrip.clicked` → `_jump_to_recent_game` (finds `deckRecentBattleRow` frames in the page's scroll area, pulses them). Recent rows show 10 games, matching the strip. `show_cards_played(log)` uses `card_usage.log_card_counts` for both players. "Deck archetype" opens TrainerHill deck-profile (no deep link known).
+- Snapshot `_create_decklist_button`: import dialog (clipboard prefill / saved lists), View, Card suggestions (`card_usage.compare` vs the matched row: missing ≥25%, fewer than usual, own picks <10%), Meta → Cards (`_open_cards_compare`), TrainerHill tools (the list is copied to the clipboard first).
+- Offscreen renders: modal `exec()` dialogs hang the harness; test their logic directly.

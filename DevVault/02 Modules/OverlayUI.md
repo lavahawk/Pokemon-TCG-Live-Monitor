@@ -34,3 +34,7 @@ Related: BUG-019, 020, 032.
 
 ## 2026-10-13
 - Today's W-L skips games with decks marked **Ignore** on the dashboard (`ignored_decks()` reads `.deck_flags.json`; `BattleDatabase.get_today_stats(ignored_decks)` subtracts their wins/losses since the last reset).
+
+## 2026-10-14
+- Deck card `show` mode = up to 3 `ChoiceButton`s (icons via `deck_confirm.deck_icon_paths`, % from the request's `candidates`). The pick is highlighted; click = save as Manual/100. The hint link "Other…" goes to edit. `confidence < LOW_CONFIDENCE (50)`: amber "WHICH DECK WAS IT?" and no fade on the menu (90 s fallback only).
+- `_poll_pet` (1 s deck timer) manages `pet.PetWidget`: a 300×150 strip left of the pill, click-through except over the sprite (toggles WS_EX_TRANSPARENT each tick). Settings `overlay_pet`, `overlay_pet_species` (pikachu / gengar / eevee / random). Sheets: one row per direction (0 down, 2 right, 6 left), durations in 1/60 s.

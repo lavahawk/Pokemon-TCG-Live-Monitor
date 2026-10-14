@@ -33,3 +33,11 @@ See **Session log** below.
 - [ ] Ideas: rank chart per deck; tune `CLOSE_CALL` / `CLOSE_CONTENDER` once there are more confirmed labels; auto-capture a decklist when all 60 cards have been seen.
 
 ## Session log (newest first, one line each; prune past ~10 to the archive)
+- **2026-10-14:** vault slimmed (this note + archive). Shipped:
+  - import sounds (`sounds.py`, Advanced → Preferences · Sound)
+  - auto-export clicks pinned with `ClipCursor` (`AutoClicker.physical_click`)
+  - DB editor: one actions cell, auto-refresh, no Refresh button
+  - parser returns top-3 `Candidates`, and confidence is now the **opponent-deck certainty** (no result bump). The overlay card shows the 3 choices with icons; under 50% it asks and waits.
+  - deck page: Last-10 squares jump to the game; per-game Replay / Cards played / Deck archetype buttons
+  - Snapshot **Decklist** button: import/link a list (`decklists.link_decklist`), card suggestions, Meta → Cards, TrainerHill
+  - optional **HUD buddy** (`pet.py`, `pet_sprites/`, CC BY-NC). All of it is unverified on a live game: restart the overlay, then check a battle import (sound, deck card) and the auto-export clicks while moving the mouse.
