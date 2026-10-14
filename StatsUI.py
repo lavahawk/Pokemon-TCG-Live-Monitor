@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QComboBox, QCompleter, QSlider, QCheckBox, QListWidget, QListWidgetItem,
     QButtonGroup, QListView, QSpinBox, QStackedWidget
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, Property, QThread, Signal, QSize, QObject, QPoint, QEvent, QRectF, QPointF
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, Property, QThread, Signal, QSize, QObject, QPoint, QEvent, QRectF, QPointF, QRect
 from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QLinearGradient, QFont, QIcon
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QSizePolicy, QAbstractItemView
 from PySide6.QtTest import QTest
@@ -1926,7 +1926,10 @@ def _hover_animation(owner, setter, duration=160):
 
 
 class HoverCard(QFrame):
-    """Metric card whose border/background softly light up on hover."""
+    """Metric card whose border/background softly light up on hover.
+    make_clickable(callback) turns it into a link (pointing cursor)."""
+
+    clicked = Signal()
 
     def __init__(self, accent="#4A9FD8"):
         super().__init__()
@@ -1935,6 +1938,21 @@ class HoverCard(QFrame):
         self._h = 0.0
         self._anim = _hover_animation(self, self._set_h)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+    def make_clickable(self, callback):
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clicked.connect(callback)
+        self.clickable = True
+        return self
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and getattr(self, "clickable", False):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 
     def _set_h(self, value):
         self._h = float(value)
@@ -1964,6 +1982,44 @@ class HoverCard(QFrame):
         border.setAlpha(int(28 + 120 * self._h))
         p.setPen(QPen(border, 1.0))
         p.drawRoundedRect(rect, 10, 10)
+        p.end()
+
+
+class FlashOverlay(QWidget):
+    """A brief double pulse drawn over `rect` of `parent` (whole widget by
+    default) to show where a click took you. Removes itself."""
+
+    def __init__(self, parent, rect=None, color="#4A9FD8", duration=1600, radius=8):
+        super().__init__(parent)
+        from PySide6.QtCore import QVariantAnimation
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setGeometry(rect if rect is not None else parent.rect())
+        self._color = QColor(color)
+        self._radius = radius
+        self._v = 0.0
+        self._anim = QVariantAnimation(self, startValue=0.0, endValue=1.0, duration=duration)
+        self._anim.valueChanged.connect(self._step)
+        self._anim.finished.connect(self.deleteLater)
+        self.show()
+        self.raise_()
+        self._anim.start()
+
+    def _step(self, value):
+        self._v = float(value)
+        self.update()
+
+    def paintEvent(self, _event):
+        v = self._v
+        alpha = max(0.0, math.sin(v * math.pi * 2)) * (1.0 - v) * 0.45 + (1.0 - v) * 0.10
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fill = QColor(self._color)
+        fill.setAlphaF(min(1.0, alpha))
+        edge = QColor(self._color)
+        edge.setAlphaF(min(1.0, alpha * 1.8))
+        p.setPen(QPen(edge, 1.5))
+        p.setBrush(fill)
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), self._radius, self._radius)
         p.end()
 
 
@@ -4080,12 +4136,15 @@ class StatsWindow(QWidget):
             ranked = score_info.get("ranked", 0)
             caption = (f"{'Would rank' if score.get('ranked') else 'Predicted'} {self._rank_text(score)} of {ranked}"
                        if score.get("rank") else f"range {_pct_range(score['low'], score['high'])}")
-            top.addWidget(self._create_estimate_card(
+            meta_card = self._create_estimate_card(
                 "META SCORE", f"{sc:.0f}", self._confidence_accent(score["p_above_even"]),
                 score["low"], score["score"], score["high"], caption,
-                self._score_tooltip(analysis.get("deck_name", ""), score, score_info, True),
+                self._score_tooltip(analysis.get("deck_name", ""), score, score_info, True)
+                + "<br><i>Click to see it in the Meta tab.</i>",
                 par=score.get("par", 0.5),
-            ), 0, 1)
+            )
+            meta_card.make_clickable(lambda d=analysis.get("deck_name", ""): self._show_deck_in_meta(d, "blended"))
+            top.addWidget(meta_card, 0, 1)
         elif meta_adj:
             adj = meta_adj["mean"] * 100.0
             diff = (observed or 0) * 100.0 - adj
@@ -4132,12 +4191,15 @@ class StatsWindow(QWidget):
             own_rank = f" · {self._rank_text(own, with_range=False)}" if own.get("rank") else ""
             caption = (f"Your games only (no Limitless data) · would rank {self._rank_text(own, with_range=False)} "
                        f"of {score_info.get('ranked', 0)}" if own.get("rank") else "Your games only (no Limitless data)")
-            adv.addWidget(self._create_mini_stat(
-                "SCORE · YOUR GAMES", f"{own['score'] * 100:.0f}", "#B39DDB",
+            own_card = self._create_mini_stat(
+                "SCORE · YOUR GAMES", f"{own['score'] * 100:.0f} ±{(own['high'] - own['low']) * 50:.1f}", "#B39DDB",
                 f"<b>Own games only: {own['score'] * 100:.1f}</b> · range {_pct_range(own['low'], own['high'])}"
                 + (f" · {'would rank' if own.get('ranked') else 'predicted'} {self._rank_text(own)} of "
                    f"{score_info.get('ranked', 0)}" if own_rank else "")
-                + "<br>" + formulas.own_score(own, score_info), caption=caption), 0, 0)
+                + "<br>" + formulas.own_score(own, score_info)
+                + "<br><i>Click to see it in the Meta tab.</i>", caption=caption)
+            own_card.make_clickable(lambda d=analysis.get("deck_name", ""): self._show_deck_in_meta(d, "own"))
+            adv.addWidget(own_card, 0, 0)
         else:
             rw = rank_summary.get("weighted_winrate", 0.0) * 100.0
             adv.addWidget(self._create_mini_stat(
@@ -4163,9 +4225,11 @@ class StatsWindow(QWidget):
         else:
             adv.addWidget(self._create_mini_stat("VS LIMITLESS", "--", "#AAB7CB",
                                                  "No Limitless archetype matched this deck name."), 0, 2)
-        adv.addWidget(self._create_mini_stat(
+        faced = self._create_mini_stat(
             "META FACED", f"{(meta_adj or {}).get('coverage', 0) * 100:.0f}%", self.NEUTRAL,
-            "Share of the current meta you've played at least once with this deck."), 0, 3)
+            "Share of the current meta you've played at least once with this deck. Click for the matchups.")
+        faced.make_clickable(lambda c=faced: self._scroll_to_matchups(c))
+        adv.addWidget(faced, 0, 3)
         for col in range(4):
             adv.setColumnStretch(col, 1)
         return container
@@ -4864,6 +4928,66 @@ class StatsWindow(QWidget):
 
         return card
 
+    def _scroll_to_matchups(self, source):
+        """META FACED → scroll the deck page to its matchups and flash them."""
+        page = source
+        while page is not None and not isinstance(page, QScrollArea):
+            page = page.parentWidget()
+        if page is None:
+            return
+        card = next((f for f in page.findChildren(QFrame) if f.property("deckMatchups")), None)
+        if card is None:
+            return
+        page.verticalScrollBar().setValue(max(0, card.mapTo(page.widget(), QPoint(0, 0)).y() - 12))
+        FlashOverlay(card, radius=10)
+
+    def _show_deck_in_meta(self, deck_name, basis="blended"):
+        """Meta tab → Archetypes with this deck's ★ row shown (even when not
+        starred), scored the way the clicked card was, then highlighted."""
+        self._meta_focus_deck = deck_name
+        index = next((i for i in range(self.tab_widget.count()) if self.tab_widget.tabText(i) == "Meta"), None)
+        if index is None:
+            return
+        if getattr(self, "_meta_source", "all") == "japan":
+            self._meta_source = "all"
+            for key, btn in getattr(self, "meta_source_buttons", {}).items():
+                btn.setChecked(key == "all")
+        views = getattr(self, "meta_views", None)
+        if views is not None:
+            views.setCurrentIndex(0)
+        if hasattr(self, "meta_mine_basis"):
+            self.meta_mine_basis.blockSignals(True)
+            self.meta_mine_basis.setCurrentIndex(max(0, self.meta_mine_basis.findData(basis)))
+            self.meta_mine_basis.blockSignals(False)
+        if not self.meta_include_mine.isChecked():
+            self.meta_include_mine.blockSignals(True)
+            self.meta_include_mine.setChecked(True)
+            self.meta_include_mine.blockSignals(False)
+            self.meta_mine_basis.setVisible(True)
+        self.tab_widget.setCurrentIndex(index)
+        self._populate_meta_tab()
+        self._highlight_meta_deck(deck_name, tries=20)
+
+    def _highlight_meta_deck(self, deck_name, tries=0):
+        table = self.meta_arch_table
+        key = deck_name.lower()
+        for row in range(table.rowCount()):
+            mine = table.item(row, 0)
+            name = table.item(row, 1)
+            if mine is not None and name is not None and mine.data(MINE_ROLE) \
+                    and name.data(Qt.ItemDataRole.UserRole) == key:
+                table.scrollToItem(name, QAbstractItemView.ScrollHint.PositionAtCenter)
+                table.selectRow(row)
+
+                def flash(r=row):
+                    top = table.rowViewportPosition(r)
+                    FlashOverlay(table.viewport(), QRect(0, top, table.viewport().width(), table.rowHeight(r)),
+                                 color="#B39DDB", radius=6)
+                QTimer.singleShot(60, flash)
+                return
+        if tries > 0:  # the table may still be building
+            QTimer.singleShot(150, lambda: self._highlight_meta_deck(deck_name, tries - 1))
+
     def _jump_to_recent_game(self, source, index):
         """Last-10 square → scroll to that game in "Recent with this deck" and flash it."""
         page = source
@@ -5061,6 +5185,7 @@ class StatsWindow(QWidget):
         layout.addWidget(self._create_deck_trend_card(analysis))
 
         matchup_card, matchup_layout = self._create_dashboard_card("MATCHUPS VS THE META")
+        matchup_card.setProperty("deckMatchups", True)
         matchup_layout.addWidget(self._create_matchup_overview_table(analysis))
         layout.addWidget(matchup_card)
 
@@ -7540,7 +7665,8 @@ class StatsWindow(QWidget):
             return self._meta_rate_posterior(r.get("wins"), r.get("losses"), r.get("ties"))
 
         scores, score_info = self._deck_scores(data, use_weights)
-        mine = ([m for m in score_info.get("mine", {}).values() if m["deck"] in self.starred_decks]
+        focus = getattr(self, "_meta_focus_deck", None)
+        mine = ([m for m in score_info.get("mine", {}).values() if m["deck"] in self.starred_decks or m["deck"] == focus]
                 if self.meta_include_mine.isChecked() else [])
 
         mode_name = TIE_MODES[tie_mode()][0]
