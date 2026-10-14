@@ -447,15 +447,12 @@ def local_fallback_parse(battlelog, username):
     if not win_or_loss:
         win_or_loss = "Loss"
 
-    confidence = 90
-    if not load_last_deck():
-        confidence = 80
-    if not parse_result_from_log(battlelog, username):
-        confidence = min(confidence, 75)
-    if not inferred:
-        confidence = min(confidence, 60)
-    elif card_pick and inferred == card_pick[0]:
-        confidence = min(confidence, int(round(card_pick[1] * 100)))
+    # Opponent-deck certainty: the cards' probability, a low number for a
+    # "first Pokemon played" guess, 0 when there's nothing to go on.
+    if card_pick and inferred == card_pick[0]:
+        confidence = int(round(card_pick[1] * 100))
+    else:
+        confidence = 35 if inferred else 0
 
     return {
         "My_deck": (my_deck or "").strip() or "Unknown Deck",
@@ -463,6 +460,7 @@ def local_fallback_parse(battlelog, username):
         "Win_or_Loss": (win_or_loss or "").strip().title(),
         "Confidence": confidence,
         "deck_source": source if inferred else "none",
+        "Candidates": merge_candidates(inferred, confidence / 100.0 if inferred else None, [], evidence["ranked"]),
     }
 
 
@@ -535,6 +533,53 @@ def _coerce_text_field(payload, *keys):
     return ""
 
 
+def _coerce_candidates(payload):
+    """The AI's "Candidates": [(deck, probability 0-1 or None)], best first."""
+    raw = payload.get("Candidates") or payload.get("candidates") or []
+    if isinstance(raw, dict):
+        raw = [{"deck": k, "probability": v} for k, v in raw.items()]
+    out = []
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, dict):
+            name = _coerce_text_field(item, "deck", "Deck", "name", "archetype")
+            p = _coerce_confidence_value(item.get("probability", item.get("confidence", item.get("p"))), default=-1)
+            p = None if p < 0 else p / 100.0
+        else:
+            name, p = item, None
+        name = " ".join(str(name or "").split())
+        if name:
+            out.append((name, p))
+    return out
+
+
+def merge_candidates(primary, primary_p, alternatives, ranked, limit=3):
+    """Up to `limit` (deck, probability or None) for the overlay's multiple
+    choice: the pick first, then the AI's alternatives, then the card-evidence
+    ranking. A missing probability is taken from the card evidence."""
+    card_p = {deck.casefold(): p for deck, p in ranked}
+    out, seen = [], set()
+    for name, p in [(primary, primary_p)] + list(alternatives) + list(ranked):
+        name = " ".join(str(name or "").split())
+        key = name.casefold()
+        if not name or key in seen or key.startswith("unknown"):
+            continue
+        seen.add(key)
+        out.append((name, p if p is not None else card_p.get(key)))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def deck_confidence(ai_confidence, deck, ranked):
+    """0-100 certainty of the opponent deck. With card evidence it's the mean
+    of the AI's own number and the cards' probability for that deck (an AI
+    pick the cards don't support drops sharply); without, the AI's number."""
+    if not ranked:
+        return int(ai_confidence)
+    card_p = dict((d.casefold(), p) for d, p in ranked).get(" ".join(str(deck or "").split()).casefold(), 0.0)
+    return int(round((ai_confidence + 100 * card_p) / 2))
+
+
 def _coerce_confidence_value(value, default=0):
     flattened = _flatten_scalar(value)
     if flattened is None or flattened == "":
@@ -603,10 +648,13 @@ STRICT RULES for deck identification:
 6. "My_deck" is {username}'s deck; "OpponentsDeck" is the opponent's.
 7. If no battlelog was provided, return blank fields.
 
-Also determine the winner of the battle and a confidence value 0-100 for each
-deck identification.
+Also determine the winner of the battle.
+"Confidence" = how likely (0-100) OpponentsDeck is right. Be honest: use the
+card evidence, and go low when the opponent showed little or it's a close call.
+"Candidates" = the 3 most likely opponent archetypes, best first (the first is
+OpponentsDeck), each {{"deck": name, "probability": 0-100}}, summing to <= 100.
 {evidence_text}
-Export the data as JSON with these fields: My_deck, OpponentsDeck, Win_or_Loss, Confidence
+Export the data as JSON with these fields: My_deck, OpponentsDeck, Win_or_Loss, Confidence, Candidates
 Battlelog:
 <<<BEGIN BATTLELOG>>>
 {battlelog}
@@ -635,11 +683,12 @@ Battlelog:
                 Confidence=_coerce_confidence_value(payload.get("Confidence")),
             )
             print(f"[AI] Parsed using model: {model}")
+            alternatives = _coerce_candidates(payload)
             result = {
                 "My_deck": parsed.My_deck,
                 "OpponentsDeck": parsed.OpponentsDeck,
                 "Win_or_Loss": parsed.Win_or_Loss,
-                "Confidence": parsed.Confidence,
+                "Confidence": deck_confidence(parsed.Confidence, parsed.OpponentsDeck, evidence["ranked"]),
                 "deck_source": "ai",
             }
             # Cross-check: an AI name whose Pokemon the opponent never showed,
@@ -652,6 +701,8 @@ Battlelog:
                 print(f"[Cards] AI said {parsed.OpponentsDeck!r}, but the opponent's cards say "
                       f"{pick[0]} ({pick[1] * 100:.0f}%) - using the cards.")
                 result.update(OpponentsDeck=pick[0], Confidence=int(round(pick[1] * 100)), deck_source="cards")
+            result["Candidates"] = merge_candidates(result["OpponentsDeck"], result["Confidence"] / 100.0,
+                                                    alternatives, evidence["ranked"])
             return result
         except Exception as exc:
             last_error = exc
@@ -713,11 +764,8 @@ def main():
             f"'{parse_winner_from_log(battlelog)} wins.' — trusting the log ({log_result})."
         )
         win_or_loss = log_result
-        # Result certainty from the log is high; reflect that in confidence.
-        confidence = max(confidence, 95)
-    elif log_result:
-        # Log agrees; bump confidence since two independent methods concur.
-        confidence = max(confidence, 90)
+    # `confidence` is the opponent-deck certainty only (it used to be bumped
+    # to 90-95 whenever the log confirmed the result, so it always read ~90).
 
     # Prefer the OCR-detected deck name (from the main menu) over the
     # AI-suggested name. OCR is authoritative for YOUR deck because it reads
@@ -761,7 +809,8 @@ def main():
                 from deck_confirm import write_request
                 write_request(battle_id, opponents_deck, source=deck_source,
                               needs_input=deck_source not in ("ai", "cards"),
-                              my_deck=my_deck, result=win_or_loss)
+                              my_deck=my_deck, result=win_or_loss, confidence=confidence,
+                              candidates=response_dict.get("Candidates") or [])
             except Exception as exc:
                 print(f"Warning: Could not request the deck confirmation card: {exc}")
         else:

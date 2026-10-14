@@ -2,8 +2,10 @@
 "Opponent deck" card: a small frameless card above the overlay's mini GUI,
 shown after each saved battle (requests come from deck_confirm.py).
 
-  show  - the deck the AI picked. Click to fix it. Fades once the game is
-          back on the main menu.
+  show  - the top 3 decks (AI / card evidence) as one-click choices with
+          icons and probabilities, the pick highlighted. Clicking one saves
+          it; "Other…" types a name. Fades once the game is back on the main
+          menu, unless the pick is a low-confidence one (then it waits).
   edit  - type the deck (autocomplete: your recorded opponent decks, then
           Limitless archetypes). Used straight away when no AI pick exists
           (local-only mode, no API key, AI failed).
@@ -15,12 +17,12 @@ import math
 import time
 
 from PySide6.QtCore import Qt, QTimer, QVariantAnimation, QEasingCurve, QStringListModel, QPointF, QRectF
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QToolButton, QCompleter,
 )
 
-from deck_confirm import OTHER, canonical_name, known_deck_names, mark_handled, play_chime
+from deck_confirm import OTHER, canonical_name, deck_icon_paths, known_deck_names, mark_handled, play_chime
 
 BLUE = QColor(74, 159, 216)
 AMBER = QColor(240, 180, 60)
@@ -33,6 +35,50 @@ CARD_W = 250
 MIN_VISIBLE_S = 4.0     # an AI pick stays at least this long
 FADE_AFTER_MENU_S = 2.5  # ...and fades this long after the main menu is seen
 MAX_SHOW_S = 90.0       # fallback when the menu is never reported
+LOW_CONFIDENCE = 50     # below this the card asks instead of fading on the menu
+ICON_PX = 18
+
+
+class ChoiceButton(QPushButton):
+    """One deck option: icons, name, probability; `picked` = the current pick."""
+
+    def __init__(self, deck, probability, picked):
+        super().__init__()
+        self.deck = deck
+        self.setObjectName("choicePicked" if picked else "choice")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(26)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 0, 7, 0)
+        row.setSpacing(3)
+        icons = deck_icon_paths(deck)
+        for path in icons:
+            pix = QPixmap(path)
+            if pix.isNull():
+                continue
+            label = QLabel()
+            label.setPixmap(pix.scaled(ICON_PX, ICON_PX, Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation))
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            row.addWidget(label)
+        if not icons:
+            row.addSpacing(2)
+        name = QLabel()
+        name.setObjectName("choiceName")
+        name.setText(name.fontMetrics().elidedText(deck, Qt.TextElideMode.ElideRight, CARD_W - 110))
+        name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        row.addWidget(name, 1)
+        if probability is not None:
+            pct = QLabel("<1%" if probability < 0.01 else f"{probability * 100:.0f}%")
+            pct.setObjectName("choicePct")
+            pct.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            row.addWidget(pct)
+        if picked:
+            mark = QLabel("✓")
+            mark.setObjectName("choiceMark")
+            mark.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            row.addWidget(mark)
+        self.setToolTip(f"Save “{deck}” as the opponent's deck")
 
 
 class DeckConfirmPopup(QWidget):
@@ -98,6 +144,12 @@ class DeckConfirmPopup(QWidget):
         self.name.setCursor(Qt.CursorShape.PointingHandCursor)
         root.addWidget(self.name)
 
+        self.choices_box = QWidget()
+        self.choices = QVBoxLayout(self.choices_box)
+        self.choices.setContentsMargins(0, 2, 0, 0)
+        self.choices.setSpacing(3)
+        root.addWidget(self.choices_box)
+
         self.field = QLineEdit()
         self.field.setObjectName("field")
         self.field.setPlaceholderText("Type the opponent's deck…")
@@ -142,6 +194,8 @@ class DeckConfirmPopup(QWidget):
         self.hint = QLabel()
         self.hint.setObjectName("hint")
         self.hint.setWordWrap(True)
+        self.hint.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.hint.linkActivated.connect(lambda _l: self._set_mode("edit", prefill=""))
         root.addWidget(self.hint)
         self.setStyleSheet(CARD_STYLE)
 
@@ -159,7 +213,7 @@ class DeckConfirmPopup(QWidget):
         self._fade_deadline = None
         self._leaving = False
         self._outro.stop()
-        if request.get("needs_input"):
+        if request.get("needs_input") and not self._candidates():
             guess = self.current if request.get("source") == "guess" else ""
             self._set_mode("edit", prefill=guess, focus=False)
         else:
@@ -190,7 +244,7 @@ class DeckConfirmPopup(QWidget):
             self._fade_deadline = None
             return
         if self._fade_deadline is None:
-            if menu_seen > float(self.request.get("created") or 0):
+            if menu_seen > float(self.request.get("created") or 0) and not self._low_confidence():
                 self._fade_deadline = max(now + FADE_AFTER_MENU_S, self._shown_at + MIN_VISIBLE_S)
             elif now - self._shown_at > MAX_SHOW_S:
                 self._fade_deadline = now
@@ -202,20 +256,33 @@ class DeckConfirmPopup(QWidget):
         self.mode = mode
         result = (self.request or {}).get("result", "").upper()
         source = (self.request or {}).get("source")
-        self.name.setVisible(mode in ("show", "done"))
+        has_choices = mode == "show" and bool(self._candidates())
+        self.name.setVisible(mode == "done" or (mode == "show" and not has_choices))
+        self.choices_box.setVisible(has_choices)
         self.field.setVisible(mode == "edit")
         self.new_box.setVisible(mode == "new")
         self.chip.setVisible(mode in ("show", "edit"))
         self.close_btn.setVisible(mode != "done")
         self.name.setContentsMargins(0, 0, 26 if mode == "done" else 0, 0)
         if mode == "show":
-            self.accent = BLUE if source in ("ai", "cards") else AMBER
-            self.caption.setText("OPPONENT DECK" + (f"  ·  {result}" if result else ""))
+            low = self._low_confidence()
+            self.accent = BLUE if source in ("ai", "cards") and not low else AMBER
+            self.caption.setText(("WHICH DECK WAS IT?" if low else "OPPONENT DECK")
+                                 + (f"  ·  {result}" if result else ""))
             # cards = picked from the opponent's revealed cards vs public decklists
-            self._set_chip({"ai": "AI", "cards": "CARDS"}.get(source, "GUESS"), self.accent)
+            chip = {"ai": "AI", "cards": "CARDS"}.get(source, "GUESS")
+            confidence = (self.request or {}).get("confidence")
+            if confidence is not None:
+                chip += f" {int(confidence)}%"
+            self._set_chip(chip, self.accent)
             self.chip.setVisible(source in ("ai", "cards", "guess"))
             self._set_name(self.current or "Unknown")
-            self.hint.setText("Wrong? Click to fix" if self.current else "Click to set the deck")
+            self._fill_choices()
+            if has_choices:
+                self.hint.setText("Click the right deck to confirm  ·  <a href='other' style='color:#B8C2CC;'>"
+                                  "Other…</a>")
+            else:
+                self.hint.setText("Wrong? Click to fix" if self.current else "Click to set the deck")
         elif mode == "edit":
             self.accent = AMBER if (self.request or {}).get("needs_input") else BLUE
             asked = (self.request or {}).get("needs_input")
@@ -241,8 +308,43 @@ class DeckConfirmPopup(QWidget):
             self.hint.setText("")
         self.hint.setVisible(bool(self.hint.text()))
         self.adjustSize()
+        # sizeHint ignores word-wrapped labels; size to the height they need at CARD_W.
+        needed = self.layout().totalHeightForWidth(CARD_W)
+        if needed > self.height():
+            self.resize(CARD_W, needed)
         self._reposition()
         self.update()
+
+    def _candidates(self):
+        """[(deck, probability or None)] from the request, the pick first."""
+        out, seen = [], set()
+        for item in [{"deck": self.current, "p": None}] + list((self.request or {}).get("candidates") or []):
+            deck = " ".join(str((item or {}).get("deck") or "").split())
+            key = deck.casefold()
+            if not deck or key in seen or key.startswith("unknown"):
+                continue
+            if key == self.current.casefold() and item.get("p") is None and out:
+                continue
+            seen.add(key)
+            out.append((deck, item.get("p")))
+        # The pick's probability comes from the candidates list when present.
+        probs = {(i.get("deck") or "").casefold(): i.get("p") for i in (self.request or {}).get("candidates") or []}
+        out = [(d, p if p is not None else probs.get(d.casefold())) for d, p in out]
+        return out[:3] if len(out) > 1 else []
+
+    def _low_confidence(self):
+        confidence = (self.request or {}).get("confidence")
+        return confidence is not None and int(confidence) < LOW_CONFIDENCE
+
+    def _fill_choices(self):
+        while self.choices.count():
+            item = self.choices.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for deck, probability in self._candidates():
+            button = ChoiceButton(deck, probability, picked=deck.casefold() == self.current.casefold())
+            button.clicked.connect(lambda _c=False, d=deck: self._save(d))
+            self.choices.addWidget(button)
 
     def _set_name(self, text):
         metrics = self.name.fontMetrics()
@@ -413,6 +515,15 @@ CARD_STYLE = """
     QLabel#name { color: #F2F4F7; font-size: 13px; font-weight: 600; }
     QLabel#hint { color: #7D848D; font-size: 9px; }
     QLabel#msg { color: #C9CED6; font-size: 10px; }
+    QPushButton#choice, QPushButton#choicePicked {
+        background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 7px; padding: 0px; text-align: left; }
+    QPushButton#choice:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.26); }
+    QPushButton#choicePicked { background: rgba(74,159,216,0.16); border-color: rgba(74,159,216,0.55); }
+    QPushButton#choicePicked:hover { background: rgba(74,159,216,0.26); }
+    QLabel#choiceName { color: #EEF1F5; font-size: 11px; font-weight: 600; }
+    QLabel#choicePct { color: #8E959E; font-size: 9px; font-weight: 700; }
+    QLabel#choiceMark { color: #7CC4F0; font-size: 10px; font-weight: 800; }
     QToolButton#close { background: transparent; border: none; color: #6F767F; font-size: 9px; padding: 0 2px; }
     QToolButton#close:hover { color: #E6E6E6; }
     QLineEdit#field {

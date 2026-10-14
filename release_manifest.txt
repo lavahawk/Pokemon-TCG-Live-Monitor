@@ -29,6 +29,7 @@ charts.py
 ui_widgets.py
 deck_popup.py
 deck_confirm.py
+sounds.py
 deck_analytics.py
 deck_score.py
 formulas.py

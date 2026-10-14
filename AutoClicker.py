@@ -250,24 +250,53 @@ class AutoClicker:
     # ── clicking ───────────────────────────────────────────────────────
     @staticmethod
     def physical_click(x, y, restore=True):
-        """Real cursor click (SendInput-equivalent) with Unity-safe timing."""
+        """Real cursor click with Unity-safe timing that survives the user
+        moving the mouse meanwhile.
+
+        * The cursor is pinned to the target with ClipCursor for the whole
+          down/up/settle window, so a moving mouse can't drag it off.
+        * Down and up are sent as absolute-position events (the position
+          travels with the event), and the position is re-asserted first.
+        * If the user is holding the left button (dragging), wait for the
+          release (up to 1.5 s) instead of injecting a click mid-drag.
+        """
         import ctypes
+        from ctypes import wintypes
         user32 = ctypes.windll.user32
-        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0002, 0x0004
+        MOVE, LEFTDOWN, LEFTUP = 0x0001, 0x0002, 0x0004
+        ABSOLUTE, VIRTUALDESK = 0x8000, 0x4000
+        x, y = int(x), int(y)
 
-        class POINT(ctypes.Structure):
-            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-        saved = POINT()
+        saved = wintypes.POINT()
         have_saved = bool(user32.GetCursorPos(ctypes.byref(saved)))
-        user32.SetCursorPos(int(x), int(y))
-        time.sleep(0.08)
-        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        time.sleep(0.06)
-        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-        time.sleep(0.25)  # Unity reads the click a frame after mouse-up
-        if restore and have_saved:
-            user32.SetCursorPos(saved.x, saved.y)
+
+        deadline = time.time() + 1.5
+        while user32.GetAsyncKeyState(0x01) & 0x8000 and time.time() < deadline:
+            time.sleep(0.02)
+
+        # Absolute coordinates are normalised over the virtual desktop.
+        vx, vy = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+        vw, vh = max(2, user32.GetSystemMetrics(78)), max(2, user32.GetSystemMetrics(79))
+        nx = int(round((x - vx) * 65535 / (vw - 1)))
+        ny = int(round((y - vy) * 65535 / (vh - 1)))
+
+        def press(flag):
+            user32.SetCursorPos(x, y)
+            user32.mouse_event(MOVE | ABSOLUTE | VIRTUALDESK | flag, nx, ny, 0, 0)
+
+        clip = wintypes.RECT(x, y, x + 1, y + 1)
+        try:
+            user32.SetCursorPos(x, y)
+            user32.ClipCursor(ctypes.byref(clip))
+            time.sleep(0.08)
+            press(LEFTDOWN)
+            time.sleep(0.06)
+            press(LEFTUP)
+            time.sleep(0.25)  # Unity reads the click a frame after mouse-up
+        finally:
+            user32.ClipCursor(None)
+            if restore and have_saved:
+                user32.SetCursorPos(saved.x, saved.y)
         return True
 
     def click_button(self, template_name, region=None, force=False, mode="physical"):

@@ -38,7 +38,6 @@ from version import VERSION
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, "Logs")
-SOUND_FILE = os.path.join(BASE_DIR, "ding.mp3")
 PARSER_SCRIPT = os.path.join(BASE_DIR, "AIParseBattleLog.py")
 OVERLAY_SCRIPT = os.path.join(BASE_DIR, "OverlayUI.py")
 BLOCKER_SCRIPT = os.path.join(BASE_DIR, "ContinueBlocker.py")
@@ -278,15 +277,12 @@ def set_low_priority(low):
 
 
 def play_sound_async():
-    def _play():
-        try:
-            import pygame
-            if not pygame.mixer.get_init():
-                pygame.mixer.init()
-            pygame.mixer.Sound(SOUND_FILE).play()
-        except Exception:
-            pass
-    threading.Thread(target=_play, daemon=True).start()
+    """The import sound chosen in Advanced → Preferences · Sound (sounds.py)."""
+    try:
+        import sounds
+        sounds.play_import_sound()
+    except Exception:
+        pass
 
 
 def _no_window_flags():

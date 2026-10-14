@@ -23,6 +23,7 @@ LOG_DIR = os.path.join(BASE_DIR, "Logs")
 REQUEST_FILE = os.path.join(LOG_DIR, ".deck_confirm.json")
 MENU_SEEN_FILE = os.path.join(LOG_DIR, ".menu_seen")
 LIMITLESS_CACHE_FILE = os.path.join(BASE_DIR, ".meta_cache_limitless_standard.json")
+ICON_DIR = os.path.join(BASE_DIR, ".meta_icon_cache")
 
 REQUEST_MAX_AGE_S = 15 * 60  # an older request is stale (e.g. overlay restarted later)
 OTHER = "Other"
@@ -36,12 +37,15 @@ def _write_json(path, data):
     os.replace(tmp, path)
 
 
-def write_request(battle_id, deck, *, source, needs_input, my_deck=None, result=None):
+def write_request(battle_id, deck, *, source, needs_input, my_deck=None, result=None,
+                  confidence=None, candidates=()):
     """Ask the overlay to show (or ask for) the opponent's deck of a saved battle.
 
     source: "ai" (picked by the AI parser), "cards" (from the opponent's
             revealed cards vs public decklists), "guess" (local guess from
             the log) or "none" (nothing to go on).
+    candidates: up to 3 (deck, probability 0-1 or None), best first; the
+            card offers them as one-click choices.
     """
     _write_json(REQUEST_FILE, {
         "battle_id": battle_id,
@@ -50,9 +54,32 @@ def write_request(battle_id, deck, *, source, needs_input, my_deck=None, result=
         "needs_input": bool(needs_input),
         "my_deck": my_deck or "",
         "result": result or "",
+        "confidence": confidence,
+        "candidates": [{"deck": d, "p": p} for d, p in candidates if d],
         "created": time.time(),
         "handled": False,
     })
+
+
+_icon_rows = {}
+
+
+def deck_icon_paths(deck, limit=2):
+    """Icon files (.meta_icon_cache/<pokemon>.png) for a deck name: the meta
+    sheet's icons for a known archetype, else Pokemon named in the deck."""
+    if "rows" not in _icon_rows:
+        try:
+            with open(LIMITLESS_CACHE_FILE, "r", encoding="utf-8") as handle:
+                rows = (json.load(handle) or {}).get("rows") or []
+        except Exception:
+            rows = []
+        _icon_rows["rows"] = {str(r.get("deck") or "").casefold(): r.get("icons") or [] for r in rows}
+    names = _icon_rows["rows"].get(" ".join(str(deck or "").split()).casefold())
+    if not names:
+        words = [w.strip("'’").lower() for w in str(deck or "").replace("'s ", " ").split()]
+        names = [w for w in words if os.path.exists(os.path.join(ICON_DIR, f"{w}.png"))]
+    paths = [os.path.join(ICON_DIR, f"{n}.png") for n in names]
+    return [p for p in paths if os.path.exists(p)][:limit]
 
 
 def read_request():

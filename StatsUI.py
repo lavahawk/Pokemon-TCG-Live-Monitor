@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, Property, QThread, Signal, QSize, QObject, QPoint, QEvent, QRectF, QPointF
 from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QLinearGradient, QFont, QIcon
-from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QSizePolicy
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QSizePolicy, QAbstractItemView
 from PySide6.QtTest import QTest
 from BattleDatabase import BattleDatabase
 from weights import cached_expansions, load_weights, save_weights, DEFAULT_WEIGHTS, LABELS as WEIGHT_LABELS
@@ -227,6 +227,7 @@ LIMITLESS_TOURNAMENT_FLAG_FILE = os.path.join(BASE_DIR, ".in_tournament")
 # attached to the battle record for later review.
 LIMITLESS_CHAT_CAPTURE_FILE = os.path.join(BASE_DIR, ".chat_capture.json")
 LIMITLESS_SOUND_FILE = os.path.join(BASE_DIR, "ding.mp3")
+BATTLE_MGMT_LIMIT = 50  # rows in Advanced → Battle Database Management
 LIMITLESS_CHECK_INTERVAL_MS = 60000
 LIMITLESS_CHECK_DELAY_MS = 12000
 LIMITLESS_CHAT_POLL_INTERVAL_MS = 3000
@@ -5736,6 +5737,7 @@ class StatsWindow(QWidget):
 
         layout.addWidget(self._create_weights_card())
         layout.addWidget(self._create_overlay_prefs_card())
+        layout.addWidget(self._create_sound_prefs_card())
         layout.addWidget(self._create_import_card())
 
         # Debugging Section
@@ -5924,18 +5926,19 @@ class StatsWindow(QWidget):
         battle_mgmt_layout.setSpacing(8)
         battle_mgmt_layout.setContentsMargins(12, 8, 12, 12)
         
-        # Recent battles list
-        battles_label = QLabel("Recent Battles (Last 20)")
-        battles_label.setStyleSheet("color: rgba(255, 255, 255, 0.8); font-size: 11px; font-weight: 600; margin-top: 4px;")
+        battles_label = QLabel(f"Last {BATTLE_MGMT_LIMIT} battles. Click a field to edit it; changes save "
+                               "automatically. 🏆 = tournament game.")
+        battles_label.setObjectName("settingsDesc")
+        battles_label.setWordWrap(True)
         battle_mgmt_layout.addWidget(battles_label)
-        
+
         self.battle_mgmt_table = self._make_meta_table(
-            ["Time", "My Deck", "Opponent", "Result", "Rank", "Confidence", "Source", "Log", "Tournament", "", ""],
-            [150, 120, 150, 74, 60, 80, 70, 80, 80, 100, 100],
+            ["Time", "My Deck", "Opponent", "Result", "Rank", "Conf.", "Source", ""],
+            None,
             sortable=False,
             stretch_last=False,
         )
-        self.battle_mgmt_table.setFixedHeight(320)
+        self.battle_mgmt_table.setFixedHeight(380)
         self.battle_mgmt_table.setEditTriggers(
             QTableWidget.EditTrigger.CurrentChanged
             | QTableWidget.EditTrigger.SelectedClicked
@@ -5943,27 +5946,20 @@ class StatsWindow(QWidget):
         )
         self.battle_mgmt_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         self.battle_mgmt_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        # Use fixed widths for every column so the action buttons (Replay /
-        # Delete) always have enough room and are never squeezed by stretch
-        # columns. Only the "My Deck" and "Opponent" columns stretch to fill
-        # leftover space.
+        # Fixed widths everywhere except the two deck names, so the action
+        # buttons always get their room (ResizeToContents squeezed them).
         header = self.battle_mgmt_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.battle_mgmt_table.verticalHeader().setDefaultSectionSize(36)
+        for column, width in ((0, 124), (3, 64), (4, 58), (5, 54), (6, 76), (7, 214)):
+            self.battle_mgmt_table.setColumnWidth(column, width)
+        self.battle_mgmt_table.verticalHeader().setDefaultSectionSize(38)
         self.battle_mgmt_table.cellClicked.connect(self._handle_battle_mgmt_cell_clicked)
         self.battle_mgmt_table.itemChanged.connect(self._handle_battle_mgmt_item_changed)
         battle_mgmt_layout.addWidget(self.battle_mgmt_table)
         
-        # Refresh button
-        refresh_battles_btn = QPushButton("Refresh Battle List")
-        refresh_battles_btn.setObjectName("settingsBtn")
-        refresh_battles_btn.setFixedHeight(35)
-        refresh_battles_btn.clicked.connect(self.refresh_battle_management)
-        battle_mgmt_layout.addWidget(refresh_battles_btn)
-        
-        self.battle_mgmt_status_label = QLabel("Click a field to edit it. Changes save automatically.")
+        self.battle_mgmt_status_label = QLabel("")
         self.battle_mgmt_status_label.setObjectName("settingsDesc")
         self.battle_mgmt_status_label.setWordWrap(True)
         battle_mgmt_layout.addWidget(self.battle_mgmt_status_label)
@@ -6370,6 +6366,8 @@ class StatsWindow(QWidget):
             self._ensure_trainerhill_view()
         elif tab_name == "Japan Data":
             self._render_japan_table()
+        elif tab_name == "Advanced":
+            self._refresh_battle_mgmt_if_stale()
 
     def _meta_header_bar(self, title_text, last_updated_label, refresh_btn, browser_url=None, browser_label="Open in Browser"):
         """Build the top bar used by all meta tabs: title | last updated | refresh | browser btn."""
@@ -8718,6 +8716,60 @@ class StatsWindow(QWidget):
         card.layout().addLayout(body)
         return card
 
+    def _create_sound_prefs_card(self):
+        """Advanced → Preferences · Sound: what plays when a battle is imported."""
+        import sounds
+        card = self.create_card("Preferences · Sound")
+        body = QVBoxLayout()
+        body.setContentsMargins(12, 0, 12, 12)
+        body.setSpacing(8)
+        settings = load_app_settings()
+
+        enabled = QCheckBox("Play a sound when a battle is imported")
+        enabled.setObjectName("settingsCheck")
+        enabled.setChecked(bool(settings.get("import_sound_enabled", True)))
+        body.addWidget(enabled)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        combo = QComboBox()
+        combo.setObjectName("metaCombo")
+        for key, label in sounds.SOUNDS.items():
+            combo.addItem(label, key)
+        current = settings.get("import_sound", sounds.DEFAULT_SOUND)
+        combo.setCurrentIndex(max(0, combo.findData(current)))
+        row.addWidget(combo)
+
+        volume_label = QLabel("Volume")
+        volume_label.setStyleSheet("color: rgba(235,242,250,0.85); font-size: 11px;")
+        row.addWidget(volume_label)
+        volume = QSlider(Qt.Orientation.Horizontal)
+        volume.setRange(0, 100)
+        volume.setFixedWidth(140)
+        volume.setValue(int(settings.get("import_sound_volume", sounds.DEFAULT_VOLUME)))
+        row.addWidget(volume)
+
+        preview = QPushButton("▶ Preview")
+        preview.setObjectName("settingsBtn")
+        preview.setFixedHeight(30)
+        row.addWidget(preview)
+        row.addStretch()
+        body.addLayout(row)
+
+        def sync_enabled(checked):
+            for widget in (combo, volume, volume_label, preview):
+                widget.setEnabled(checked)
+        sync_enabled(enabled.isChecked())
+        enabled.toggled.connect(lambda c: (self._save_app_setting("import_sound_enabled", bool(c)),
+                                           sync_enabled(c)))
+        combo.currentIndexChanged.connect(lambda _i: (
+            self._save_app_setting("import_sound", combo.currentData()),
+            sounds.play(combo.currentData(), volume.value())))
+        volume.sliderReleased.connect(lambda: self._save_app_setting("import_sound_volume", volume.value()))
+        preview.clicked.connect(lambda: sounds.play(combo.currentData(), volume.value()))
+        card.layout().addLayout(body)
+        return card
+
     def _create_import_card(self):
         """Advanced → Import your results: games played before using the app
         or at an in-person event, entered as a record with a weight."""
@@ -9569,6 +9621,8 @@ class StatsWindow(QWidget):
 
     def load_stats(self):
         """Load and display all statistics"""
+        if self.tab_widget.tabText(self.tab_widget.currentIndex()) == "Advanced":
+            QTimer.singleShot(0, self._refresh_battle_mgmt_if_stale)
         try:
             try:
                 self._last_data_signature = self.db.data_signature()
@@ -10284,15 +10338,6 @@ class StatsWindow(QWidget):
         table = getattr(self, "battle_mgmt_table", None)
         if table is None:
             return
-        # Clicking the Log column opens the battle log file on the PC.
-        if column == 7:
-            item = table.item(row, column)
-            if item is None:
-                return
-            log_name = item.data(Qt.ItemDataRole.UserRole + 1)
-            if log_name:
-                self.open_log_file_on_pc(log_name)
-            return
         if column not in (1, 2, 3, 4, 5, 6):
             return
         item = table.item(row, column)
@@ -10362,24 +10407,39 @@ class StatsWindow(QWidget):
         item.setFlags(flags)
         return item
 
-    def _populate_battle_mgmt_action_cell(self, row, column, label, callback, object_name):
-        button = QPushButton(label)
-        button.setObjectName(object_name)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setFixedHeight(28)
-        # Give the button a comfortable minimum width so it's always readable.
-        button.setMinimumWidth(84)
-        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        button.clicked.connect(callback)
-        # Wrap in a container with small margins so the button fills the cell
-        # width and has breathing room.
+    def _populate_battle_mgmt_actions(self, row, buttons):
+        """One cell of compact buttons: [(label, tooltip, callback or None, object_name)]."""
         wrapper = QWidget()
         wrapper.setStyleSheet("background: transparent;")
         wrap_layout = QHBoxLayout(wrapper)
-        wrap_layout.setContentsMargins(4, 3, 4, 3)
-        wrap_layout.setSpacing(0)
-        wrap_layout.addWidget(button)
-        self.battle_mgmt_table.setCellWidget(row, column, wrapper)
+        wrap_layout.setContentsMargins(4, 0, 4, 0)
+        wrap_layout.setSpacing(4)
+        wrap_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        for label, tip, callback, object_name in buttons:
+            button = QPushButton(label)
+            button.setObjectName(object_name)
+            button.setToolTip(tip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedHeight(26)
+            button.setStyleSheet("padding: 0px 8px;")
+            button.setEnabled(callback is not None)
+            if callback is not None:
+                button.clicked.connect(callback)
+            wrap_layout.addWidget(button)
+        self.battle_mgmt_table.setCellWidget(row, 7, wrapper)
+
+    def _refresh_battle_mgmt_if_stale(self):
+        """Keeps the editor current without a Refresh button: rebuilt when the
+        data changed since it was filled (never while a field is being edited)."""
+        table = getattr(self, "battle_mgmt_table", None)
+        if table is None or table.state() == QAbstractItemView.State.EditingState:
+            return
+        try:
+            signature = self.db.data_signature()
+        except Exception:
+            signature = None
+        if signature is None or signature != getattr(self, "_battle_mgmt_signature", None):
+            self.refresh_battle_management()
 
     def _handle_battle_mgmt_item_changed(self, item):
         if not item or getattr(self, "_battle_mgmt_populating", False):
@@ -10454,7 +10514,11 @@ class StatsWindow(QWidget):
             table.clearContents()
             table.setRowCount(0)
 
-            battles = self.db.get_recent_battles_with_ids(limit=20)
+            try:
+                self._battle_mgmt_signature = self.db.data_signature()
+            except Exception:
+                self._battle_mgmt_signature = None
+            battles = self.db.get_recent_battles_with_ids(limit=BATTLE_MGMT_LIMIT)
             if not battles:
                 self._set_battle_mgmt_status("No battles found.")
                 return
@@ -10465,9 +10529,11 @@ class StatsWindow(QWidget):
 
                 try:
                     time_obj = datetime.fromisoformat(timestamp)
-                    time_str = time_obj.strftime("%m/%d/%Y %H:%M:%S")
+                    time_str = time_obj.strftime("%b %d · %H:%M")
                 except Exception:
                     time_str = timestamp
+                if is_tournament:
+                    time_str = f"🏆 {time_str}"
 
                 items = [
                     self._make_battle_mgmt_item(battle_id, time_str, editable=False),
@@ -10477,32 +10543,26 @@ class StatsWindow(QWidget):
                     self._make_battle_mgmt_item(battle_id, my_rank, editable=True),
                     self._make_battle_mgmt_item(battle_id, confidence, editable=True),
                     self._make_battle_mgmt_item(battle_id, deck_source, editable=True),
-                    self._make_battle_mgmt_item(battle_id, os.path.basename(log_file) if log_file else "", editable=False),
-                    self._make_battle_mgmt_item(battle_id, "T" if is_tournament else "", editable=False),
+                    self._make_battle_mgmt_item(battle_id, "", editable=False),
                 ]
+                log_name = os.path.basename(log_file) if log_file else ""
+                items[0].setToolTip(f"Battle #{battle_id} · {timestamp}" + (f"\n{log_name}" if log_name else ""))
                 for column, item in enumerate(items):
                     table.setItem(row, column, item)
 
-                if log_file:
-                    self._populate_battle_mgmt_action_cell(
-                        row,
-                        9,
-                        "Replay",
-                        lambda checked=False, lf=log_file: self.open_battle_replay(lf),
-                        "battleMgmtReplayBtn",
-                    )
-                else:
-                    table.setItem(row, 9, self._make_battle_mgmt_item(battle_id, "", editable=False))
+                self._populate_battle_mgmt_actions(row, [
+                    ("Replay", "Open this battle in the Replay tab",
+                     (lambda checked=False, lf=log_file: self.open_battle_replay(lf)) if log_file else None,
+                     "battleMgmtReplayBtn"),
+                    ("Log", f"Open {log_name}" if log_name else "No log file",
+                     (lambda checked=False, lf=log_file: self.open_log_file_on_pc(lf)) if log_file else None,
+                     "battleMgmtReplayBtn"),
+                    ("Delete", f"Delete battle #{battle_id}",
+                     lambda checked=False, bid=battle_id: self.delete_battle(bid),
+                     "battleMgmtDeleteBtn"),
+                ])
 
-                self._populate_battle_mgmt_action_cell(
-                    row,
-                    10,
-                    "Delete",
-                    lambda checked=False, bid=battle_id: self.delete_battle(bid),
-                    "battleMgmtDeleteBtn",
-                )
-
-            self._set_battle_mgmt_status("Click a field to edit it. Changes save automatically.")
+            self._set_battle_mgmt_status("")
             print(f"Loaded {len(battles)} battles for management")
 
         except Exception as e:
@@ -11002,6 +11062,11 @@ class StatsWindow(QWidget):
             QPushButton#battleMgmtReplayBtn:hover {
                 background: rgba(74,159,216,0.34);
                 border-color: rgba(74,159,216,0.55);
+            }
+            QPushButton#battleMgmtReplayBtn:disabled {
+                background: rgba(255,255,255,0.04);
+                border-color: rgba(255,255,255,0.08);
+                color: rgba(238,246,255,0.30);
             }
 
             QPushButton#battleMgmtDeleteBtn {

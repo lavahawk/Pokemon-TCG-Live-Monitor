@@ -4,7 +4,7 @@ files: [AutoClicker.py, ContinueBlocker.py, SetupAutoClicker.py, button_template
 ---
 # Battle-end automation
 
-Goal: when a battle ends, click **BATTLE LOG** → **export** before the user hits **Continue**, so the log is copied automatically; cover Continue with a themed blocker meanwhile. Design history: `BATTLE_END_AUTOCLICKER_HANDOFF.md` (repo root).
+Goal: when a battle ends, click **BATTLE LOG** → **export** before the user hits **Continue**, so the log is copied automatically; cover Continue with a themed blocker meanwhile. Design history: [[Battle-End AutoClicker History]] (archive).
 
 - `SetupAutoClicker.py`: fullscreen Tk screenshot of the **primary** monitor; drag a rectangle → `button_templates/<name>.png` (`battle_log`, `battle_log_export`).
 - `AutoClicker`: `cv2.matchTemplate` TM_CCOEFF_NORMED ≥ 0.8 on the bottom half of the game window (per-call `with mss.mss()`, but `__init__` leaks one, BUG-010). Clicks: PostMessage "background" (Unity ignores it) or physical `pyautogui` (move → down → up → restore cursor). Templates are pixel-exact, so they break on resize/scale changes.
