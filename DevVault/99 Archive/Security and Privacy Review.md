@@ -16,7 +16,7 @@ Threat model: a single-user desktop tool. The interesting attackers are (a) web 
 | SEC-06 | Med | fixed (v2.4) | Tesseract installer downloaded and executed (often as admin) with no hash/signature check; predictable `%TEMP%` path |
 | SEC-07 | Low | fixed (v2.4) | `update_battle_record` builds SQL column names from dict keys (latent SQL injection) |
 | SEC-08 | Low | fixed (v2.4) | Sprite cache filename only strips `/`; `\` / `..` from remote icon names → path traversal on Windows |
-| SEC-09 | Info | open | Third-party data sharing isn't disclosed in the UI (full battle logs incl. opponent names → OpenAI, ptcglreplay) |
+| SEC-09 | Info | fixed (post-2.6.0) | Third-party data sharing isn't disclosed in the UI (full battle logs incl. opponent names → OpenAI, ptcglreplay) |
 | SEC-10 | Info | ok | Limitless session cookies live in `.limitless_web_profile/` (gitignored; make sure release builders never zip the folder wholesale) |
 | SEC-11 | Med | fixed (v2.4) | Install bat registers the monitor as a scheduled task with `/rl highest`, so the whole app (incl. WebEngine browsing) runs elevated at every logon |
 

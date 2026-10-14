@@ -29,11 +29,10 @@ See **Session log** below.
 ## Open
 - [x] v2.6.0 released 2026-10-14 (installer smoke-tested in the build; not yet install-tested on the PC).
 - [ ] 9 stored opponent labels contradicted by the opponent's cards (#4, 12, 17, 27, 32, 44, 48, 52, 56). Relabel only with the user's OK, after a DB backup.
-- [ ] SEC-09: no disclosure of third-party data sharing.
 - [ ] Ideas: rank chart per deck; tune `CLOSE_CALL` / `CLOSE_CONTENDER` once there are more confirmed labels; auto-capture a decklist when all 60 cards have been seen.
 
 ## Session log (newest first, one line each; prune past ~10 to the archive)
-- **2026-10-14 (post-2.6.0):** BUG-033 fixed: the dead Playwright helper subprocess is gone; without Playwright the replay opens in the default browser and Explorer selects the log to drag in (`_open_replay_manually`). `test_rank_weighted.py` now pins default weights and tie mode, so the user's settings no longer fail it. SEC-02 fixed: the OpenAI key is DPAPI-encrypted in `.openai_key.dpapi` (`app_settings`); a plaintext `.openai_key` (older versions, the installer) is migrated and deleted on first read.
+- **2026-10-14 (post-2.6.0):** BUG-033 fixed: the dead Playwright helper subprocess is gone; without Playwright the replay opens in the default browser and Explorer selects the log to drag in (`_open_replay_manually`). `test_rank_weighted.py` now pins default weights and tie mode, so the user's settings no longer fail it. SEC-02 fixed: the OpenAI key is DPAPI-encrypted in `.openai_key.dpapi` (`app_settings`); a plaintext `.openai_key` (older versions, the installer) is migrated and deleted on first read. SEC-09 fixed: privacy notice in Settings → AI Parsing Mode; `ai_anonymize_names` (default on) sends logs to OpenAI as Player / Opponent (`anonymize_battlelog`, `log_player_names`).
 - **2026-10-14:** vault slimmed (this note + archive). Shipped:
   - import sounds (`sounds.py`, Advanced → Preferences · Sound)
   - auto-export clicks pinned with `ClipCursor` (`AutoClicker.physical_click`)
