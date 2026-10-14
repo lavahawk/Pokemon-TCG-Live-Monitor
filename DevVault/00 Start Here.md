@@ -8,7 +8,7 @@ The only note to read on resume. Open other notes **only when the task touches t
 ## What it is
 A Windows app that watches Pokémon TCG Live. Battle log → SQLite (`tcg_battles.db`) → in-game HUD (`OverlayUI.py`) + dashboard (`StatsUI.py`, ~10k lines; grep, don't read).
 `TCGLiveMonitor.py` (monitor loop) runs `AIParseBattleLog.py` once per battle. `BattleEndAutomation.py` + `AutoClicker.py` export the log automatically. Settings live in `.app_settings.json` (`app_settings.py`; StatsUI `_save_app_setting`).
-Repo `lavahawk/Pokemon-TCG-Live-Monitor`, branch `main`. Commits have **no Claude attribution lines**. Latest release: v2.5.0.
+Repo `lavahawk/Pokemon-TCG-Live-Monitor`, branch `main`. Commits have **no Claude attribution lines**. Latest release: v2.6.0.
 
 ## Rules of the road
 - Python: `.venv\Scripts\python.exe`. Tests: `test_card_usage.py`, `test_rank_weighted.py`.
@@ -29,10 +29,11 @@ See **Session log** below.
 ## Open
 - [x] v2.6.0 released 2026-10-14 (installer smoke-tested in the build; not yet install-tested on the PC).
 - [ ] 9 stored opponent labels contradicted by the opponent's cards (#4, 12, 17, 27, 32, 44, 48, 52, 56). Relabel only with the user's OK, after a DB backup.
-- [ ] BUG-033: the Playwright replay fallback fails silently. SEC-02: the API key is in plaintext. SEC-09: no disclosure of third-party data sharing.
+- [ ] SEC-02: the API key is in plaintext. SEC-09: no disclosure of third-party data sharing.
 - [ ] Ideas: rank chart per deck; tune `CLOSE_CALL` / `CLOSE_CONTENDER` once there are more confirmed labels; auto-capture a decklist when all 60 cards have been seen.
 
 ## Session log (newest first, one line each; prune past ~10 to the archive)
+- **2026-10-14 (post-2.6.0):** BUG-033 fixed: the dead Playwright helper subprocess is gone; without Playwright the replay opens in the default browser and Explorer selects the log to drag in (`_open_replay_manually`). `test_rank_weighted.py` now pins default weights and tie mode, so the user's settings no longer fail it.
 - **2026-10-14:** vault slimmed (this note + archive). Shipped:
   - import sounds (`sounds.py`, Advanced → Preferences · Sound)
   - auto-export clicks pinned with `ClipCursor` (`AutoClicker.physical_click`)

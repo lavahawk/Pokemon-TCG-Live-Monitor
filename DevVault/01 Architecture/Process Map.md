@@ -78,4 +78,4 @@ Actual (because of BUG-001, BUG-008, BUG-017):
 - The parser never calls `is_tournament_battle()`, so no battle has ever been tagged (all 39 rows have `is_tournament=0`).
 
 ## 6. Replay
-Battle row click → `open_battle_replay` → rebuild a throwaway WebEngine profile → load ptcglreplay.com → inject the log file via a JS `DataTransfer` drop. Fallback: Playwright (not installed) → helper subprocess (fails silently) → plain browser.
+Battle row click → `open_battle_replay` → rebuild a throwaway WebEngine profile → load ptcglreplay.com → inject the log file via a JS `DataTransfer` drop. Fallback: Playwright (not installed) → default browser + Explorer selecting the log to drag in (`_open_replay_manually`).

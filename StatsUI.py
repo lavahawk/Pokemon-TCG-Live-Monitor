@@ -11,7 +11,6 @@ import re
 import math
 import threading
 import subprocess
-import textwrap
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -6161,14 +6160,7 @@ class StatsWindow(QWidget):
                 self._launch_ptcgl_replay_browser(log_file_path, headless=False, action_index=action_index)
             except Exception as e:
                 print(f"Error opening browser replay with preserved state: {e}")
-                try:
-                    self._launch_ptcgl_replay_helper(log_file_path, headless=False, action_index=action_index)
-                except Exception as helper_error:
-                    print(f"Replay browser helper fallback failed: {helper_error}")
-                    try:
-                        webbrowser.open(PTCGL_REPLAY_URL)
-                    except Exception:
-                        pass
+                self._open_replay_manually(log_file_path)
 
         threading.Thread(target=worker, daemon=True).start()
     
@@ -10796,105 +10788,18 @@ class StatsWindow(QWidget):
                 except Exception:
                     pass
 
-    def _build_ptcgl_replay_helper_script(self):
-        return textwrap.dedent(
-            f"""
-            import sys
-            import time
-
-            PTCGL_REPLAY_URL = {PTCGL_REPLAY_URL!r}
-
-            def main():
-                if len(sys.argv) < 2:
-                    raise RuntimeError("Missing battle log path")
-                log_file_path = sys.argv[1]
-                headless = "--headless" in sys.argv[2:]
-                action_index = 0
-                for arg in sys.argv[2:]:
-                    if arg.startswith("--action-index="):
-                        try:
-                            action_index = max(0, int(arg.split("=", 1)[1]))
-                        except Exception:
-                            action_index = 0
-                from playwright.sync_api import sync_playwright
-
-                with sync_playwright() as playwright:
-                    browser = None
-                    context = None
-                    launch_kwargs = {{
-                        "headless": headless,
-                        "args": ["--new-window", "--start-maximized"],
-                    }}
-                    launch_attempts = [
-                        ("msedge", lambda: playwright.chromium.launch(channel="msedge", **launch_kwargs)),
-                        ("chrome", lambda: playwright.chromium.launch(channel="chrome", **launch_kwargs)),
-                        ("chromium", lambda: playwright.chromium.launch(**launch_kwargs)),
-                    ]
-                    last_error = None
-                    for browser_name, launcher in launch_attempts:
-                        try:
-                            browser = launcher()
-                            context_kwargs = {{}}
-                            if not headless:
-                                context_kwargs["no_viewport"] = True
-                            context = browser.new_context(**context_kwargs)
-                            print(f"Opened PTCGL Replay using {{browser_name}}")
-                            break
-                        except Exception as exc:
-                            last_error = exc
-                            browser = None
-                            context = None
-
-                    if context is None:
-                        raise RuntimeError(f"Unable to launch a supported browser for PTCGL Replay: {{last_error}}")
-
-                    try:
-                        page = context.new_page()
-                        page.goto(PTCGL_REPLAY_URL, wait_until="domcontentloaded", timeout=60000)
-                        page.wait_for_selector('input[type="file"][accept=".txt"]', state="attached", timeout=60000)
-                        page.locator('input[type="file"][accept=".txt"]').set_input_files(log_file_path)
-                        page.wait_for_timeout(1500)
-                        page.wait_for_load_state("networkidle", timeout=60000)
-                        page.wait_for_selector("text=ACTION LOG", timeout=15000)
-                        if action_index > 0:
-                            next_action = page.locator('button[title="Next action"]')
-                            for _ in range(action_index):
-                                next_action.click(timeout=5000)
-                                page.wait_for_timeout(35)
-                        page.bring_to_front()
-                        if headless:
-                            return
-                        while any(not open_page.is_closed() for open_page in context.pages):
-                            time.sleep(1.0)
-                    finally:
-                        try:
-                            context.close()
-                        except Exception:
-                            pass
-                        try:
-                            browser.close()
-                        except Exception:
-                            pass
-
-            if __name__ == "__main__":
-                main()
-            """
-        )
-
-    def _launch_ptcgl_replay_helper(self, log_file_path, *, headless=False, action_index=0):
-        command = [sys.executable, "-c", self._build_ptcgl_replay_helper_script(), log_file_path]
-        if headless:
-            command.append("--headless")
-        if action_index:
-            command.append(f"--action-index={int(action_index)}")
-        popen_kwargs = {
-            "cwd": BASE_DIR,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-        }
-        if sys.platform == "win32":
-            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        return subprocess.Popen(command, **popen_kwargs)
+    def _open_replay_manually(self, log_file_path):
+        """Last resort: open PTCGL Replay in the default browser and show the log in Explorer to drag in."""
+        print(f"Opening PTCGL Replay in your browser; drag {os.path.basename(log_file_path)} onto the page.")
+        try:
+            webbrowser.open(PTCGL_REPLAY_URL)
+        except Exception as e:
+            print(f"Could not open the browser: {e}")
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", f"/select,{os.path.normpath(log_file_path)}"])
+        except Exception as e:
+            print(f"Could not show the log file: {e}")
 
     def open_battle_replay(self, log_file_path):
         """Open a battle log in PTCGL Replay and auto-load the .txt file."""
@@ -10924,14 +10829,7 @@ class StatsWindow(QWidget):
                     self._launch_ptcgl_replay_browser(resolved_path, headless=False)
                 except Exception as e:
                     print(f"Error opening PTCGL Replay: {e}")
-                    try:
-                        self._launch_ptcgl_replay_helper(resolved_path, headless=False)
-                    except Exception as helper_error:
-                        print(f"Replay helper fallback failed: {helper_error}")
-                        try:
-                            webbrowser.open(PTCGL_REPLAY_URL)
-                        except Exception:
-                            pass
+                    self._open_replay_manually(resolved_path)
 
             threading.Thread(target=worker, daemon=True).start()
             print(f"Opening battle replay for: {resolved_path}")

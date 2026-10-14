@@ -7,6 +7,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from deck_analytics import TOURNAMENT_WEIGHT, rank_weight, rank_weighted_winrate, wilson_interval
 from leagues import league_for_rank
 
+# Pin the defaults: the user's own settings (tie mode, custom ladder weights) must not change the tests.
+import copy
+import deck_analytics
+import weights
+weights.load_weights = lambda: copy.deepcopy(weights.DEFAULT_WEIGHTS)
+deck_analytics.tie_mode = lambda: "third"
+
 
 def test_league_thresholds_match_overlay():
     assert [league_for_rank(r) for r in (0, 29, 30, 110, 229, 230, 389, 390, 549, 550, 900)] == [

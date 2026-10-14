@@ -26,7 +26,7 @@ lines: 8243
 | 5891–5965 | PokeData embedded site |
 | 6305–6360 | `close_application` (terminates monitor by PID file) |
 | 6622–7128 | `load_stats`, headline cards, rank/win-rate charts (`charts.SeriesChart`, since 2026-10-12), deck list, recent battles |
-| 7137–7346 | Playwright replay fallback (BUG-033) |
+| 7137–7346 | Playwright replay fallback + `_open_replay_manually` |
 | 7390–7620 | Battle management table editing/deleting |
 | 7621–8228 | stylesheet |
 
