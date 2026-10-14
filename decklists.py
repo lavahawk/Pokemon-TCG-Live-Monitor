@@ -176,6 +176,8 @@ def link_decklist(deck_name, lid):
     lid None removes the link."""
     data = _load()
     links = data.setdefault("links", {})
+    if (data.get("auto_links") or {}).pop(deck_name, None) and not lid:
+        data.setdefault("auto_off", []).append(deck_name)  # unlinked an auto list: don't capture again
     if lid:
         links[deck_name] = lid
     else:
@@ -200,3 +202,110 @@ def import_decklist(text, deck_name):
     entry = save_decklist(text, deck_name)
     link_decklist(deck_name, entry["id"])
     return entry
+
+
+# ── auto-capture: a list built from the cards you showed in your games ──
+def is_auto_linked(deck_name):
+    """True when the deck's link was made by auto_capture (not by you)."""
+    data = _load()
+    lid = (data.get("links") or {}).get(deck_name)
+    return bool(lid) and (data.get("auto_links") or {}).get(deck_name) == lid
+
+
+def auto_capture(deck_name, text, games=0):
+    """Store `text` (a full 60-card list made from your games) and link it to
+    `deck_name`, marked as auto-captured. Never replaces a list you linked or
+    exported for that deck, nor a deck whose auto list you unlinked; a
+    previous auto-captured list is replaced. Returns the entry or None."""
+    if not deck_name or not text:
+        return None
+    data = _load()
+    lists = data.setdefault("lists", [])
+    links = data.setdefault("links", {})
+    auto = data.setdefault("auto_links", {})
+    if deck_name in (data.get("auto_off") or []):
+        return None
+    if deck_name in links and auto.get(deck_name) != links[deck_name]:
+        return None  # your own link
+    if deck_name not in links and any(e.get("menu_deck") == deck_name or
+                                      (e.get("name") == deck_name and e.get("named_by") == "ocr") for e in lists):
+        return None  # you exported this deck's list (older stores named it after the deck)
+    lid = list_id(text)
+    old = auto.get(deck_name)
+    if old == lid:
+        return next((e for e in lists if e["id"] == lid), None)
+    if old and old not in [v for k, v in links.items() if k != deck_name]:
+        lists[:] = [e for e in lists if not (e["id"] == old and e.get("auto_captured"))]
+    entry = next((e for e in lists if e["id"] == lid), None)
+    if entry is None:
+        name = f"{deck_name} (auto)"
+        taken = {e["name"] for e in lists}
+        base, n = name, 2
+        while name in taken:
+            name, n = f"{base[:-1]} {n})", n + 1
+        entry = {"id": lid, "name": name, "text": text.strip(), "cards": card_count(text),
+                 "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"), "named_by": "auto",
+                 "menu_deck": None, "auto_captured": {"deck": deck_name, "games": int(games)}}
+        lists.insert(0, entry)
+    links[deck_name] = lid
+    auto[deck_name] = lid
+    _save(data)
+    return entry
+
+
+def _resolve_log(path):
+    if not path:
+        return None
+    if os.path.isabs(path) and os.path.exists(path):
+        return path
+    rel = path.replace("\\", "/").lstrip("/")
+    for candidate in (os.path.join(BASE_DIR, rel), os.path.join(BASE_DIR, "Logs", os.path.basename(rel))):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def seen_in_games(deck_name, username, db_path=None, rows=None):
+    """card_usage.merge_seen over your games with `deck_name` (newest first),
+    from the battle logs in the database. Adds "logs": games with a readable log."""
+    import sqlite3
+    import card_usage
+    from AIParseBattleLog import load_meta_rows, parse_opponent_from_log, read_battlelog_file
+    rows = rows if rows is not None else load_meta_rows()
+    card_usage.set_known_cards(c["name"] for r in rows for c in r.get("cards") or [])
+    conn = sqlite3.connect(db_path or os.path.join(BASE_DIR, "tcg_battles.db"))
+    try:
+        paths = [p for (p,) in conn.execute(
+            "SELECT log_file FROM battles WHERE my_deck = ? ORDER BY timestamp DESC, id DESC", (deck_name,))]
+    finally:
+        conn.close()
+    games = []
+    for path in paths:
+        text = read_battlelog_file(_resolve_log(path))
+        if text:
+            opponent = parse_opponent_from_log(text, username)
+            games.append(card_usage.log_deck_counts(text, username, opponent))
+    result = card_usage.merge_seen(games)
+    result["logs"] = len(games)
+    return result
+
+
+def capture_from_games(deck_name, username, db_path=None, rows=None, store=True):
+    """After a battle: when your games with `deck_name` have shown all 60
+    cards and the deck has no list linked, save and link the list made from
+    them (auto_capture). Returns the merge_seen result plus "text",
+    "missing" (cards with no known print) and "entry" (the stored list)."""
+    import card_usage
+    if not deck_name or not username:
+        return None
+    if rows is None:
+        from AIParseBattleLog import load_meta_rows
+        rows = load_meta_rows()
+    result = seen_in_games(deck_name, username, db_path, rows)
+    result.update(text=None, missing=[], entry=None)
+    if result["complete"]:
+        prints = card_usage.card_prints(rows, [e.get("text") for e in all_decklists()])
+        result["text"], result["missing"] = card_usage.format_list(result["cards"], prints)
+        if result["text"] and store:
+            result["entry"] = auto_capture(deck_name, result["text"], result["games"])
+    return result
