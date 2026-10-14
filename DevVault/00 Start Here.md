@@ -43,3 +43,12 @@ See **Session log** below.
   - optional **HUD buddy** (`pet.py`, `pet_sprites/`, CC BY-NC). All of it is unverified on a live game: restart the overlay, then check a battle import (sound, deck card) and the auto-export clicks while moving the mouse.
 - **2026-10-14 (later):** `adblock.py` + `adblock_hosts.txt` (131 domains, editable): a `QWebEngineUrlRequestInterceptor` on every web profile (Limitless, Replay, TrainerHill, default). First-party hosts are never blocked; no cosmetic filtering. Setting `browser_adblock` (default on), toggled in Advanced → Preferences · Overlay. limitlesstcg.com home: 9 requests blocked.
 - **2026-10-14 (evening):** Meta tab decluttered: no legend line or ⚖; the status line is short with details on hover; the source legend is on the Sources heading; the weights note appears only on weighted headings while custom weights are on; cell hovers are short (`_score_brief`; the full `_score_tooltip` stays on the deck page); the Cards summary is compact. The decklist dialog watches the clipboard (`QClipboard.dataChanged`) and lists your exports; the decklist menu has section headers.
+- **2026-10-14 (night):** deck page: META SCORE and SCORE · YOUR GAMES (now shown ±) open Meta → Archetypes on your ★ row (`_show_deck_in_meta`, shown even when not starred via `_meta_focus_deck`), and META FACED scrolls to Matchups (`FlashOverlay` pulse). HUD buddy v2 (`pet.py`):
+  - 1.5× size, kept crisp at any DPR
+  - no shadow: feet touch the game window bottom and the top of the mini GUI (the overlay passes `drop` = 12 px / DPR and the ball position)
+  - per-species walk speed
+  - hops onto the HUD, peeks from below, goes into the Pokéball
+  - wakes on hover; right-click feeds it
+  - petting: double hop, hearts, faces that cycle
+  - shiny 1/50 (`pet_sprites/<sp>/shiny/`) with sparkles
+  - win: celebrates; loss: sad face, walks to the corner and naps (`react()`, called from `_poll_deck_confirm`)

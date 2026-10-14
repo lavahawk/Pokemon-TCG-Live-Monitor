@@ -432,6 +432,10 @@ class MinimalOverlay(QWidget):
                         from deck_popup import DeckConfirmPopup
                         self.deck_popup = DeckConfirmPopup(self.db)
                     self.deck_popup.offer(request, anchor)
+                    # HUD buddy: celebrate a win, mope after a loss (once per battle)
+                    if self.pet is not None and request.get("battle_id") != getattr(self, "_pet_reacted", None):
+                        self._pet_reacted = request.get("battle_id")
+                        self.pet.react(request.get("result"))
                     _dbg(f"deck popup: battle {request.get('battle_id')} {request.get('deck')!r} "
                          f"({request.get('source')}, needs_input={request.get('needs_input')})")
             if self.deck_popup is not None:
@@ -461,7 +465,9 @@ class MinimalOverlay(QWidget):
                 self.pet.set_species(species)
             show = self.isVisible() and getattr(self, "_overlay_placed", False)
             if show:
-                self.pet.follow(self.frameGeometry())
+                # the mini GUI sits 12 physical px inside the game window's bottom edge (follow_game_window)
+                self.pet.follow(self.frameGeometry(), self.ball_icon.mapToGlobal(self.ball_icon.rect().center()),
+                                drop=12 / (self.devicePixelRatioF() or 1.0))
                 if not self.pet.isVisible():
                     self.pet.show()
             elif self.pet.isVisible():

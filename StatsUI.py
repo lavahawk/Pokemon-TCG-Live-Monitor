@@ -9301,7 +9301,9 @@ class StatsWindow(QWidget):
         pet_row.setSpacing(8)
         pet_box = QCheckBox("HUD buddy: a pixel Pokémon that hangs out next to the overlay")
         pet_box.setObjectName("settingsCheck")
-        pet_box.setToolTip("It walks around, emotes and naps. Click it for a heart.")
+        pet_box.setToolTip("It roams the bottom of the game and hops onto the overlay, naps (hover to wake it), "
+                           "peeks, hides in the Pokéball, cheers your wins and mopes after losses.<br>"
+                           "Click: pet it · Right-click: feed it a berry · 1 in 50 is shiny.")
         pet_box.setChecked(bool(settings.get("overlay_pet", False)))
         pet_row.addWidget(pet_box)
         pet_combo = QComboBox()
