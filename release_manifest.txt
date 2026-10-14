@@ -51,6 +51,7 @@ button_templates\battle_log_export.png
 button_templates\battle_hud_gear.png
 button_templates\templates.json?
 pet_sprites\CREDITS.txt
+pet_sprites\eevee\Angry.png
 pet_sprites\eevee\Eat.png
 pet_sprites\eevee\Happy.png
 pet_sprites\eevee\Hop.png
@@ -69,6 +70,7 @@ pet_sprites\eevee\Surprised.png
 pet_sprites\eevee\Teary-Eyed.png
 pet_sprites\eevee\Walk.png
 pet_sprites\eevee\anim.json
+pet_sprites\eevee\shiny\Angry.png
 pet_sprites\eevee\shiny\Eat.png
 pet_sprites\eevee\shiny\Happy.png
 pet_sprites\eevee\shiny\Hop.png
@@ -86,6 +88,7 @@ pet_sprites\eevee\shiny\Surprised.png
 pet_sprites\eevee\shiny\Teary-Eyed.png
 pet_sprites\eevee\shiny\Walk.png
 pet_sprites\eevee\shiny\anim.json
+pet_sprites\gengar\Angry.png
 pet_sprites\gengar\Eat.png
 pet_sprites\gengar\Happy.png
 pet_sprites\gengar\Hop.png
@@ -101,6 +104,7 @@ pet_sprites\gengar\Surprised.png
 pet_sprites\gengar\Twirl.png
 pet_sprites\gengar\Walk.png
 pet_sprites\gengar\anim.json
+pet_sprites\gengar\shiny\Angry.png
 pet_sprites\gengar\shiny\Eat.png
 pet_sprites\gengar\shiny\Happy.png
 pet_sprites\gengar\shiny\Hop.png
@@ -118,6 +122,7 @@ pet_sprites\gengar\shiny\Surprised.png
 pet_sprites\gengar\shiny\Twirl.png
 pet_sprites\gengar\shiny\Walk.png
 pet_sprites\gengar\shiny\anim.json
+pet_sprites\pikachu\Angry.png
 pet_sprites\pikachu\Eat.png
 pet_sprites\pikachu\Happy.png
 pet_sprites\pikachu\Hop.png
@@ -136,6 +141,7 @@ pet_sprites\pikachu\Surprised.png
 pet_sprites\pikachu\Teary-Eyed.png
 pet_sprites\pikachu\Walk.png
 pet_sprites\pikachu\anim.json
+pet_sprites\pikachu\shiny\Angry.png
 pet_sprites\pikachu\shiny\Eat.png
 pet_sprites\pikachu\shiny\Happy.png
 pet_sprites\pikachu\shiny\Hop.png

@@ -144,3 +144,4 @@ installer/Output/
 .deck_archetypes.json
 # Generated UI images (spin box / combo arrows)
 .ui_cache/
+.pet_state.json

@@ -52,3 +52,11 @@ See **Session log** below.
   - petting: double hop, hearts, faces that cycle
   - shiny 1/50 (`pet_sprites/<sp>/shiny/`) with sparkles
   - win: celebrates; loss: sad face, walks to the corner and naps (`react()`, called from `_poll_deck_confirm`)
+- **2026-10-14 (late night):** buddy v3:
+  - stands slightly *on* the mini GUI (+2 px)
+  - peeks only clear of the mini GUI
+  - into the ball rarer (2%): turns white, accelerates along a curve into it; release arcs out
+  - battle start (`deck_confirm.mark_battle_started` from BattleEndAutomation → overlay → `pet.battle_start`): a cheer, then it slowly walks into the ball or naps right of the mini GUI until the result
+  - hidden meters in `.pet_state.json`: hunger in games, happiness, energy, level. Hearts by mood; angry fit when starving; more naps when hungry or tired.
+  - face bubbles on 1 in 5 clicks, only when fed
+  - treats (`TREATS`): Oran / Pecha / Cheri / Chesto / Sitrus with effects; Rare Candy 1/20 (level up, meters maxed, 30 min cooldown)

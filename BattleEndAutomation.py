@@ -166,6 +166,11 @@ class BattleEndAutomation(threading.Thread):
                     if hud:
                         if not in_battle:
                             self.log(f"Battle HUD detected ({details[0]}).")
+                            try:
+                                from deck_confirm import mark_battle_started
+                                mark_battle_started()
+                            except Exception:
+                                pass
                             # Load the Continue blocker now (hidden) so it can
                             # cover Continue the instant the end screen shows.
                             self.prewarm_blocker()

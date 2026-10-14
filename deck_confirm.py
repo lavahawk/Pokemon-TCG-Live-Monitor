@@ -117,6 +117,27 @@ def mark_menu_seen():
         pass
 
 
+BATTLE_START_FILE = os.path.join(LOG_DIR, ".battle_started")
+
+
+def mark_battle_started():
+    """The battle HUD appeared (BattleEndAutomation); the overlay's HUD buddy reacts."""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(BATTLE_START_FILE, "w", encoding="utf-8") as handle:
+            handle.write(f"{time.time():.3f}")
+    except OSError:
+        pass
+
+
+def battle_started_at():
+    try:
+        with open(BATTLE_START_FILE, "r", encoding="utf-8") as handle:
+            return float(handle.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0.0
+
+
 def menu_seen_at():
     try:
         with open(MENU_SEEN_FILE, "r", encoding="utf-8") as handle:

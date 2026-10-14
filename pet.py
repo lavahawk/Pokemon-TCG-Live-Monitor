@@ -5,8 +5,17 @@ It walks along the bottom, hops up onto the mini GUI, naps (hover it to wake
 it), emotes, peeks up from below, now and then hops into the mini GUI's
 Pokeball for a while, and rarely says something cute. 1 in 50 buddies is
 shiny (alternate colours, shiny sparkle when it appears).
-  Left-click:  it hops, smiles and sends hearts.
-  Right-click: drops a berry; it walks over and eats it.
+  Left-click:  it hops and sends hearts (3 when fed in the last 3 games,
+               1 when hungry, an angry fit when starving); a face bubble
+               now and then (1 in 5 clicks, only when fed).
+  Right-click: drops a treat; it walks over and eats it (= fed). Mostly
+               berries with different effects (TREATS), 1 in 20 a Rare
+               Candy (level up, meters maxed, 30 min cooldown).
+  Battles: a cheer when one starts, then it slowly heads into the Pokeball
+  or naps out of the way on the right; it celebrates a win and mopes off to
+  the corner for a nap after a loss. Hidden meters in .pet_state.json:
+  hunger (games since fed), happiness 0-100 (hearts, mood) and energy 0-100
+  (drains awake, refills asleep; low energy = more naps).
 
 Off by default: Advanced → Preferences · Overlay → "HUD buddy" (overlay_pet,
 overlay_pet_species). Sprites: pet_sprites/<species>/ (shiny in shiny/) from
@@ -31,6 +40,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SPRITE_DIR = os.path.join(BASE_DIR, "pet_sprites")
 SPECIES = ("pikachu", "gengar", "eevee")
 SHINY_ODDS = 1 / 50
+STATE_FILE = os.path.join(BASE_DIR, ".pet_state.json")
+SLEEPINESS = {"fed": 0.07, "hungry": 0.18, "angry": 0.28}
+ANGER = ("10001", "01010", "00000", "01010", "10001")  # anger mark
 
 SIZE = 1.5          # logical size vs the source sprite
 STRIP_W = 260       # floor to the left of the mini GUI (logical px)
@@ -42,11 +54,54 @@ EMOTES = ("Nod", "Pose", "Rotate", "Eat", "Hop", "Twirl")
 KAOMOJI = ("(◕‿◕)", "(^▽^)", "(｡♥‿♥｡)", "♪ ~", "(>ω<)", "(˘ω˘)", "(•‿•)/", "♥", "(^_^)b", "(✿◠‿◠)")
 HEART = ("01010", "11111", "11111", "01110", "00100")
 BERRY = ("00100", "01110", "11111", "11111", "01110")   # top pixel = leaf
+CANDY = ("1100011", "1111111", "0111110", "1111111", "1100011")
+# right-click treats: (weight, colour, effects). happy/energy are meter changes;
+# full = games it stays fed; hyper = seconds of zoomies; calm = no grumpiness.
+TREATS = {
+    "Oran":   (40, (70, 120, 230), {"happy": 10, "energy": 10, "full": 3}),
+    "Pecha":  (20, (245, 150, 190), {"happy": 18, "energy": 5, "full": 3, "calm": True}),
+    "Cheri":  (15, (225, 50, 60), {"happy": 8, "energy": 35, "full": 3, "hyper": 60}),
+    "Chesto": (12, (110, 80, 170), {"happy": 5, "energy": 60, "full": 3}),
+    "Sitrus": (8, (240, 210, 70), {"happy": 22, "energy": 15, "full": 6}),
+}
+RARE_CANDY_ODDS = 1 / 20
+RARE_CANDY_COOLDOWN_S = 30 * 60
 STAR = ("00100", "00100", "11011", "00100", "00100")     # shiny sparkle
 
 
 def available_species():
     return [s for s in SPECIES if os.path.exists(os.path.join(SPRITE_DIR, s, "anim.json"))]
+
+
+def _load_state():
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError, TypeError, AttributeError):
+        data = {}
+    state = {"games": 0, "fed_game": 0, "full_for": 3, "happiness": 60.0, "energy": 80.0, "level": 5,
+             "candy_ready_at": 0.0}
+    for key, default in state.items():
+        try:
+            state[key] = type(default)(data.get(key, default))
+        except (TypeError, ValueError):
+            pass
+    return state
+
+
+def _save_state(state):
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as handle:
+            json.dump(state, handle)
+    except OSError:
+        pass
+
+
+def _bezier(p0, c, p1, t):
+    a = (1 - t) * (1 - t)
+    b = 2 * (1 - t) * t
+    d = t * t
+    return QPointF(a * p0.x() + b * c.x() + d * p1.x(), a * p0.y() + b * c.y() + d * p1.y())
 
 
 def _ease(t):
@@ -119,8 +174,15 @@ class PetWidget(QWidget):
         self.bubble = None        # (kind, content, born, until)
         self.hearts, self.sparks, self.zs, self.stars = [], [], [], []
         self.berry = None         # [x, y, vy, landed]
-        self.scale_fx = 1.0       # capture / release
-        self.tint = 0.0
+        self.tint = 0.0           # 0..1 white (capture / release)
+        self.fx_pos, self.fx_scale = None, 1.0   # sprite centre / scale while flying to/from the ball
+        self.fx_from = self.fx_to = None
+        self.battle = False       # a battle is on: stay out of the way
+        self.speed_mul = 1.0
+        self.shake_until = self.anger_at = 0.0
+        self.hyper_until = 0.0
+        self.mem = _load_state()
+        self._saved_at = time.monotonic()
         self.flash = None         # time of the white burst at the ball
         self._next_twinkle = time.monotonic() + 20
         self._click_through = None
@@ -142,7 +204,7 @@ class PetWidget(QWidget):
                        if os.path.exists(os.path.join(folder, f"{n}.png"))}
         self.portraits = {}
         pr = max(1, round(dpr))
-        for name in ("Happy", "Joyous", "Inspired", "Surprised", "Normal", "Sad", "Teary-Eyed"):
+        for name in ("Happy", "Joyous", "Inspired", "Surprised", "Normal", "Sad", "Teary-Eyed", "Angry"):
             pix = QPixmap(os.path.join(folder, f"{name}.png"))
             if not pix.isNull():
                 pix = pix.scaled(40 * pr, 40 * pr, Qt.AspectRatioMode.KeepAspectRatio,
@@ -192,7 +254,7 @@ class PetWidget(QWidget):
     # ── geometry ──
     def floor(self, x):
         on_pill = self.pill.left() + 6 <= x <= self.pill.right() - 6
-        return float(self.pill.top() if on_pill else WIN_H)  # feet touch the surface
+        return float(self.pill.top() + 2 if on_pill else WIN_H)  # feet touch (slightly on) the surface
 
     def _feet_y(self):
         return self.floor(self.x) - self.y_off
@@ -200,6 +262,25 @@ class PetWidget(QWidget):
     def _sprite_rect(self):
         h = max(20, int(self.height_px))
         return QRect(int(self.x - h * 0.6), int(self._feet_y() - h - 2), int(h * 1.2), h + 4)
+
+    # ── mood ──
+    def mood(self):
+        """fed / hungry / angry from hunger (games since fed) and happiness."""
+        hunger = self.mem["games"] - self.mem["fed_game"]
+        full = self.mem["full_for"]
+        happy = self.mem["happiness"]
+        if hunger > full + 3 or happy < 15:
+            return "angry"
+        if hunger > full or happy < 40:
+            return "hungry"
+        return "fed"
+
+    def _meter(self, key, delta):
+        self.mem[key] = max(0.0, min(100.0, float(self.mem[key]) + delta))
+
+    def _centre(self):
+        sheet = self.sheets.get(self.anim) or next(iter(self.sheets.values()))
+        return QPointF(self.x, self._feet_y() - sheet.foot * self.L)
 
     # ── states ──
     def _enter(self, state, seconds=None, anim=None, loop=True):
@@ -222,22 +303,45 @@ class PetWidget(QWidget):
         self.row = ROW_RIGHT if self.target > self.x else ROW_LEFT
 
     def _next(self):
+        if self.battle:  # stay put until the result
+            self._enter(self.state if self.state in ("sleep", "ball") else "idle", 1800)
+            return
+        mood = self.mood()
         roll = random.random()
-        if roll < 0.04 and self.bubble is None:
+        if roll < 0.04 and mood == "fed" and self.bubble is None:
             self.say(random.choice(KAOMOJI))
-        if roll < 0.07:
-            self._enter("sleep", random.uniform(15, 40))
-        elif roll < 0.11:
-            self.walk_to(self.ball.x() + 14, then=lambda: self._enter("capture", 0.55))
-        elif roll < 0.15:
-            self._enter("peek", random.uniform(5.0, 8.0))
-        elif roll < 0.55:
+        sleep = SLEEPINESS[mood] + max(0.0, 40.0 - self.mem["energy"]) / 100.0
+        if time.monotonic() < self.hyper_until or self.mem["energy"] > 90:
+            sleep = 0.0
+        if roll < sleep:
+            self._enter("sleep", random.uniform(15, 40) * (1.0 if mood == "fed" else 1.6))
+        elif roll < sleep + 0.02:
+            self._into_ball()
+        elif roll < sleep + 0.06:
+            self._peek()
+        elif roll < sleep + 0.46:
             self.walk_to(random.uniform(12, self.width() - 12))
-        elif roll < 0.78:
+        elif roll < sleep + 0.69:
             self._enter("idle")
         else:
             emotes = [e for e in EMOTES if e in self.sheets]
             self._enter("emote", anim=random.choice(emotes)) if emotes else self._enter("idle")
+
+    def _into_ball(self, stay=None):
+        def go():
+            self.fx_from = self._centre()
+            self._enter("capture", 0.85)
+            self._ball_stay = stay
+        self.walk_to(self.ball.x() + 16, then=go)
+
+    def _peek(self):
+        """Peek up from the game's bottom edge, clear of the mini GUI."""
+        hi = max(16.0, self.pill.left() - 30.0)
+        go = lambda: self._enter("peek", random.uniform(5.0, 8.0))
+        if 14 <= self.x <= hi:
+            go()
+        else:
+            self.walk_to(random.uniform(14, hi), then=go)
 
     def say(self, text, seconds=3.0, kind="text"):
         now = time.monotonic()
@@ -262,7 +366,8 @@ class PetWidget(QWidget):
                 if then:
                     then()
         elif self.state == "walk":
-            step = WALK_SPEED.get(self.species, 24.0) * dt * (1 if self.target > self.x else -1)
+            zoom = 1.7 if now < self.hyper_until else 1.0
+            step = WALK_SPEED.get(self.species, 24.0) * self.speed_mul * zoom * dt * (1 if self.target > self.x else -1)
             nxt = self.x + step
             if abs(self.target - self.x) <= abs(step):
                 self.x = self.target
@@ -273,23 +378,35 @@ class PetWidget(QWidget):
             else:
                 self.x = nxt
         elif self.state == "capture":
-            t = min(1.0, (now - self.started) / 0.55)
-            self.tint, self.scale_fx = t, 1.0 - _ease(t)
+            t = min(1.0, (now - self.started) / 0.85)
+            if t < 0.3:
+                self.tint, self.fx_pos = _ease(t / 0.3), None
+            else:
+                u = (t - 0.3) / 0.7
+                e = u * u  # accelerates into the ball
+                p0 = self.fx_from or self._centre()
+                c = QPointF((p0.x() + self.ball.x()) / 2, min(p0.y(), self.ball.y()) - 26)
+                self.tint, self.fx_pos, self.fx_scale = 1.0, _bezier(p0, c, self.ball, e), max(0.04, 1.0 - e)
             if t >= 1.0:
-                self._enter("ball", random.uniform(6, 15))
+                self.fx_pos, self.flash = None, now
+                stay = getattr(self, "_ball_stay", None)
+                self._enter("ball", stay if stay else random.uniform(6, 15))
         elif self.state == "release":
-            t = min(1.0, (now - self.started) / 0.5)
-            self.tint, self.scale_fx = 1.0 - t, _ease(t)
+            t = min(1.0, (now - self.started) / 0.7)
+            u = min(1.0, t / 0.5)
+            e = 1 - (1 - u) * (1 - u)  # shoots out, slows down
+            land = self.fx_to or self._centre()
+            c = QPointF((land.x() + self.ball.x()) / 2, min(land.y(), self.ball.y()) - 30)
+            self.fx_pos, self.fx_scale = _bezier(self.ball, c, land, e), 0.04 + 0.96 * e
+            self.tint = 1.0 if t < 0.5 else 1.0 - (t - 0.5) / 0.5
             if t >= 1.0:
-                self.tint, self.scale_fx = 0.0, 1.0
-                self._enter("idle", 3.0)
+                self.tint, self.fx_pos, self.fx_scale = 0.0, None, 1.0
+                self._enter("emote", anim="Pose", loop=False) if "Pose" in self.sheets else self._enter("idle", 3.0)
                 pending, self._pending_result = getattr(self, "_pending_result", None), None
                 if pending:
-                    QTimer.singleShot(500, lambda r=pending: self.react(r))
+                    QTimer.singleShot(400, lambda r=pending: self.react(r))
                 if self.shiny:
                     self._shiny_burst()
-                self._hop(self.x - 22, then=lambda: self._enter("emote", anim="Pose", loop=False)
-                          if "Pose" in self.sheets else None)
         elif self.state == "peek":
             t = (now - self.started) / max(0.1, self.until - self.started)
             h = self.height_px + 4
@@ -313,8 +430,7 @@ class PetWidget(QWidget):
                 self._next()
         elif now >= self.until:
             if self.state == "ball":
-                self.flash = now
-                self._enter("release", 0.5)
+                self._release()
             elif self.state == "sleep":
                 self._enter("emote", anim="Nod", loop=False) if "Nod" in self.sheets else self._enter("idle")
             else:
@@ -339,6 +455,13 @@ class PetWidget(QWidget):
                 and self.arc is None:
             self.walk_to(self.berry[0] - 12 if self.x < self.berry[0] else self.berry[0] + 12, then=self._eat)
 
+        # energy: drains while awake, refills while asleep or resting in the ball
+        resting = self.state in ("sleep", "ball")
+        self._meter("energy", dt / 60.0 * (4.0 if resting else -1.0))  # per minute: +4 resting, -1 awake
+        if now - self._saved_at > 30:
+            self._saved_at = now
+            _save_state(self.mem)
+
         if self.shiny and now >= self._next_twinkle and self.state not in ("ball", "capture", "peek"):
             self._next_twinkle = now + random.uniform(15, 30)
             self._shiny_burst(small=True)
@@ -355,16 +478,49 @@ class PetWidget(QWidget):
         self._update_click_through()
         self.update()
 
-    # ── battle results (called by the overlay when a battle is saved) ──
+    def _release(self):
+        """Out of the Pokeball: a white shape arcs out, lands left of the mini GUI."""
+        self.flash = time.monotonic()
+        self.x = max(14.0, self.pill.left() - 22.0)
+        self.anim = "Idle" if "Idle" in self.sheets else self.anim
+        self.fx_to = QPointF(self.x, self.floor(self.x) - (self.sheets.get(self.anim) or
+                                                           next(iter(self.sheets.values()))).foot * self.L)
+        self._enter("release", 0.7)
+
+    # ── battles (called by the overlay) ──
+    def battle_start(self):
+        """A quick cheer, then slowly off: into the Pokeball, or a nap on the right."""
+        if self.battle:
+            return
+        self.battle, self.berry, self.after_walk, self.y_off = True, None, None, 0.0
+        if self.state in ("ball", "capture", "release"):
+            return  # already tucked away
+        self._celebrate(jumps=2, face="Inspired")
+        QTimer.singleShot(2400, self._battle_settle)
+
+    def _battle_settle(self):
+        if not self.battle or self.state in ("ball", "capture", "release"):
+            return
+        self.speed_mul = 0.45
+        if random.random() < 0.5:
+            self._into_ball(stay=1800)
+        else:
+            self.walk_to(self.pill.left() - 18, then=lambda: self._enter("sleep", 1800))
+
     def react(self, result):
-        """Win: a little celebration. Loss: mopes off to the corner and naps."""
+        """A battle was saved. Win: celebrate. Loss: mope to the corner and nap."""
+        self.battle, self.speed_mul = False, 1.0
+        self.mem["games"] += 1
+        self._meter("happiness", 3 if str(result).lower().startswith("w") else -3)
+        if self.mood() != "fed":
+            self._meter("happiness", -8)
+        _save_state(self.mem)
         if self.state in ("ball", "capture", "release"):
             self._pending_result = result  # played once it has popped out
-            if self.state != "release":
-                self.flash = time.monotonic()
-                self._enter("release", 0.5)
+            if self.state == "ball":
+                self._release()
             return
-        self.berry, self.after_walk, self.y_off = None, None, 0.0
+        self.berry, self.after_walk, self.y_off, self.zs = None, None, 0.0, []
         if str(result).lower().startswith("w"):
             self._celebrate()
         elif str(result).lower().startswith("l"):
@@ -373,10 +529,10 @@ class PetWidget(QWidget):
             self.walk_to(12.0, then=lambda: (setattr(self, "row", ROW_DOWN),
                                                self._enter("sleep", random.uniform(25, 40))))
 
-    def _celebrate(self, jumps=3):
-        face = "Joyous" if "Joyous" in self.portraits else "Happy"
+    def _celebrate(self, jumps=3, face="Joyous"):
+        face = face if face in self.portraits else "Joyous" if "Joyous" in self.portraits else "Happy"
         self.say(face, 2.6, kind="portrait") if face in self.portraits else self.say("★ WIN! ★", 2.6)
-        self._love(4)
+        self._love(4 if self.mood() == "fed" else 1)
         if self.shiny:
             self._shiny_burst()
         self._enter("emote", anim="Pose" if "Pose" in self.sheets else "Idle", loop=False)
@@ -394,6 +550,12 @@ class PetWidget(QWidget):
             self._hop(self.x, dur=0.34, then=lambda: jump(n - 1))
         jump(jumps)
 
+    def _pick_treat(self):
+        if random.random() < RARE_CANDY_ODDS and time.time() >= self.mem["candy_ready_at"]:
+            return "Rare Candy"
+        names = list(TREATS)
+        return random.choices(names, weights=[TREATS[n][0] for n in names])[0]
+
     def _eat(self):
         self.row = ROW_DOWN
         self._enter("emote", anim="Eat" if "Eat" in self.sheets else "Nod", loop=True)
@@ -403,9 +565,42 @@ class PetWidget(QWidget):
     def _finish_eating(self):
         if self.berry is None:
             return
+        kind = self.berry[4] if len(self.berry) > 4 else "Oran"
         self.berry = None
-        self._love(2)
-        self.say("Joyous" if "Joyous" in self.portraits else "Happy", 2.0, kind="portrait")
+        self.mem["fed_game"] = self.mem["games"]
+        if kind == "Rare Candy":
+            self.mem["level"] += 1
+            self.mem["happiness"], self.mem["energy"] = 100.0, 100.0
+            self.mem["full_for"] = 6
+            self.mem["candy_ready_at"] = time.time() + RARE_CANDY_COOLDOWN_S
+            self.hyper_until = time.monotonic() + 45
+            _save_state(self.mem)
+            self.say(f"Lv. {self.mem['level']}!", 2.6)
+            self._shiny_burst()
+            self._love(4)
+            self._celebrate(jumps=2)
+            return
+        _w, _c, fx = TREATS.get(kind, TREATS["Oran"])
+        self.mem["full_for"] = fx.get("full", 3)
+        self._meter("happiness", fx.get("happy", 0))
+        self._meter("energy", fx.get("energy", 0))
+        if fx.get("calm"):
+            self.anger_at = self.shake_until = 0.0
+            self.mem["happiness"] = max(self.mem["happiness"], 50.0)
+        if fx.get("hyper"):
+            self.hyper_until = time.monotonic() + fx["hyper"]
+        _save_state(self.mem)
+        self._love(3 if self.mood() == "fed" else 1)
+        face = {"Cheri": "Inspired", "Chesto": "Surprised"}.get(kind, "Joyous")
+        face = face if face in self.portraits else "Happy"
+        self.say(face, 2.0, kind="portrait")
+
+    def _angry(self):
+        """Starving and poked: shakes, anger mark, angry face."""
+        now = time.monotonic()
+        self.shake_until = self.anger_at = now
+        self.shake_until += 0.7
+        self.say("Angry", 1.8, kind="portrait") if "Angry" in self.portraits else self.say("ò_ó", 1.8)
 
     def _love(self, n=3):
         now = time.monotonic()
@@ -429,7 +624,7 @@ class PetWidget(QWidget):
     def _update_click_through(self):
         if os.name != "nt" or not self.isVisible():
             return
-        through = self.state in ("ball", "capture") or \
+        through = self.state in ("ball", "capture", "release") or \
             not self._sprite_rect().contains(self.mapFromGlobal(QCursor.pos()))
         if through == self._click_through:
             return
@@ -452,15 +647,25 @@ class PetWidget(QWidget):
         if event.button() == Qt.MouseButton.RightButton:
             if self.berry is None:
                 bx = max(12.0, min(self.width() - 12.0, self.x + random.choice((-34, 34))))
-                self.berry = [bx, -10.0, 0.0, False]
+                self.berry = [bx, -10.0, 0.0, False, self._pick_treat()]
             return
         if event.button() != Qt.MouseButton.LeftButton:
             return
         self.zs, self.after_walk = [], None
-        self._love(3)
-        self.say("pet", 2.2, kind="pet")
+        mood = self.mood()
+        if self.state == "sleep" and self.battle:
+            return  # let it nap through the battle
         self._enter("idle", 2.6)
-        self._hop(self.x, dur=0.32, then=lambda: self._hop(self.x, dur=0.26))
+        if mood == "angry":
+            self._angry()
+            return
+        if time.monotonic() - getattr(self, "_petted_at", 0.0) > 30:
+            self._petted_at = time.monotonic()
+            self._meter("happiness", 4)
+        self._love(3 if mood == "fed" else 1)
+        if mood == "fed" and random.random() < 0.2:
+            self.say("pet", 2.2, kind="pet")
+        self._hop(self.x, dur=0.32, then=lambda: self._hop(self.x, dur=0.26) if mood == "fed" else None)
 
     # ── drawing ──
     def paintEvent(self, _event):
@@ -476,20 +681,23 @@ class PetWidget(QWidget):
             frame = sheet.frame(self.row, (now - self.started) * 1000.0, loop=self.loop)
             fw, fh = frame.width() / frame.devicePixelRatio(), frame.height() / frame.devicePixelRatio()
             cy = feet - sheet.foot * self.L
+            sx = self.x + (math.sin(now * 70) * 2 if now < self.shake_until else 0)
             if self.state == "peek":  # hidden below the surface it peeks over
                 p.setClipRect(QRect(0, 0, self.width(), int(floor)))
-            if self.tint > 0 or self.scale_fx < 1.0:
+            if self.tint > 0:
                 frame = self._tinted(frame, self.tint)
-                s = max(0.01, self.scale_fx)
-                cx = self.ball.x() + (self.x - self.ball.x()) * s
-                cyy = self.ball.y() + (cy - self.ball.y()) * s
+            if self.fx_pos is not None:
+                s = max(0.01, self.fx_scale)
                 p.save()
-                p.translate(cx, cyy)
+                p.translate(self.fx_pos)
                 p.scale(s, s)
                 p.drawPixmap(QPointF(-fw / 2, -fh / 2), frame)
                 p.restore()
             else:
-                p.drawPixmap(QPointF(self.x - fw / 2, cy - fh / 2), frame)
+                p.drawPixmap(QPointF(sx - fw / 2, cy - fh / 2), frame)
+            if now - self.anger_at < 1.2:
+                self._pixel_art(p, ANGER, int(self.x + 12), int(feet - self.height_px - 4), 2, {},
+                                QColor(235, 60, 60, int(255 * (1 - (now - self.anger_at) / 1.2))))
             p.setClipping(False)
         if self.flash:
             t = (now - self.flash) / 0.5
@@ -498,8 +706,16 @@ class PetWidget(QWidget):
             r = 4 + 16 * t
             p.drawEllipse(self.ball, r, r)
         if self.berry:
-            self._pixel_art(p, BERRY, int(self.berry[0]), int(self.berry[1]) - 10, 2,
-                            {(0, 2): QColor(90, 200, 90)}, QColor(214, 60, 120))
+            kind = self.berry[4] if len(self.berry) > 4 else "Oran"
+            bx, by = int(self.berry[0]), int(self.berry[1]) - 10
+            if kind == "Rare Candy":
+                self._pixel_art(p, CANDY, bx, by, 2, {(2, 3): QColor(255, 255, 255), (2, 2): QColor(255, 255, 255)},
+                                QColor(80, 170, 240))
+                if int(now * 4) % 2 == 0:
+                    self._pixel_art(p, STAR, bx + 9, by - 9, 1, {}, QColor(255, 236, 120))
+            else:
+                r, g, b = TREATS.get(kind, TREATS["Oran"])[1]
+                self._pixel_art(p, BERRY, bx, by, 2, {(0, 2): QColor(90, 200, 90)}, QColor(r, g, b))
         for zx, born in self.zs:
             age = now - born
             self._pixel_text(p, "z", int(zx + age * 6), int(feet - self.height_px - age * 12),
@@ -534,6 +750,7 @@ class PetWidget(QWidget):
 
     @staticmethod
     def _tinted(frame, amount):
+        """The sprite washed to white (a Pokemon turning to light for the ball)."""
         if amount <= 0:
             return frame
         out = QPixmap(frame.size())
@@ -542,7 +759,7 @@ class PetWidget(QWidget):
         q = QPainter(out)
         q.drawPixmap(0, 0, frame)
         q.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceAtop)
-        q.fillRect(out.rect(), QColor(255, 60, 60, int(200 * amount)))
+        q.fillRect(out.rect(), QColor(255, 255, 255, int(255 * min(1.0, amount))))
         q.end()
         return out
 

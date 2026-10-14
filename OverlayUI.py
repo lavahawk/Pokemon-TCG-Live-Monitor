@@ -472,11 +472,18 @@ class MinimalOverlay(QWidget):
                     self.pet = None
                 return
             species = _overlay_setting("overlay_pet_species", "pikachu")
+            from deck_confirm import battle_started_at
+            started = battle_started_at()
             if self.pet is None:
                 from pet import PetWidget
                 self.pet = PetWidget(species)
+                self._pet_battle_seen = started  # don't react to a battle from before
             else:
                 self.pet.set_species(species)
+            if started > getattr(self, "_pet_battle_seen", 0.0):
+                self._pet_battle_seen = started
+                if time.time() - started < 60:
+                    self.pet.battle_start()
             show = self.isVisible() and getattr(self, "_overlay_placed", False)
             if show:
                 self.pet.follow(self.frameGeometry(), self.ball_icon.mapToGlobal(self.ball_icon.rect().center()),
