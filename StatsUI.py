@@ -9299,23 +9299,20 @@ class StatsWindow(QWidget):
         # HUD buddy (pet.py): off by default.
         pet_row = QHBoxLayout()
         pet_row.setSpacing(8)
-        pet_box = QCheckBox("HUD buddy: a pixel Pokémon that hangs out next to the overlay")
-        pet_box.setObjectName("settingsCheck")
+        pet_box = QLabel("HUD buddy · double-click the Pokéball on the overlay to call it out (and again to recall it)")
+        pet_box.setStyleSheet("color: rgba(235,242,250,0.85); font-size: 11px;")
         pet_box.setToolTip("It roams the bottom of the game and hops onto the overlay, naps (hover to wake it), "
                            "peeks, hides in the Pokéball, cheers your wins and mopes after losses.<br>"
                            "Click: pet it · Right-click: feed it a berry · 1 in 50 is shiny.")
-        pet_box.setChecked(bool(settings.get("overlay_pet", False)))
         pet_row.addWidget(pet_box)
         pet_combo = QComboBox()
         pet_combo.setObjectName("metaCombo")
         for key, label in (("pikachu", "Pikachu"), ("gengar", "Gengar"), ("eevee", "Eevee"), ("random", "Random")):
             pet_combo.addItem(label, key)
         pet_combo.setCurrentIndex(max(0, pet_combo.findData(settings.get("overlay_pet_species", "pikachu"))))
-        pet_combo.setEnabled(pet_box.isChecked())
         pet_row.addWidget(pet_combo)
         pet_row.addStretch()
         body.addLayout(pet_row)
-        pet_box.toggled.connect(lambda c: (self._save_app_setting("overlay_pet", bool(c)), pet_combo.setEnabled(c)))
         pet_combo.currentIndexChanged.connect(lambda _i: self._save_app_setting("overlay_pet_species", pet_combo.currentData()))
         ad_box = QCheckBox("Block ads and trackers in the built-in browser tabs")
         ad_box.setObjectName("settingsCheck")

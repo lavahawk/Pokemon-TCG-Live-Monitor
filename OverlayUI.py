@@ -446,6 +446,25 @@ class MinimalOverlay(QWidget):
         self._poll_game_session()
         self._poll_pet()
 
+    def _on_ball_double_click(self):
+        """The mini GUI's Pokeball: the first double-click calls the HUD buddy
+        out (turns it on); after that it recalls / sends it out."""
+        if getattr(self, "pet", None) is None:
+            try:
+                from app_settings import load_app_settings, save_app_settings
+                settings = load_app_settings()
+                settings["overlay_pet"] = True
+                save_app_settings(settings)
+            except Exception as exc:
+                _dbg(f"pet enable failed: {exc}")
+                return
+            self._pet_summoned = True
+            self._poll_pet()
+            if self.pet is not None:
+                QTimer.singleShot(200, self.pet.toggle_ball)
+            return
+        self.pet.toggle_ball()
+
     def _game_floor_drop(self):
         """Logical px from the mini GUI's bottom down to the game's visible
         bottom edge (its client area: GetWindowRect also counts Windows'
@@ -472,18 +491,24 @@ class MinimalOverlay(QWidget):
                     self.pet = None
                 return
             species = _overlay_setting("overlay_pet_species", "pikachu")
-            from deck_confirm import battle_started_at
+            from deck_confirm import battle_started_at, menu_seen_at
             started = battle_started_at()
             if self.pet is None:
                 from pet import PetWidget
-                self.pet = PetWidget(species)
+                self.pet = PetWidget(species, in_ball=getattr(self, "_pet_summoned", False))
+                self._pet_summoned = False
                 self._pet_battle_seen = started  # don't react to a battle from before
+                self._pet_menu_seen = menu_seen_at()
             else:
                 self.pet.set_species(species)
             if started > getattr(self, "_pet_battle_seen", 0.0):
                 self._pet_battle_seen = started
                 if time.time() - started < 60:
                     self.pet.battle_start()
+            menu = menu_seen_at()
+            if menu > getattr(self, "_pet_menu_seen", 0.0):
+                self._pet_menu_seen = menu
+                self.pet.menu_seen()
             show = self.isVisible() and getattr(self, "_overlay_placed", False)
             if show:
                 self.pet.follow(self.frameGeometry(), self.ball_icon.mapToGlobal(self.ball_icon.rect().center()),
@@ -726,7 +751,7 @@ class MinimalOverlay(QWidget):
         self.ball_icon = QLabel()
         self.ball_icon.setFixedSize(12, 12)
         # Double-click the ball: recall / send out the HUD buddy (pet.py)
-        self.ball_icon.mouseDoubleClickEvent = lambda e: getattr(self, "pet", None) is not None and self.pet.toggle_ball()
+        self.ball_icon.mouseDoubleClickEvent = lambda e: self._on_ball_double_click()
         stats_layout.addWidget(self.ball_icon)
         
         # Stats text label — double-click opens a mini reset popup

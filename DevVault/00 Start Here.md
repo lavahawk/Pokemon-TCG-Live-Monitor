@@ -61,3 +61,8 @@ See **Session log** below.
   - face bubbles on 1 in 5 clicks, only when fed
   - treats (`TREATS`): Oran / Pecha / Cheri / Chesto / Sitrus with effects; Rare Candy 1/20 (level up, meters maxed, 30 min cooldown)
 - Double-clicking the mini GUI Pokéball recalls / sends out the buddy (`pet.toggle_ball`). A recalled buddy stays in through battles (`recalled`).
+- Buddy v4:
+  - off until the overlay Pokéball is double-clicked (`_on_ball_double_click` sets `overlay_pet`; Advanced only picks the species); recall persists (`recalled` in `.pet_state.json`)
+  - after a battle it stays in the ball until `menu_seen` (60 s fallback)
+  - faint thought puff: berry when hungry, heart when untouched 10 min
+  - Hop emote weight 0.25; ~75% of naps (and post-loss mopes) at `_nap_spot()` beside the mini GUI

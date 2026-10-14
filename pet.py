@@ -17,8 +17,10 @@ shiny (alternate colours, shiny sparkle when it appears).
   hunger (games since fed), happiness 0-100 (hearts, mood) and energy 0-100
   (drains awake, refills asleep; low energy = more naps).
 
-Off by default: Advanced → Preferences · Overlay → "HUD buddy" (overlay_pet,
-overlay_pet_species). Sprites: pet_sprites/<species>/ (shiny in shiny/) from
+Off by default: double-click the mini GUI's Pokeball to call it out (sets
+overlay_pet); double-click again to recall it. Species in Advanced →
+Preferences · Overlay (overlay_pet_species). Hungry or ignored for 10+ min:
+a faint thought puff (berry / heart) now and then. Sprites: pet_sprites/<species>/ (shiny in shiny/) from
 the PMD Sprite Repository (SpriteCollab, CC BY-NC 4.0, see
 pet_sprites/CREDITS.txt). Each sheet is one row per facing direction, one
 column per frame; anim.json holds frame size and per-frame durations
@@ -66,6 +68,8 @@ TREATS = {
 }
 RARE_CANDY_ODDS = 1 / 20
 RARE_CANDY_COOLDOWN_S = 30 * 60
+NEEDY_AFTER_S = 10 * 60   # no clicks / treats this long: shows it wants attention
+EMOTE_WEIGHTS = {"Hop": 0.25}  # hops are jumpy (Pikachu especially): rarer
 STAR = ("00100", "00100", "11011", "00100", "00100")     # shiny sparkle
 
 
@@ -80,7 +84,7 @@ def _load_state():
     except (OSError, ValueError, TypeError, AttributeError):
         data = {}
     state = {"games": 0, "fed_game": 0, "full_for": 3, "happiness": 60.0, "energy": 80.0, "level": 5,
-             "candy_ready_at": 0.0}
+             "candy_ready_at": 0.0, "recalled": False}
     for key, default in state.items():
         try:
             state[key] = type(default)(data.get(key, default))
@@ -150,7 +154,7 @@ class Sheet:
 
 
 class PetWidget(QWidget):
-    def __init__(self, species="pikachu"):
+    def __init__(self, species="pikachu", in_ball=False):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                          | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -187,7 +191,14 @@ class PetWidget(QWidget):
         self.flash = None         # time of the white burst at the ball
         self._next_twinkle = time.monotonic() + 20
         self._click_through = None
+        self.last_touch = time.monotonic()
+        self.thought = None       # (kind, born): faint "needs something" puff
+        self._next_thought = time.monotonic() + 40
+        self._pending_since = 0.0
         self.set_species(species)
+        if in_ball or self.mem.get("recalled"):
+            self.recalled = True
+            self._enter("ball", 6 * 3600)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
         self.timer.start(TICK_MS)
@@ -315,7 +326,11 @@ class PetWidget(QWidget):
         if time.monotonic() < self.hyper_until or self.mem["energy"] > 90:
             sleep = 0.0
         if roll < sleep:
-            self._enter("sleep", random.uniform(15, 40) * (1.0 if mood == "fed" else 1.6))
+            nap = random.uniform(15, 40) * (1.0 if mood == "fed" else 1.6)
+            if random.random() < 0.75:
+                self.walk_to(self._nap_spot(), then=lambda: self._enter("sleep", nap))
+            else:
+                self._enter("sleep", nap)
         elif roll < sleep + 0.02:
             self._into_ball()
         elif roll < sleep + 0.06:
@@ -326,7 +341,14 @@ class PetWidget(QWidget):
             self._enter("idle")
         else:
             emotes = [e for e in EMOTES if e in self.sheets]
-            self._enter("emote", anim=random.choice(emotes)) if emotes else self._enter("idle")
+            if emotes:
+                self._enter("emote", anim=random.choices(emotes, [EMOTE_WEIGHTS.get(e, 1.0) for e in emotes])[0])
+            else:
+                self._enter("idle")
+
+    def _nap_spot(self):
+        """The favourite nap spot: the right corner, just left of the mini GUI."""
+        return max(14.0, self.pill.left() - 16.0)
 
     def _into_ball(self, stay=None):
         def go():
@@ -340,11 +362,14 @@ class PetWidget(QWidget):
         is, or send it back out. Recalled, it stays in until sent out."""
         if self.state in ("capture", "release"):
             return
+        self.last_touch = time.monotonic()
         if self.state == "ball":
-            self.recalled = False
+            self.recalled = self.mem["recalled"] = False
+            _save_state(self.mem)
             self._release()
             return
-        self.recalled = True  # stays in, even through battles, until sent out
+        self.recalled = self.mem["recalled"] = True  # stays in, even through battles, until sent out
+        _save_state(self.mem)
         self.arc, self.after_walk, self.berry, self.y_off, self.zs = None, None, None, 0.0, []
         self.fx_from = self._centre()
         self._ball_stay = 6 * 3600
@@ -471,6 +496,19 @@ class PetWidget(QWidget):
                 and self.arc is None:
             self.walk_to(self.berry[0] - 12 if self.x < self.berry[0] else self.berry[0] + 12, then=self._eat)
 
+        if getattr(self, "_pending_result", None) and self.state == "ball" and not self.recalled \
+                and now - self._pending_since > 60:
+            self._release()
+        # needs: hungry, or ignored for a while -> a faint thought puff now and then
+        if now >= self._next_thought and self.state in ("idle", "walk", "emote") and self.bubble is None:
+            self._next_thought = now + random.uniform(25, 45)
+            if self.mood() != "fed":
+                self.thought = ("berry", now)
+            elif now - self.last_touch > NEEDY_AFTER_S:
+                self.thought = ("heart", now)
+        if self.thought and (now - self.thought[1] > 2.6 or self.state in ("sleep", "ball", "capture", "peek")):
+            self.thought = None
+
         # energy: drains while awake, refills while asleep or resting in the ball
         resting = self.state in ("sleep", "ball")
         self._meter("energy", dt / 60.0 * (4.0 if resting else -1.0))  # per minute: +4 resting, -1 awake
@@ -534,9 +572,10 @@ class PetWidget(QWidget):
         if self.recalled:
             return  # recalled by the user: stays in the ball
         if self.state in ("ball", "capture", "release"):
-            self._pending_result = result  # played once it has popped out
-            if self.state == "ball":
-                self._release()
+            # played once it's back out: when the game reaches the main menu
+            # (menu_seen), or after a minute if the menu is never reported
+            self._pending_result = result
+            self._pending_since = time.monotonic()
             return
         self.berry, self.after_walk, self.y_off, self.zs = None, None, 0.0, []
         if str(result).lower().startswith("w"):
@@ -544,8 +583,13 @@ class PetWidget(QWidget):
         elif str(result).lower().startswith("l"):
             face = "Sad" if "Sad" in self.portraits else None
             self.say(face, 2.5, kind="portrait") if face else self.say("(._.)", 2.5)
-            self.walk_to(12.0, then=lambda: (setattr(self, "row", ROW_DOWN),
-                                               self._enter("sleep", random.uniform(25, 40))))
+            self.walk_to(self._nap_spot(), then=lambda: (setattr(self, "row", ROW_DOWN),
+                                                       self._enter("sleep", random.uniform(25, 40))))
+
+    def menu_seen(self):
+        """The game is back on the main menu (overlay): out of the ball after a battle."""
+        if getattr(self, "_pending_result", None) and self.state == "ball" and not self.recalled:
+            self._release()
 
     def _celebrate(self, jumps=3, face="Joyous"):
         face = face if face in self.portraits else "Joyous" if "Joyous" in self.portraits else "Happy"
@@ -662,6 +706,7 @@ class PetWidget(QWidget):
         if not self._sprite_rect().contains(event.position().toPoint()) \
                 or self.state in ("ball", "capture", "release"):
             return
+        self.last_touch, self.thought = time.monotonic(), None
         if event.button() == Qt.MouseButton.RightButton:
             if self.berry is None:
                 bx = max(12.0, min(self.width() - 12.0, self.x + random.choice((-34, 34))))
@@ -753,6 +798,8 @@ class PetWidget(QWidget):
             y = sy + math.sin(a) * t * 6
             self._pixel_art(p, STAR, int(x), int(y) - 5, size, {(2, 2): QColor(255, 255, 255, int(255 * grow))},
                             QColor(255, 236, 120, int(255 * grow)))
+        if self.thought and self.state != "ball":
+            self._paint_thought(p, now)
         if self.bubble:
             self._paint_bubble(p, now)
         for hx, hy, spread, born in self.hearts:
@@ -798,6 +845,28 @@ class PetWidget(QWidget):
         p.setFont(font)
         p.setPen(color)
         p.drawText(QPointF(x, y), text)
+
+    def _paint_thought(self, p, now):
+        """A small, faint thought puff up-right of the head: berry = hungry,
+        heart outline = wants attention."""
+        kind, born = self.thought
+        age = now - born
+        alpha = int(150 * min(1.0, age / 0.4) * min(1.0, (2.6 - age) / 0.4))
+        if alpha <= 0:
+            return
+        hx, hy = self.x + 10, self._feet_y() - self.height_px
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(250, 250, 245, alpha))
+        p.drawRect(QRectF(hx, hy - 2, 2, 2))
+        p.drawRect(QRectF(hx + 4, hy - 7, 3, 3))
+        p.drawRoundedRect(QRectF(hx + 7, hy - 21, 14, 12), 4, 4)
+        if kind == "berry":
+            r, g, b = TREATS["Oran"][1]
+            self._pixel_art(p, BERRY, int(hx + 14), int(hy - 20), 2, {(0, 2): QColor(90, 200, 90, alpha)},
+                            QColor(r, g, b, alpha))
+        else:
+            self._pixel_art(p, ("01010", "10101", "10001", "01010", "00100"), int(hx + 14), int(hy - 20), 2, {},
+                            QColor(255, 92, 128, alpha))
 
     def _paint_bubble(self, p, now):
         """Square pixel speech bubble that pops in (overshoot) above the head."""
