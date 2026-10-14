@@ -9,7 +9,7 @@ Threat model: a single-user desktop tool. The interesting attackers are (a) web 
 | ID | Sev | Status | Issue |
 |---|---|---|---|
 | SEC-01 | High (privacy) | fixed (v2.4) | Any copied text of 120+ characters that isn't a battle log is saved to `Logs/unmatched_*.txt` while the game is running |
-| SEC-02 | Med | open | OpenAI API key stored in plaintext `.openai_key` in the app folder |
+| SEC-02 | Med | fixed (post-2.6.0, DPAPI) | OpenAI API key stored in plaintext `.openai_key` in the app folder |
 | SEC-03 | Med | fixed (v2.4) | Embedded Limitless pages get `JavascriptCanAccessClipboard` (remote JS can read the system clipboard) |
 | SEC-04 | Med | fixed (v2.4) | `webbrowser.open()` on URLs scraped from page DOM with no scheme/host allowlist |
 | SEC-05 | Low | fixed (v2.4) | `activeMatchUrl` from any `a[href*="/match/"]` loaded into the logged-in profile without a host check |
