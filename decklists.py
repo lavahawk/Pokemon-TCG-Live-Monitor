@@ -171,3 +171,35 @@ def store_mtime():
         return os.path.getmtime(STORE_FILE)
     except OSError:
         return None
+
+
+# ── deck <-> list links (Deck Snapshot "Decklist" button) ──
+def link_decklist(deck_name, lid):
+    """Remember which stored list is `deck_name` (the deck name on the menu).
+    lid None removes the link."""
+    data = _load()
+    links = data.setdefault("links", {})
+    if lid:
+        links[deck_name] = lid
+    else:
+        links.pop(deck_name, None)
+    _save(data)
+
+
+def decklist_for_deck(deck_name):
+    """The list linked to a deck, else the newest list exported while that
+    deck was on the menu, else None."""
+    data = _load()
+    lists = data.get("lists") or []
+    lid = (data.get("links") or {}).get(deck_name)
+    entry = next((e for e in lists if e["id"] == lid), None) if lid else None
+    if entry is None:
+        entry = next((e for e in lists if e.get("menu_deck") == deck_name), None)
+    return entry
+
+
+def import_decklist(text, deck_name):
+    """Store a pasted PTCGL export and link it to `deck_name`."""
+    entry = save_decklist(text, deck_name)
+    link_decklist(deck_name, entry["id"])
+    return entry

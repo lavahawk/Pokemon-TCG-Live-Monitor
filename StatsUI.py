@@ -5037,6 +5037,7 @@ class StatsWindow(QWidget):
             flag_btn.toggled.connect(lambda on, k=kind, name=flag_deck: self._set_deck_flag(k, name, on))
             flag_row.addWidget(flag_btn)
         hero_top.addWidget(flag_group)
+        hero_top.addWidget(self._create_decklist_button(flag_deck, matched_row))
 
         if matched_row.get("deck_url"):
             open_btn = QPushButton("Limitless ↗")
@@ -5064,6 +5065,192 @@ class StatsWindow(QWidget):
 
         scroll.setWidget(content)
         return scroll
+
+    # ── Deck Snapshot: decklist ──
+    def _create_decklist_button(self, deck_name, matched_row):
+        """"Import decklist" when the deck has no list; otherwise a menu of
+        the tools a full list unlocks."""
+        from PySide6.QtWidgets import QMenu
+        from decklists import decklist_for_deck
+        entry = decklist_for_deck(deck_name)
+        button = QToolButton()
+        button.setObjectName("deckListBtn")
+        button.setFixedHeight(30)
+        button.setStyleSheet(
+            "QToolButton#deckListBtn { background: rgba(74,159,216,0.22); border: 1px solid rgba(74,159,216,0.40);"
+            " border-radius: 6px; color: rgba(255,255,255,0.95); font-size: 11px; font-weight: 600; padding: 0 12px; }"
+            "QToolButton#deckListBtn:hover { background: rgba(74,159,216,0.34); }"
+            "QToolButton#deckListBtn::menu-indicator { image: none; width: 0; }")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        if entry is None:
+            button.setText("＋ Import decklist")
+            button.setToolTip("Paste this deck's list (PTCGL: Decks → deck → Export → Copy to clipboard) to unlock "
+                              "card suggestions, Meta → Cards comparison and TrainerHill tools.")
+            button.clicked.connect(lambda: self._import_decklist_dialog(deck_name))
+            return button
+        button.setText(f"Decklist ✓ {entry.get('cards') or ''}".strip() + "  ▾")
+        button.setToolTip(f"{entry['name']} · exported {(entry.get('captured_at') or '')[:16]}")
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(button)
+        menu.setStyleSheet("QMenu { background: #151B26; color: #E6ECF5; border: 1px solid rgba(255,255,255,0.12); }"
+                           "QMenu::item { padding: 5px 18px; } QMenu::item:selected { background: rgba(74,159,216,0.30); }"
+                           "QMenu::separator { height: 1px; background: rgba(255,255,255,0.10); margin: 4px 8px; }")
+        menu.addAction("View decklist", lambda: self._view_decklist(entry))
+        menu.addAction("Card suggestions", lambda: self._show_card_suggestions(deck_name, matched_row, entry))
+        menu.addAction("Compare in Meta → Cards", lambda: self._open_cards_compare(entry["id"]))
+        menu.addSeparator()
+        for label, path in (("TrainerHill · Deck Diff", "dashboards/deck-diff/"),
+                            ("TrainerHill · Card Usage", "dashboards/card-usage/"),
+                            ("TrainerHill · Deck Profile", "dashboards/deck-profile/")):
+            menu.addAction(label, lambda p=path: (QApplication.clipboard().setText(entry.get("text") or ""),
+                                                  self.open_trainerhill_tool(p)))
+        menu.addSeparator()
+        menu.addAction("Replace list…", lambda: self._import_decklist_dialog(deck_name))
+        menu.addAction("Unlink list", lambda: self._link_decklist(deck_name, None))
+        button.setMenu(menu)
+        return button
+
+    def _link_decklist(self, deck_name, lid):
+        from decklists import link_decklist
+        link_decklist(deck_name, lid)
+        self._deck_dashboards_dirty = True
+        QTimer.singleShot(0, self._refresh_deck_dashboards)
+
+    def _import_decklist_dialog(self, deck_name):
+        from PySide6.QtWidgets import QDialog, QPlainTextEdit
+        from decklists import all_decklists, card_count, import_decklist, is_ptcgl_decklist
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Decklist · {deck_name}")
+        dialog.setStyleSheet("QDialog { background: #11161F; } QLabel { color: rgba(236,242,252,0.88); }"
+                             "QPlainTextEdit { background: rgba(255,255,255,0.05); color: #E6ECF5; "
+                             "border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; font-family: Consolas; }")
+        dialog.resize(460, 560)
+        col = QVBoxLayout(dialog)
+        col.addWidget(QLabel("In PTCGL: <b>Decks → this deck → Export → Copy to clipboard</b>, then paste here."))
+        saved = QComboBox()
+        saved.setObjectName("metaCombo")
+        saved.addItem("…or pick a list you exported before", None)
+        for e in all_decklists():
+            saved.addItem(f"{e['name']}  ({(e.get('captured_at') or '')[:10]})", e.get("text"))
+        col.addWidget(saved)
+        edit = QPlainTextEdit()
+        clip = QApplication.clipboard().text() or ""
+        if is_ptcgl_decklist(clip):
+            edit.setPlainText(clip.strip())
+        col.addWidget(edit, 1)
+        saved.currentIndexChanged.connect(lambda _i: saved.currentData() and edit.setPlainText(saved.currentData()))
+        status = QLabel("")
+        col.addWidget(status)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        col.addWidget(buttons)
+
+        def accept():
+            text = edit.toPlainText().strip()
+            if not is_ptcgl_decklist(text):
+                status.setText("<span style='color:#EF9A9A'>That doesn't look like a PTCGL deck export "
+                               "(Pokémon: / Trainer: / Energy: sections).</span>")
+                return
+            import_decklist(text, deck_name)
+            if card_count(text) != 60:
+                QMessageBox.information(dialog, "Decklist", f"Saved, but it has {card_count(text)} cards, not 60.")
+            dialog.accept()
+        buttons.accepted.connect(accept)
+        buttons.rejected.connect(dialog.reject)
+        self.begin_protected_interaction()
+        try:
+            ok = dialog.exec()
+        finally:
+            self.end_protected_interaction()
+        if ok:
+            self._deck_dashboards_dirty = True
+            QTimer.singleShot(0, self._refresh_deck_dashboards)
+
+    def _view_decklist(self, entry):
+        from PySide6.QtWidgets import QDialog, QPlainTextEdit
+        dialog = QDialog(self)
+        dialog.setWindowTitle(entry.get("name") or "Decklist")
+        dialog.setStyleSheet("QDialog { background: #11161F; } QPlainTextEdit { background: rgba(255,255,255,0.05); "
+                             "color: #E6ECF5; border: none; font-family: Consolas; }")
+        dialog.resize(420, 620)
+        col = QVBoxLayout(dialog)
+        view = QPlainTextEdit(entry.get("text") or "")
+        view.setReadOnly(True)
+        col.addWidget(view)
+        copy = QPushButton("Copy list")
+        copy.setObjectName("settingsBtn")
+        copy.clicked.connect(lambda: (QApplication.clipboard().setText(entry.get("text") or ""), copy.setText("Copied ✓")))
+        col.addWidget(copy)
+        dialog.exec()
+
+    def _open_cards_compare(self, lid):
+        """Meta → Cards with this list chosen (it jumps to the closest archetype)."""
+        index = next((i for i in range(self.tab_widget.count()) if self.tab_widget.tabText(i) == "Meta"), None)
+        if index is None:
+            return
+        self.tab_widget.setCurrentIndex(index)
+        views = getattr(self, "meta_views", None)
+        if views is not None:
+            views.setCurrentIndex(next((i for i in range(views.count()) if views.tabText(i) == "Cards"), 0))
+
+        def pick():
+            combo = getattr(self, "cards_list_combo", None)
+            if combo is not None and combo.findData(lid) >= 0:
+                combo.setCurrentIndex(combo.findData(lid))
+        QTimer.singleShot(150, pick)
+
+    def _show_card_suggestions(self, deck_name, matched_row, entry):
+        """Cards most lists of the archetype play that yours doesn't (or plays
+        fewer of), and your rare picks."""
+        from PySide6.QtWidgets import QDialog
+        from AIParseBattleLog import load_meta_rows
+        mine = card_usage.parse_list(entry.get("text"))
+        rows = [r for r in load_meta_rows() if r.get("cards")]
+        row = next((r for r in rows if r.get("id") == (matched_row or {}).get("id")), None)
+        if row is None:
+            row = card_usage.best_archetype(rows, mine)
+        if row is None:
+            QMessageBox.information(self, "Card suggestions", "No archetype card data matches this list yet "
+                                                              "(Meta → Cards → ↻ Refresh).")
+            return
+        compared = card_usage.compare(row["cards"], mine)
+        missing = [c for c in compared if c["mine"] == 0 and c["incl"] >= 25.0]
+        fewer = [c for c in compared if c["mine"] and c["typical"] and c["mine"] < c["typical"]]
+        rare = [c for c in compared if c["mine"] and c["incl"] < 10.0]
+        lines = []
+        for title, items, fmt in (
+                ("Played by most lists, not in yours", missing,
+                 lambda c: f"{c['typical'] or max(1, round(c['avg']))}× {c['name']}", ),
+                ("You play fewer than usual", fewer, lambda c: f"{c['name']}: {c['mine']} → usually {c['typical']}"),
+                ("Your rare picks (< 10% of lists)", rare, lambda c: f"{c['mine']}× {c['name']}")):
+            lines.append(f"<h4 style='color:#9EC9F0;margin:10px 0 4px'>{title}</h4>")
+            if not items:
+                lines.append("<span style='color:#8A97AA'>None.</span>")
+            for c in sorted(items, key=lambda c: -c["incl"])[:10]:
+                lines.append(f"{fmt(c)} <span style='color:#8A97AA'>· in {c['incl']:.0f}% of lists</span><br>")
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Card suggestions · {deck_name}")
+        dialog.setStyleSheet("QDialog { background: #11161F; } QLabel { color: rgba(236,242,252,0.92); font-size: 11px; }")
+        dialog.resize(520, 600)
+        col = QVBoxLayout(dialog)
+        summary = card_usage.summary(compared)
+        head = QLabel(f"<b>{entry.get('name')}</b> vs <b>{row['deck']}</b> · {row.get('lists', 0):,} public lists · "
+                      f"{card_usage.similarity(row['cards'], mine) * 100:.0f}% like the typical list · "
+                      f"missing {len(summary['missing_core'])} core card(s)")
+        head.setWordWrap(True)
+        col.addWidget(head)
+        body = QLabel("".join(lines))
+        body.setWordWrap(True)
+        body.setAlignment(Qt.AlignmentFlag.AlignTop)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(body)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        col.addWidget(scroll, 1)
+        more = QPushButton("Full comparison in Meta → Cards")
+        more.setObjectName("settingsBtn")
+        more.clicked.connect(lambda: (dialog.accept(), self._open_cards_compare(entry["id"])))
+        col.addWidget(more)
+        dialog.exec()
 
     def _create_base_archetype_field(self, analysis):
         """'Base archetype' field under the deck title: the Limitless archetype
