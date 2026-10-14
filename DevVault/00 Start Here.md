@@ -41,3 +41,4 @@ See **Session log** below.
   - deck page: Last-10 squares jump to the game; per-game Replay / Cards played / Deck archetype buttons
   - Snapshot **Decklist** button: import/link a list (`decklists.link_decklist`), card suggestions, Meta → Cards, TrainerHill
   - optional **HUD buddy** (`pet.py`, `pet_sprites/`, CC BY-NC). All of it is unverified on a live game: restart the overlay, then check a battle import (sound, deck card) and the auto-export clicks while moving the mouse.
+- **2026-10-14 (later):** `adblock.py` + `adblock_hosts.txt` (131 domains, editable): a `QWebEngineUrlRequestInterceptor` on every web profile (Limitless, Replay, TrainerHill, default). First-party hosts are never blocked; no cosmetic filtering. Setting `browser_adblock` (default on), toggled in Advanced → Preferences · Overlay. limitlesstcg.com home: 9 requests blocked.
