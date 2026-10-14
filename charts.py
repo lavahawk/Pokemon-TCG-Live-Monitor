@@ -38,8 +38,15 @@ def chart_font():
         _chart_family = ""
         try:
             import os
-            import matplotlib
-            path = os.path.join(matplotlib.get_data_path(), "fonts", "ttf", "DejaVuSans.ttf")
+            import importlib.util
+            # Locate matplotlib's bundled font without importing matplotlib
+            # (~200 ms and its memory, only for a file path; BUG-028).
+            spec = importlib.util.find_spec("matplotlib")
+            package_dir = list(spec.submodule_search_locations)[0]
+            path = os.path.join(package_dir, "mpl-data", "fonts", "ttf", "DejaVuSans.ttf")
+            if not os.path.exists(path):
+                import matplotlib
+                path = os.path.join(matplotlib.get_data_path(), "fonts", "ttf", "DejaVuSans.ttf")
             families = QFontDatabase.applicationFontFamilies(QFontDatabase.addApplicationFont(path))
             _chart_family = families[0] if families else ""
         except Exception:

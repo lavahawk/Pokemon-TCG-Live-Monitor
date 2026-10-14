@@ -7,6 +7,7 @@ import math
 import os
 import re
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 TIE_WIN_WEIGHT = 1.0 / 3.0  # default ("third"); see tie_mode()
 
@@ -171,6 +172,7 @@ def beta_cdf(x, a, b):
     return 1.0 - bt * _betacf(b, a, 1.0 - x) / b
 
 
+@lru_cache(maxsize=4096)  # pure; refreshes ask for the same ranges again
 def beta_ppf(q, a, b):
     """Inverse CDF of Beta(a, b) by bisection (36 steps -> ~1.5e-11 precision,
     far below anything displayed)."""
