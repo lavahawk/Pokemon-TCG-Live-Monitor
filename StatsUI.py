@@ -3156,8 +3156,6 @@ class StatsWindow(QWidget):
         super().__init__()
         self.db = BattleDatabase()
         self.parent_overlay = parent_overlay
-        if WEBENGINE_AVAILABLE:
-            adblock.install()  # default profile: In Person, PokeData and other plain views
         self.limitless_manager = get_limitless_dashboard_manager()
         app = QApplication.instance()
         if app is not None and "QToolTip" not in (app.styleSheet() or ""):
@@ -3662,6 +3660,9 @@ class StatsWindow(QWidget):
     def event(self, event):
         if event.type() in (QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate, QEvent.Type.Show, QEvent.Type.Hide):
             QTimer.singleShot(0, self._update_window_interaction_state)
+        if event.type() == QEvent.Type.Show and hasattr(self, "refresh_timer"):
+            # The 15 s refresh skips while hidden: catch up on reopen.
+            QTimer.singleShot(0, self._refresh_if_changed)
         return super().event(event)
 
     def _owns_widget(self, widget):
@@ -3878,13 +3879,11 @@ class StatsWindow(QWidget):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
     def begin_protected_interaction(self):
+        # The refresh timer keeps running: _refresh_if_changed itself skips
+        # while a dialog, popup, drag or mouse press is in progress (BUG-028:
+        # it used to stop whenever the window was focused).
         self._protected_interaction_depth += 1
         if self._protected_interaction_depth == 1:
-            if hasattr(self, "refresh_timer") and self.refresh_timer.isActive():
-                self._protected_refresh_was_active = True
-                self.refresh_timer.stop()
-            else:
-                self._protected_refresh_was_active = False
             if self.parent_overlay and hasattr(self.parent_overlay, "suspend_stats_window_tracking"):
                 self.parent_overlay.suspend_stats_window_tracking()
 
@@ -3893,8 +3892,6 @@ class StatsWindow(QWidget):
             return
         self._protected_interaction_depth -= 1
         if self._protected_interaction_depth == 0:
-            if getattr(self, "_protected_refresh_was_active", False) and hasattr(self, "refresh_timer"):
-                self.refresh_timer.start(15000)
             if self.parent_overlay and hasattr(self.parent_overlay, "resume_stats_window_tracking"):
                 self.parent_overlay.resume_stats_window_tracking()
 
@@ -4379,7 +4376,20 @@ class StatsWindow(QWidget):
         return rows[:limit] if limit else rows
 
     def _match_limitless_row(self, deck_name):
-        return match_meta_row(deck_name, self._top_limitless_rows())
+        """Cached: fuzzy-matching a name against every Limitless row
+        (difflib) was most of a refresh (BUG-028). The only other inputs are
+        the meta data object and the base-archetype file."""
+        meta = self.limitless_standard_meta
+        signature = deck_archetypes_signature()
+        cache = getattr(self, "_meta_match_cache", None)
+        if cache is None or cache[0] is not meta or cache[1] != signature:
+            cache = (meta, signature, {})
+            self._meta_match_cache = cache
+        key = deck_name or ""
+        if key not in cache[2]:
+            cache[2][key] = match_meta_row(deck_name, self._top_limitless_rows())
+        hit = cache[2][key]
+        return dict(hit) if hit else hit
 
     def _field_benchmark_winrate(self, limit=10):
         rows = self._top_limitless_rows(limit)
@@ -5731,6 +5741,17 @@ class StatsWindow(QWidget):
                     except Exception:
                         pass
 
+        # Removing / adding tabs moves the current index; without this guard
+        # each move built the (about to be deleted) page that became current.
+        self._deck_tabs_rebuilding = True
+        try:
+            self._replace_deck_tabs(deck_analyses, current_name, prior_scrolls)
+        finally:
+            self._deck_tabs_rebuilding = False
+        if deck_analyses:
+            self._after_deck_tabs_rebuilt()
+
+    def _replace_deck_tabs(self, deck_analyses, current_name, prior_scrolls):
         while self.deck_tabs.count():
             widget = self.deck_tabs.widget(0)
             self.deck_tabs.removeTab(0)
@@ -5774,11 +5795,16 @@ class StatsWindow(QWidget):
         if current_name in self.deck_tab_lookup:
             self.deck_tabs.setCurrentIndex(self.deck_tab_lookup[current_name])
 
+    def _after_deck_tabs_rebuilt(self):
         self._deck_dashboards_dirty = False
-        # Build the visible deck now, the rest one by one in the background.
+        # Build the visible deck now. The first time, the rest follow one by
+        # one in the background; after that each page is rebuilt when it's
+        # opened (rebuilding every page on every refresh was BUG-028).
         self._ensure_deck_page(self.deck_tabs.currentIndex())
-        generation = self._deck_preload_generation
-        QTimer.singleShot(250, lambda g=generation: self._preload_next_deck_page(g))
+        if not getattr(self, "_deck_pages_prebuilt", False):
+            self._deck_pages_prebuilt = True
+            generation = self._deck_preload_generation
+            QTimer.singleShot(250, lambda g=generation: self._preload_next_deck_page(g))
 
     def _prebuild_deck_dashboards(self):
         if getattr(self, "_deck_dashboards_dirty", False):
@@ -5786,6 +5812,8 @@ class StatsWindow(QWidget):
 
     def _ensure_deck_page(self, index):
         """Build the real dashboard page behind a deck tab (once)."""
+        if getattr(self, "_deck_tabs_rebuilding", False):
+            return
         if not hasattr(self, "deck_tabs") or index is None or index < 0:
             return
         holder = self.deck_tabs.widget(index)
@@ -5844,6 +5872,8 @@ class StatsWindow(QWidget):
     def open_deck_dashboard(self, deck_name):
         if not hasattr(self, "deck_tabs"):
             return
+        if self._deck_dashboards_dirty:
+            self._refresh_deck_dashboards()  # deck_tab_lookup must be current
         if deck_name not in self.deck_tab_lookup:
             return
         if hasattr(self, "decks_tab_index"):
@@ -5878,18 +5908,14 @@ class StatsWindow(QWidget):
 
         vlayout.addLayout(header_row)
 
+        self.replay_view = None
+        self.replay_profile = None
+        self.replay_page = None
         if WEBENGINE_AVAILABLE:
-            self.replay_view = QWebEngineView()
-            self.replay_view.setMinimumHeight(420)
-            self.replay_profile = None
-            self.replay_page = None
-            self._rebuild_replay_page()
-            # Loaded on first view of the tab (see handle_tab_changed).
-            vlayout.addWidget(self.replay_view, stretch=1)
+            # Built (and loaded) on first view of the tab or first replay
+            # request: _ensure_replay_view (BUG-028).
+            self._replay_host = vlayout
         else:
-            self.replay_view = None
-            self.replay_profile = None
-            self.replay_page = None
             fallback = QLabel("Qt WebEngine is not available. Replay loading will fall back to your browser.")
             fallback.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 11px; font-style: italic;")
             fallback.setWordWrap(True)
@@ -5897,6 +5923,15 @@ class StatsWindow(QWidget):
             vlayout.addStretch()
 
         return outer
+
+    def _ensure_replay_view(self):
+        if not WEBENGINE_AVAILABLE or self.replay_view is not None:
+            return self.replay_view
+        self.replay_view = QWebEngineView()
+        self.replay_view.setMinimumHeight(420)
+        self._rebuild_replay_page()
+        self._replay_host.addWidget(self.replay_view, stretch=1)
+        return self.replay_view
 
     def _create_replay_profile(self):
         profile = QWebEngineProfile(self)
@@ -6890,6 +6925,7 @@ class StatsWindow(QWidget):
     def handle_tab_changed(self, index):
         tab_name = self.tab_widget.tabText(index)
         if tab_name == "In Person":
+            self._ensure_in_person_view()
             self._refresh_decklist_choices()
         elif tab_name == "Meta":
             if not self._top_limitless_rows():
@@ -6906,11 +6942,11 @@ class StatsWindow(QWidget):
                 self.limitless_manager.enable_background_mode()
                 self.limitless_manager.ensure_visible_dashboard_loaded()
         elif tab_name == "Replay":
-            view = getattr(self, "replay_view", None)
+            view = self._ensure_replay_view()
             if view is not None and view.url().isEmpty():
                 view.load(QUrl(PTCGL_REPLAY_URL))
         elif tab_name == "PokeData":
-            view = getattr(self, "_pokedata_webview", None)
+            view = self._ensure_pokedata_view()
             if view is not None and view.url().isEmpty():
                 view.load(QUrl(self._pokedata_home_url))
         elif tab_name == "TrainerHill":
@@ -7017,13 +7053,10 @@ class StatsWindow(QWidget):
         self.in_person_status.setWordWrap(True)
         vlayout.addWidget(self.in_person_status)
 
+        self.in_person_view = None
         if WEBENGINE_AVAILABLE:
-            self.in_person_view = QWebEngineView()
-            self.in_person_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            self.in_person_view.loadFinished.connect(self._on_in_person_loaded)
-            vlayout.addWidget(self.in_person_view, stretch=1)
+            self._in_person_host = vlayout  # view built on first visit (_ensure_in_person_view)
         else:
-            self.in_person_view = None
             vlayout.addStretch()
         self._refresh_decklist_choices()
         # The monitor saves exports in its own process: pick new ones up
@@ -7034,6 +7067,16 @@ class StatsWindow(QWidget):
         self._decklist_timer.timeout.connect(self._poll_decklists)
         self._decklist_timer.start()
         return outer
+
+    def _ensure_in_person_view(self):
+        if not WEBENGINE_AVAILABLE or self.in_person_view is not None:
+            return self.in_person_view
+        adblock.install()  # default profile
+        self.in_person_view = QWebEngineView()
+        self.in_person_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.in_person_view.loadFinished.connect(self._on_in_person_loaded)
+        self._in_person_host.addWidget(self.in_person_view, stretch=1)
+        return self.in_person_view
 
     def _poll_decklists(self):
         if not hasattr(self, "tab_widget") or self.tab_widget.currentIndex() != getattr(self, "in_person_tab_index", -1):
@@ -7132,6 +7175,7 @@ class StatsWindow(QWidget):
             btn.setChecked(k == key)
         if key == "print":
             self._refresh_decklist_choices()
+        self._ensure_in_person_view()
         if self.in_person_view is None:
             webbrowser.open(self.IN_PERSON_LINKS[key])
             return
@@ -8969,23 +9013,19 @@ class StatsWindow(QWidget):
         nav_layout.setSpacing(6)
         nav_layout.setContentsMargins(0, 0, 0, 4)
 
+        self._pokedata_webview = None
         if WEBENGINE_AVAILABLE:
-            self._pokedata_webview = QWebEngineView()
-            self._pokedata_webview.setMinimumHeight(450)
-            self._pokedata_webview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            # Zoom out so the tools fit better (was too zoomed in).
-            self._pokedata_webview.setZoomFactor(0.50)
-            # Loaded on first view of the tab (see handle_tab_changed).
-
+            # View built and loaded on first view of the tab
+            # (handle_tab_changed -> _ensure_pokedata_view).
             for label, url in POKEDATA_PAGES:
                 btn = QPushButton(label)
                 btn.setObjectName("metaNavBtn")
                 btn.setFixedHeight(28)
-                btn.clicked.connect(lambda checked=False, u=url: self._pokedata_webview.load(QUrl(u)))
+                btn.clicked.connect(lambda checked=False, u=url: self._ensure_pokedata_view().load(QUrl(u)))
                 nav_layout.addWidget(btn)
             nav_layout.addStretch()
             vlayout.addWidget(nav_bar)
-            vlayout.addWidget(self._pokedata_webview, stretch=1)
+            self._pokedata_host = vlayout
         else:
             # Fallback: grid of link buttons
             for label, url in POKEDATA_PAGES:
@@ -9002,6 +9042,19 @@ class StatsWindow(QWidget):
             vlayout.addStretch()
 
         return outer
+
+    def _ensure_pokedata_view(self):
+        if not WEBENGINE_AVAILABLE or self._pokedata_webview is not None:
+            return self._pokedata_webview
+        adblock.install()  # default profile
+        view = QWebEngineView()
+        view.setMinimumHeight(450)
+        view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # Zoom out so the tools fit better (was too zoomed in).
+        view.setZoomFactor(0.50)
+        self._pokedata_webview = view
+        self._pokedata_host.addWidget(view, stretch=1)
+        return view
 
     # ─── END META ANALYSIS TABS ─────────────────────────────────────────────
 
@@ -10213,7 +10266,11 @@ class StatsWindow(QWidget):
         A full load_stats rebuilds every deck analysis, both graphs and marks
         all deck pages for rebuilding, which made the UI stutter every 15 s
         and the Decks tab freeze on the next visit even with no new data.
+        Skipped while hidden (the Show event catches up) and while the user
+        is mid-interaction (next tick).
         """
+        if not self.isVisible() or self._refresh_blocked():
+            return
         try:
             signature = self.db.data_signature()
         except Exception:
@@ -10221,6 +10278,17 @@ class StatsWindow(QWidget):
         if signature is not None and signature == getattr(self, "_last_data_signature", None):
             return
         self.load_stats()
+
+    def _refresh_blocked(self):
+        """A dialog, popup menu, drag/resize or held mouse button: rebuilding
+        the pages now would yank things out from under the user."""
+        if self.dragging or self.resizing:
+            return True
+        if QApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            return True
+        app = QApplication.instance()
+        return bool(app is not None and (app.activePopupWidget() is not None
+                                         or app.activeModalWidget() is not None))
 
     def load_stats(self):
         """Load and display all statistics"""
@@ -10260,10 +10328,12 @@ class StatsWindow(QWidget):
             self._deck_dashboards_dirty = True
             if hasattr(self, "tab_widget") and self.tab_widget.currentIndex() == getattr(self, "decks_tab_index", -1):
                 self._refresh_deck_dashboards(self.deck_analyses)
-            else:
-                # Pre-build the deck tabs shortly after loading (tab shells
-                # now, pages one by one), so the first click into Decks or on
-                # a deck is instant instead of freezing.
+            elif not getattr(self, "_deck_pages_prebuilt", False):
+                # Pre-build the deck tabs shortly after the first load (tab
+                # shells now, pages one by one), so the first click into
+                # Decks or on a deck is instant instead of freezing. Later
+                # refreshes only mark them dirty: the Decks tab rebuilds the
+                # visible page when shown, the rest on first view (BUG-028).
                 QTimer.singleShot(1500, self._prebuild_deck_dashboards)
 
             # Load recent battles
@@ -10812,6 +10882,7 @@ class StatsWindow(QWidget):
                 print(f"Log file not found: {resolved_path}")
                 return
 
+            self._ensure_replay_view()
             if WEBENGINE_AVAILABLE and getattr(self, "replay_view", None) is not None and getattr(self, "replay_page", None) is not None:
                 self._replay_request_token += 1
                 self.replay_pending_log_path = resolved_path
