@@ -51,6 +51,7 @@ from deck_analytics import (
 )
 from charts import SeriesChart, TrendChart, MAX_SERIES, series_style
 import trainerhill_trend
+import adblock
 import card_usage
 from deck_score import compute_scores
 import formulas
@@ -866,6 +867,7 @@ class LimitlessDashboardManager(QObject):
         self.profile.setCachePath(os.path.join(LIMITLESS_PROFILE_DIR, "cache"))
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
         self.profile.setHttpUserAgent("TCGLiveMonitor/2.3 Limitless Dashboard")
+        adblock.install(self.profile)
 
         page = QWebEnginePage(self.profile, self)
         try:
@@ -3099,6 +3101,8 @@ class StatsWindow(QWidget):
         super().__init__()
         self.db = BattleDatabase()
         self.parent_overlay = parent_overlay
+        if WEBENGINE_AVAILABLE:
+            adblock.install()  # default profile: In Person, PokeData and other plain views
         self.limitless_manager = get_limitless_dashboard_manager()
         app = QApplication.instance()
         if app is not None and "QToolTip" not in (app.styleSheet() or ""):
@@ -5647,6 +5651,7 @@ class StatsWindow(QWidget):
 
     def _create_replay_profile(self):
         profile = QWebEngineProfile(self)
+        adblock.install(profile)
         try:
             profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
         except Exception:
@@ -8422,6 +8427,7 @@ class StatsWindow(QWidget):
         folder = os.path.join(BASE_DIR, ".trainerhill_web_profile")
         os.makedirs(folder, exist_ok=True)
         profile = QWebEngineProfile("trainerhill-tools", self)
+        adblock.install(profile)
         profile.setPersistentStoragePath(folder)
         profile.setCachePath(os.path.join(folder, "cache"))
         profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies)
@@ -9037,6 +9043,13 @@ class StatsWindow(QWidget):
         body.addLayout(pet_row)
         pet_box.toggled.connect(lambda c: (self._save_app_setting("overlay_pet", bool(c)), pet_combo.setEnabled(c)))
         pet_combo.currentIndexChanged.connect(lambda _i: self._save_app_setting("overlay_pet_species", pet_combo.currentData()))
+        ad_box = QCheckBox("Block ads and trackers in the built-in browser tabs")
+        ad_box.setObjectName("settingsCheck")
+        ad_box.setToolTip(f"Lightweight host blocking (adblock_hosts.txt, {len(adblock.load_hosts())} domains, editable). "
+                          f"Blocked this session: {adblock.blocked_count()}.")
+        ad_box.setChecked(bool(settings.get("browser_adblock", True)))
+        ad_box.toggled.connect(lambda c: (self._save_app_setting("browser_adblock", bool(c)), adblock.set_enabled(c)))
+        body.addWidget(ad_box)
         credit = QLabel("Sprites: PMD Sprite Repository (sprites.pmdcollab.org), CC BY-NC 4.0.")
         credit.setObjectName("settingsDesc")
         body.addWidget(credit)

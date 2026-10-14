@@ -31,6 +31,7 @@ deck_popup.py
 deck_confirm.py
 sounds.py
 pet.py
+adblock.py
 deck_analytics.py
 deck_score.py
 formulas.py
@@ -44,6 +45,7 @@ card_usage.py
 screen_regions.json
 icon.ico
 ding.mp3
+adblock_hosts.txt
 button_templates\battle_log.png
 button_templates\battle_log_export.png
 button_templates\battle_hud_gear.png
