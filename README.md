@@ -4,7 +4,7 @@ A companion app for Pokemon TCG Live that keeps track of your games for you.
 
 It runs quietly in the background while you play. After every match it grabs the battle log, works out what you and your opponent were playing and who won, and saves it. A small overlay sits in the corner of the game showing your rank and today's record, and there's a full dashboard when you want to dig into how your decks are actually doing.
 
-## What it does
+## What it do tho
 
 - Saves every game automatically: your deck, their deck, the result and your rank at the time.
 - Figures out the opponent's deck from the cards they played. With an OpenAI key it uses AI for this; without one it works out the deck from public decklists.
@@ -13,7 +13,7 @@ It runs quietly in the background while you play. After every match it grabs the
 - Compares your decks against the current meta using tournament data from Limitless, so you can see how they stack up beyond your own handful of games.
 - Has extra tabs for replays, tournament tools and decklists, so you don't have to keep a browser open next to the game.
 
-## Getting it
+## Download 
 
 Download the setup file from the [latest release](https://github.com/lavahawk/Pokemon-TCG-Live-Monitor/releases/latest) and run it. Everything it needs comes with it, and it doesn't need admin rights.
 
@@ -42,8 +42,9 @@ Developer notes on how everything fits together are in `DevVault/`. Open it as a
 ## Requirements
 
 - Windows 10 or 11 (64-bit)
-- Pokemon TCG Live
-- An OpenAI API key, only if you want AI deck detection
+- A will to keep going
+- Pokemon TCG Live (super optional btw)
+- An OpenAI API key, only if you want AI deck detection, Ill share mine for a Mcchicken.
 
 ## Feedback
 
