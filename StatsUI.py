@@ -697,19 +697,6 @@ class WindowResizeHandle(QFrame):
         painter.end()
 
 
-class ClickableFrame(QFrame):
-    """Lightweight frame with a clicked signal for row-style interactions."""
-
-    clicked = Signal()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-
 class ReplayWebPage(QWebEnginePage if WEBENGINE_AVAILABLE else QObject):
     """WebEngine page that can auto-answer the replay site's file picker."""
 
@@ -2956,11 +2943,6 @@ class MetaFetcher(QThread):
         response.raise_for_status()
         return response.json()
 
-    def _post_json(self, url, payload, *, timeout=30):
-        response = self.session.post(url, json=payload, timeout=timeout)
-        response.raise_for_status()
-        return response.json()
-
     def _prefetch_sprite_icons(self, rows):
         os.makedirs(META_ICON_CACHE_DIR, exist_ok=True)
         seen = set()
@@ -3902,138 +3884,6 @@ class StatsWindow(QWidget):
     def is_protected_interaction_active(self):
         return self._protected_interaction_depth > 0
 
-    def _create_metric_grid(self, metrics, columns=4):
-        container = QWidget()
-        layout = QGridLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
-
-        for index, metric in enumerate(metrics):
-            title = metric.get("title", "")
-            value = metric.get("value", "--")
-            accent = metric.get("accent", "#EEF4FF")
-            tooltip = metric.get("tooltip")
-
-            card = QFrame()
-            card.setObjectName("metaStatCard")
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(10, 8, 10, 8)
-            card_layout.setSpacing(2)
-
-            value_label = QLabel(value)
-            value_label.setObjectName("metaStatValue")
-            value_label.setStyleSheet(f"color: {accent}; font-size: 15px; font-weight: 700;")
-            title_label = QLabel(title)
-            title_label.setObjectName("metaStatTitle")
-
-            if tooltip:
-                card.setToolTip(tooltip)
-                value_label.setToolTip(tooltip)
-                title_label.setToolTip(tooltip)
-
-            card_layout.addWidget(value_label)
-            card_layout.addWidget(title_label)
-            layout.addWidget(card, index // columns, index % columns)
-
-        return container
-
-    def _create_scale_metric_card(self, title, value_text, fill_ratio, accent, subtitle=None):
-        card = QFrame()
-        card.setObjectName("deckMetricCard")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
-
-        header = QLabel(title)
-        header.setObjectName("metaStatTitle")
-        layout.addWidget(header)
-
-        value = QLabel(value_text)
-        value.setObjectName("deckScaleValue")
-        value.setStyleSheet(f"color: {accent};")
-        layout.addWidget(value)
-
-        track = QFrame()
-        track.setObjectName("deckScaleTrack")
-        track_layout = QHBoxLayout(track)
-        track_layout.setContentsMargins(0, 0, 0, 0)
-        track_layout.setSpacing(0)
-
-        fill = QFrame()
-        fill.setObjectName("deckScaleFill")
-        fill.setStyleSheet(
-            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {accent}, stop:1 rgba(255,255,255,0.92)); border-radius: 4px;"
-        )
-
-        ratio = max(0, min(100, int(round(fill_ratio * 100.0))))
-        track_layout.addWidget(fill, ratio)
-        track_layout.addStretch(max(0, 100 - ratio))
-        layout.addWidget(track)
-
-        if subtitle:
-            note = QLabel(subtitle)
-            note.setObjectName("deckMetricNote")
-            note.setWordWrap(True)
-            layout.addWidget(note)
-
-        return card
-
-    def _create_interval_metric_card(self, title, low_pct, mid_pct, high_pct, accent, subtitle=None):
-        card = QFrame()
-        card.setObjectName("deckMetricCard")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
-
-        header = QLabel(title)
-        header.setObjectName("metaStatTitle")
-        layout.addWidget(header)
-
-        value = QLabel(f"{mid_pct:.1f}%")
-        value.setObjectName("deckScaleValue")
-        value.setStyleSheet(f"color: {accent};")
-        layout.addWidget(value)
-
-        meter = QWidget()
-        meter.setMinimumHeight(18)
-        meter.setStyleSheet("background: transparent;")
-        meter_layout = QVBoxLayout(meter)
-        meter_layout.setContentsMargins(0, 0, 0, 0)
-        meter_layout.setSpacing(2)
-
-        bar = QFrame()
-        bar.setObjectName("deckIntervalBar")
-        bar.setFixedHeight(8)
-        bar.setStyleSheet("background-color: rgba(255,255,255,0.06); border-radius: 4px;")
-        bar_layout = QHBoxLayout(bar)
-        bar_layout.setContentsMargins(0, 0, 0, 0)
-        bar_layout.setSpacing(0)
-
-        left_spacer = max(0, min(100, int(round(low_pct))))
-        interval_width = max(2, min(100 - left_spacer, int(round(high_pct - low_pct))))
-        right_spacer = max(0, 100 - left_spacer - interval_width)
-
-        bar_layout.addStretch(left_spacer)
-        interval = QFrame()
-        interval.setStyleSheet(f"background-color: {accent}; border-radius: 4px;")
-        bar_layout.addWidget(interval, interval_width)
-        bar_layout.addStretch(right_spacer)
-        meter_layout.addWidget(bar)
-
-        marker_row = QLabel(f"{low_pct:.0f}–{high_pct:.0f}%")
-        marker_row.setObjectName("deckMetricNote")
-        meter_layout.addWidget(marker_row)
-        layout.addWidget(meter)
-
-        if subtitle:
-            note = QLabel(subtitle)
-            note.setObjectName("deckMetricNote")
-            note.setWordWrap(True)
-            layout.addWidget(note)
-
-        return card
-
     # One colour rule for the whole deck page, based on how sure we are the
     # deck wins more than it loses (P(win rate > 50%)) - not on raw cut-offs.
     WINNING, UNCLEAR, LOSING, NEUTRAL = "#66BB6A", "#F9A825", "#EF5350", "#6BB6E8"
@@ -4442,24 +4292,11 @@ class StatsWindow(QWidget):
             return f"{wins}-{losses}-{ties}"
         return f"{wins}-{losses}"
 
-    def _summarize_meta_record(self, row):
-        wins = float(row.get("wins", 0) or 0)
-        losses = float(row.get("losses", 0) or 0)
-        ties = float(row.get("ties", 0) or 0)
-        return bayesian_binomial_summary(wins, losses, ties)
-
     def _percent_accent(self, pct):
         if pct >= 55:
             return "#66BB6A"
         if pct >= 50:
             return "#4A9FD8"
-        return "#EF5350"
-
-    def _probability_accent(self, probability_pct):
-        if probability_pct >= 65:
-            return "#66BB6A"
-        if probability_pct >= 45:
-            return "#F9A825"
         return "#EF5350"
 
     def _delta_accent(self, delta):
@@ -4807,97 +4644,6 @@ class StatsWindow(QWidget):
         # Show every row (the page scrolls, not a tiny box inside it).
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setFixedHeight(table.horizontalHeader().sizeHint().height() + 42 * table.rowCount() + 6)
-        table.cellDoubleClicked.connect(lambda row, col, links=row_links: self._open_row_link(links, row))
-        return table
-
-    def _create_top_meta_table(self, analysis):
-        table = self._make_meta_table(
-            ["#", "Top Deck", "Meta Share", "Limitless WR", "Your Record", "Bayes WR"],
-            [42, None, 88, 88, 86, 90],
-        )
-        row_links = []
-        rows = analysis.get("top_meta_matrix", [])
-        table.setRowCount(0)
-        for row_index, entry in enumerate(rows):
-            meta_row = entry.get("meta_row", {})
-            summary = entry.get("summary", {})
-            games = entry.get("games", 0)
-            wins = entry.get("wins", 0)
-            losses = entry.get("losses", 0)
-            table.insertRow(row_index)
-            table.setRowHeight(row_index, 42)
-            self._set_meta_item(table, row_index, 0, str(row_index + 1))
-            table.setCellWidget(
-                row_index,
-                1,
-                self._create_deck_cell_widget(
-                    meta_row.get("deck", ""),
-                    meta_row.get("icons", []),
-                    subtitle=f"{int(meta_row.get('count', 0) or 0)} finishes",
-                ),
-            )
-            self._set_meta_item(table, row_index, 2, f"{float(meta_row.get('share', 0) or 0):.1f}%")
-            meta_wr = float(meta_row.get("win_pct", 0) or 0)
-            self._set_meta_item(table, row_index, 3, f"{meta_wr:.1f}%", accent=self._percent_accent(meta_wr))
-            record_text = self._format_record_text(wins, losses, entry.get("ties", 0)) if games else "--"
-            self._set_meta_item(table, row_index, 4, record_text, muted=games == 0)
-            if games:
-                local_wr = summary.get("bayes_mean", 0) * 100.0
-                self._set_meta_item(table, row_index, 5, f"{local_wr:.1f}%", accent=self._percent_accent(local_wr))
-            else:
-                self._set_meta_item(table, row_index, 5, "--", muted=True)
-            row_links.append(meta_row.get("deck_url"))
-
-        table.cellDoubleClicked.connect(lambda row, col, links=row_links: self._open_row_link(links, row))
-        return table
-
-    def _create_matchup_table(self, analysis):
-        table = self._make_meta_table(
-            ["Opponent", "Games", "Record", "Bayes WR", "95% CI", "Current Meta"],
-            [None, 64, 80, 86, 118, 120],
-        )
-        table.setRowCount(0)
-        row_links = []
-
-        rows = analysis.get("matchups", [])
-        for row_index, entry in enumerate(rows[:14]):
-            summary = entry.get("summary", {})
-            bayes_pct = summary.get("bayes_mean", 0) * 100.0
-            ci_low = summary.get("ci_low", 0) * 100.0
-            ci_high = summary.get("ci_high", 0) * 100.0
-            meta_match = entry.get("matched_meta")
-            meta_row = meta_match.get("row", {}) if meta_match else {}
-            meta_text = "Unmatched"
-            if meta_match:
-                meta_text = f"#{meta_match.get('rank')} • {float(meta_row.get('share', 0) or 0):.1f}%"
-
-            table.insertRow(row_index)
-            table.setRowHeight(row_index, 42)
-            table.setCellWidget(
-                row_index,
-                0,
-                self._create_deck_cell_widget(
-                    entry.get("deck", ""),
-                    meta_row.get("icons", []),
-                    subtitle=self._format_record_text(
-                        entry.get("wins", 0),
-                        entry.get("losses", 0),
-                        entry.get("ties", 0),
-                    ),
-                ),
-            )
-            self._set_meta_item(table, row_index, 1, str(entry.get("games", 0)))
-            self._set_meta_item(
-                table,
-                row_index,
-                2,
-                self._format_record_text(entry.get("wins", 0), entry.get("losses", 0), entry.get("ties", 0)),
-            )
-            self._set_meta_item(table, row_index, 3, f"{bayes_pct:.1f}%", accent=self._percent_accent(bayes_pct))
-            self._set_meta_item(table, row_index, 4, f"{ci_low:.0f}% - {ci_high:.0f}%")
-            self._set_meta_item(table, row_index, 5, meta_text, muted=not meta_match)
-            row_links.append(meta_row.get("deck_url"))
-
         table.cellDoubleClicked.connect(lambda row, col, links=row_links: self._open_row_link(links, row))
         return table
 
@@ -6963,13 +6709,6 @@ class StatsWindow(QWidget):
                     webbrowser.open(link)
                 return
 
-    def _trend_display(self, trend):
-        if trend == "up":
-            return "UP", "#66BB6A"
-        if trend == "down":
-            return "DOWN", "#EF5350"
-        return "EVEN", "#F9A825"
-
     def _open_row_link(self, links, row):
         if 0 <= row < len(links) and links[row] and _is_safe_web_url(links[row]):
             webbrowser.open(links[row])
@@ -7007,37 +6746,6 @@ class StatsWindow(QWidget):
             self._render_japan_table()
         elif tab_name == "Advanced":
             self._refresh_battle_mgmt_if_stale()
-
-    def _meta_header_bar(self, title_text, last_updated_label, refresh_btn, browser_url=None, browser_label="Open in Browser"):
-        """Build the top bar used by all meta tabs: title | last updated | refresh | browser btn."""
-        bar = QFrame()
-        bar.setObjectName("metaHeaderBar")
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(0, 0, 0, 8)
-        row.setSpacing(10)
-
-        title = QLabel(title_text)
-        title.setObjectName("sectionHeader")
-        row.addWidget(title)
-
-        row.addStretch()
-
-        last_updated_label.setStyleSheet("color: rgba(255,255,255,0.35); font-size: 10px;")
-        row.addWidget(last_updated_label)
-
-        refresh_btn.setObjectName("metaRefreshBtn")
-        refresh_btn.setFixedHeight(28)
-        refresh_btn.setFixedWidth(70)
-        row.addWidget(refresh_btn)
-
-        if browser_url:
-            open_btn = QPushButton(browser_label)
-            open_btn.setObjectName("limitlessBtn")
-            open_btn.setFixedHeight(28)
-            open_btn.clicked.connect(lambda: webbrowser.open(browser_url))
-            row.addWidget(open_btn)
-
-        return bar
 
     # ── In Person tab ────────────────────────────────────────────────────
     IN_PERSON_LINKS = {
@@ -7650,15 +7358,6 @@ class StatsWindow(QWidget):
             if use_weights and col in self.META_WEIGHTED_COLS:
                 tip += "<br><span style='color:#FFD54F'>Weighted by your custom weights (Preferences).</span>"
             item.setToolTip(tip)
-
-    @classmethod
-    def _uncertain_note(cls, res):
-        """Hover header for a Score marked * (wide 90% range)."""
-        if not cls._score_is_uncertain(res):
-            return ""
-        half = (res["high"] - res["low"]) * 50.0
-        return (f"<b>* Low confidence</b> · 90% range {_pct_range(res['low'], res['high'])} "
-                f"(± {half:.1f} pts, wider than ± {cls.SCORE_FLAG_PTS:g})<br>")
 
     @staticmethod
     def _rank_text(res, with_range=True):
@@ -8682,13 +8381,6 @@ class StatsWindow(QWidget):
             self.limitless_dashboard_autocheck_btn.setText(
                 "Auto Check-In: ON" if enabled else "Auto Check-In: OFF"
             )
-
-    def enable_limitless_background_watch(self):
-        if not self.limitless_manager:
-            return
-        self.limitless_manager.enable_background_mode()
-        self.limitless_manager.ensure_visible_dashboard_loaded()
-        self._sync_limitless_autocheck_button()
 
     def toggle_limitless_auto_checkin(self):
         if not self.limitless_manager:

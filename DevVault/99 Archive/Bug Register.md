@@ -42,7 +42,7 @@ Line numbers are from the 2026-10-11 snapshot.
 | BUG-025 | Low | code | fixed (v2.4) | [[RankDetector and BattleState]] | `find_game_window` substring title match also hits "Pokemon TCG Live Monitor – Startup Manager" and browser tabs |
 | BUG-026 | Low | code | fixed (v2.4) | [[RankDetector and BattleState]] | Regions with negative coords (monitor left/above primary) are rejected, so OCR is dead there |
 | BUG-027 | Med | confirmed | fixed (v2.4) | [[japan_data]] | Frozen source slugs; rows show 100% WR; first-substring translation; wrong translations; duplicate keys; 2 AI calls per name |
-| BUG-028 | Low | code | partial | [[StatsUI]] | Heavy dashboard: eager WebEngine views, rebuild every deck page, geometry written per pixel, refresh paused while focused |
+| BUG-028 | Low | code | fixed 2026-10-14 | [[StatsUI]] | Heavy dashboard: eager WebEngine views, rebuild every deck page, geometry written per pixel, refresh paused while focused |
 | BUG-029 | Low | code | fixed (v2.4) | [[TCGLiveMonitor]] | Import-time side effects run before the single-instance check (second launch clears console / prompts) |
 | BUG-030 | Low | code | fixed (v2.4) | [[AIParseBattleLog]] | Excel sheet name not sanitized (`[]:*?/\`), so the workbook update fails |
 | BUG-031 | Low | code | fixed (v2.4) | [[AIParseBattleLog]] | OpenAI client has no timeout; 3-model fallback can exceed the monitor's 180 s kill, so nothing is saved |
