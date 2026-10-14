@@ -783,3 +783,77 @@ def _hatch_brush(color):
     """Diagonal hatch (45 degrees) in the surface colour, for texture slots."""
     from PySide6.QtGui import QBrush
     return QBrush(color, Qt.BrushStyle.BDiagPattern)
+
+
+# ── Rank per deck (deck page) ─────────────────────────────────────────────
+WIN_COLOR, LOSS_COLOR, TIE_COLOR = "#66BB6A", "#EF5350", "#9AA5B1"
+RANK_ACCENT = "#F9A825"  # same as the dashboard RANK chart
+
+
+def _result_kind(result):
+    value = (result or "").strip().lower()
+    if value.startswith("w"):
+        return "W"
+    if value.startswith("l"):
+        return "L"
+    return "T"
+
+
+def deck_rank_points(battles):
+    """SeriesChart points for one deck's ladder rank: one per game with a
+    recorded `my_rank` (oldest first), marker and strip coloured by result.
+    `battles` are BattleDatabase.get_deck_battles_detailed() dicts."""
+    from leagues import league_name
+    points = []
+    prev = None
+    for b in battles:
+        rank = b.get("my_rank")
+        if rank is None:
+            continue
+        try:
+            rank = int(rank)
+            when = datetime.fromisoformat(str(b.get("timestamp")))
+        except (TypeError, ValueError):
+            continue
+        kind = _result_kind(b.get("result"))
+        color = {"W": WIN_COLOR, "L": LOSS_COLOR, "T": TIE_COLOR}[kind]
+        label = {"W": "Win", "L": "Loss", "T": "Tie"}[kind]
+        day = _fmt_day(when) + (f", {when.year}" if when.year != datetime.now().year else "")
+        tip = [f"{rank:,}   {league_name(rank)}",
+               f"Game {len(points) + 1} · {day} · {_fmt_time(when)}",
+               f"{label} vs {b['opponent']}" if b.get("opponent") else label]
+        if prev is not None and rank != prev:
+            tip.append(f"{rank - prev:+,} since this deck's previous game")
+        points.append({"y": rank, "t": when, "dot": color, "strip": color, "tip": tip, "result": kind})
+        prev = rank
+    return points
+
+
+def deck_rank_summary(points):
+    """One line under the chart: first → last rank, change, peak, record."""
+    if not points:
+        return ""
+    first, last = points[0]["y"], points[-1]["y"]
+    peak = max(p["y"] for p in points)
+    wins = sum(1 for p in points if p.get("result") == "W")
+    losses = sum(1 for p in points if p.get("result") == "L")
+    ties = len(points) - wins - losses
+    record = f"{wins}-{losses}" + (f"-{ties}" if ties else "")
+    return (f"{first:,} → {last:,} ({last - first:+,}) over {len(points)} ranked games ({record})"
+            f" · peak {peak:,}")
+
+
+def make_deck_rank_chart(points, height=180):
+    """A compact SeriesChart for deck_rank_points(), styled like the
+    dashboard RANK chart (league thresholds as reference lines)."""
+    from leagues import LEAGUES
+    chart = SeriesChart(RANK_ACCENT)
+    chart.y_format = lambda v: f"{v:,.0f}"
+    chart.y_min_pad = 6
+    chart.y_clamp = (0, float("inf"))
+    chart.empty_text = "No ranked games with this deck"
+    chart.ref_lines = [(threshold, name, QColor(249, 168, 37, 70)) for threshold, _key, name in LEAGUES if threshold > 0]
+    chart.setMinimumSize(240, height)
+    chart.setMaximumHeight(height)
+    chart.set_data(points, animate=False)
+    return chart
