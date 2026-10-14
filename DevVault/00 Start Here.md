@@ -27,7 +27,7 @@ Repo `lavahawk/Pokemon-TCG-Live-Monitor`, branch `main`. Commits have **no Claud
 See **Session log** below.
 
 ## Open
-- [ ] Release v2.6 (the 10-13 and 10-14 work isn't in an installer yet).
+- [x] v2.6.0 released 2026-10-14 (installer smoke-tested in the build; not yet install-tested on the PC).
 - [ ] 9 stored opponent labels contradicted by the opponent's cards (#4, 12, 17, 27, 32, 44, 48, 52, 56). Relabel only with the user's OK, after a DB backup.
 - [ ] BUG-033: the Playwright replay fallback fails silently. SEC-02: the API key is in plaintext. SEC-09: no disclosure of third-party data sharing.
 - [ ] Ideas: rank chart per deck; tune `CLOSE_CALL` / `CLOSE_CONTENDER` once there are more confirmed labels; auto-capture a decklist when all 60 cards have been seen.
