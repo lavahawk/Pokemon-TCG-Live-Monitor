@@ -13,6 +13,9 @@ APP_SETTINGS_FILE = os.path.join(BASE_DIR, ".app_settings.json")
 
 DEFAULT_SETTINGS = {
     "local_only_mode": False,
+    # Replace both player usernames with placeholders before a battle log is
+    # sent to OpenAI (SEC-09). Local parsing always sees the real names.
+    "ai_anonymize_names": True,
 }
 
 
@@ -128,3 +131,7 @@ def save_app_settings(settings):
 
 def is_local_only_mode():
     return bool(load_app_settings().get("local_only_mode", False))
+
+
+def is_ai_anonymize_names():
+    return bool(load_app_settings().get("ai_anonymize_names", True))

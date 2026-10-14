@@ -6400,6 +6400,24 @@ class StatsWindow(QWidget):
         self.local_only_checkbox.toggled.connect(lambda checked: self.refresh_parser_mode_status())
         parser_layout.addWidget(self.local_only_checkbox)
 
+        # SEC-09: say plainly what leaves the machine, and offer to strip names.
+        self.privacy_notice_label = QLabel(
+            "Privacy: with an API key, each battle log is sent to OpenAI to name the decks. "
+            "Replay uploads the log to ptcglreplay.com. Limitless match chat is saved locally with each battle.")
+        self.privacy_notice_label.setObjectName("settingsDesc")
+        self.privacy_notice_label.setWordWrap(True)
+        parser_layout.addWidget(self.privacy_notice_label)
+
+        self.ai_anonymize_checkbox = QCheckBox("Hide both usernames from OpenAI (sent as Player / Opponent)")
+        self.ai_anonymize_checkbox.setObjectName("settingsCheck")
+        self.ai_anonymize_checkbox.setToolTip(
+            "Replaces your name and your opponent's name in the log before it is sent to OpenAI. "
+            "Local parsing and the saved log keep the real names.")
+        self.ai_anonymize_checkbox.setChecked(bool(self.app_settings.get("ai_anonymize_names", True)))
+        self.ai_anonymize_checkbox.toggled.connect(
+            lambda checked: self._save_app_setting("ai_anonymize_names", bool(checked)))
+        parser_layout.addWidget(self.ai_anonymize_checkbox)
+
         self.auto_export_checkbox = QCheckBox("Auto-export the battle log at the end of each battle")
         self.auto_export_checkbox.setObjectName("settingsCheck")
         self.auto_export_checkbox.setToolTip(
