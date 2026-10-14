@@ -446,6 +446,20 @@ class MinimalOverlay(QWidget):
         self._poll_game_session()
         self._poll_pet()
 
+    def _game_floor_drop(self):
+        """Logical px from the mini GUI's bottom down to the game's visible
+        bottom edge (its client area: GetWindowRect also counts Windows'
+        invisible resize border, ~10 px)."""
+        dpr = self.devicePixelRatioF() or 1.0
+        try:
+            hwnd = getattr(self, "game_hwnd", None)
+            _l, _t, cw, ch = win32gui.GetClientRect(hwnd)
+            client_bottom = win32gui.ClientToScreen(hwnd, (cw, ch))[1]
+            mini_bottom = getattr(self, "_last_pos", (0, 0))[1] + int(self.height() * dpr)
+            return max(0.0, (client_bottom - mini_bottom) / dpr)
+        except Exception:
+            return 2.0
+
     def _poll_pet(self):
         """HUD buddy: create / drop / re-species it as the setting changes,
         keep it beside the mini GUI and hidden whenever the overlay is."""
@@ -465,9 +479,8 @@ class MinimalOverlay(QWidget):
                 self.pet.set_species(species)
             show = self.isVisible() and getattr(self, "_overlay_placed", False)
             if show:
-                # the mini GUI sits 12 physical px inside the game window's bottom edge (follow_game_window)
                 self.pet.follow(self.frameGeometry(), self.ball_icon.mapToGlobal(self.ball_icon.rect().center()),
-                                drop=12 / (self.devicePixelRatioF() or 1.0))
+                                drop=self._game_floor_drop())
                 if not self.pet.isVisible():
                     self.pet.show()
             elif self.pet.isVisible():
