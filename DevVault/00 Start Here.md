@@ -60,3 +60,4 @@ See **Session log** below.
   - hidden meters in `.pet_state.json`: hunger in games, happiness, energy, level. Hearts by mood; angry fit when starving; more naps when hungry or tired.
   - face bubbles on 1 in 5 clicks, only when fed
   - treats (`TREATS`): Oran / Pecha / Cheri / Chesto / Sitrus with effects; Rare Candy 1/20 (level up, meters maxed, 30 min cooldown)
+- Double-clicking the mini GUI Pokéball recalls / sends out the buddy (`pet.toggle_ball`). A recalled buddy stays in through battles (`recalled`).

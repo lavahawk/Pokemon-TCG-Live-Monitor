@@ -181,6 +181,7 @@ class PetWidget(QWidget):
         self.speed_mul = 1.0
         self.shake_until = self.anger_at = 0.0
         self.hyper_until = 0.0
+        self.recalled = False
         self.mem = _load_state()
         self._saved_at = time.monotonic()
         self.flash = None         # time of the white burst at the ball
@@ -333,6 +334,21 @@ class PetWidget(QWidget):
             self._enter("capture", 0.85)
             self._ball_stay = stay
         self.walk_to(self.ball.x() + 16, then=go)
+
+    def toggle_ball(self):
+        """Double-clicking the mini GUI's Pokeball: recall it from wherever it
+        is, or send it back out. Recalled, it stays in until sent out."""
+        if self.state in ("capture", "release"):
+            return
+        if self.state == "ball":
+            self.recalled = False
+            self._release()
+            return
+        self.recalled = True  # stays in, even through battles, until sent out
+        self.arc, self.after_walk, self.berry, self.y_off, self.zs = None, None, None, 0.0, []
+        self.fx_from = self._centre()
+        self._ball_stay = 6 * 3600
+        self._enter("capture", 0.85)
 
     def _peek(self):
         """Peek up from the game's bottom edge, clear of the mini GUI."""
@@ -490,7 +506,7 @@ class PetWidget(QWidget):
     # ── battles (called by the overlay) ──
     def battle_start(self):
         """A quick cheer, then slowly off: into the Pokeball, or a nap on the right."""
-        if self.battle:
+        if self.battle or self.recalled:
             return
         self.battle, self.berry, self.after_walk, self.y_off = True, None, None, 0.0
         if self.state in ("ball", "capture", "release"):
@@ -515,6 +531,8 @@ class PetWidget(QWidget):
         if self.mood() != "fed":
             self._meter("happiness", -8)
         _save_state(self.mem)
+        if self.recalled:
+            return  # recalled by the user: stays in the ball
         if self.state in ("ball", "capture", "release"):
             self._pending_result = result  # played once it has popped out
             if self.state == "ball":

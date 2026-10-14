@@ -725,6 +725,8 @@ class MinimalOverlay(QWidget):
         # Pokeball icon label
         self.ball_icon = QLabel()
         self.ball_icon.setFixedSize(12, 12)
+        # Double-click the ball: recall / send out the HUD buddy (pet.py)
+        self.ball_icon.mouseDoubleClickEvent = lambda e: getattr(self, "pet", None) is not None and self.pet.toggle_ball()
         stats_layout.addWidget(self.ball_icon)
         
         # Stats text label — double-click opens a mini reset popup
