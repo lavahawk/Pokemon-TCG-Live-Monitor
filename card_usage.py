@@ -110,10 +110,10 @@ def log_cards(battlelog, player, other=None):
 MAX_COPIES = 4
 
 
-def log_card_counts(battlelog, player, other=None):
+def log_card_counts(battlelog, player, other=None, cap=MAX_COPIES):
     """{card: copies seen} for `player`: how many times each card was put
     into play (benched / played to the Active Spot / evolved into / played as
-    a Trainer / attached), capped at 4. Cards only shown (mulligan, search,
+    a Trainer / attached), capped at `cap` (4; None = no cap). Cards only shown (mulligan, search,
     discard) count 1. A lower bound, apart from cards recycled and replayed:
     "4 Gengar ex seen" says Gengar deck, "1 Zoroark ex" says a tech."""
     if not battlelog or not player:
@@ -163,7 +163,7 @@ def log_card_counts(battlelog, player, other=None):
             actor, bench_list = other, False
         elif not line.startswith("- "):
             actor, bench_list = None, False
-    return {name: min(MAX_COPIES, max(1, n)) for name, n in counts.items()}
+    return {name: min(cap or n or 1, max(1, n)) for name, n in counts.items()}
 
 
 _PATTERN = {"names": None, "regex": None}
@@ -279,3 +279,216 @@ def explain(ranked, copies, rows, max_fit=4, max_odd=3):
                 f"{n} ({mine[n]['incl']:.0f}%)" if n in mine else f"{n} (not played)" for n in odd[:max_odd])
         lines.append(line)
     return "\n".join(lines)
+
+
+# ── Your own decklist from the cards you showed (auto-capture) ────────────
+DECK_SIZE = 60
+BASIC_ENERGY = frozenset(f"{t} Energy" for t in
+                         ("Grass", "Fire", "Water", "Lightning", "Psychic", "Fighting", "Darkness", "Metal"))
+# Standard-era ACE SPECs (a deck plays at most one, one copy). Names as card_name() spells them.
+ACE_SPECS = frozenset({
+    "Amulet of Hope", "Awakening Drum", "Brilliant Blender", "Dangerous Laser", "Deluxe Bomb",
+    "Energy Search Pro", "Enriching Energy", "Grand Tree", "Gravity Gemstone", "Hero's Cape",
+    "Hyper Aroma", "Legacy Energy", "Master Ball", "Max Rod", "Maximum Belt", "Megaton Blower",
+    "Miracle Headset", "Neo Upper Energy", "Neutralization Zone", "Poké Vital A", "Precious Trolley",
+    "Prime Catcher", "Reboot Pod", "Scoop Up Cyclone", "Scramble Switch", "Secret Box",
+    "Sparkling Crystal", "Survival Brace", "Treasure Tracker", "Unfair Stamp",
+})
+
+
+def legal_copies(name, seen):
+    """Copies of `name` a legal deck can hold, given `seen` in one game:
+    any number of basic Energy, 1 of an ACE SPEC, else at most 4. More seen
+    than that means a card was recovered and played again."""
+    if name in BASIC_ENERGY:
+        return seen
+    return min(seen, 1 if name in ACE_SPECS else MAX_COPIES)
+
+
+CONFIRM_GAMES = 3  # games after the 60th card that must show nothing new
+
+
+def merge_seen(games, size=DECK_SIZE, confirm=CONFIRM_GAMES):
+    """Your deck from the cards you showed over several games of it.
+
+    games: [{card: copies seen}] newest game first (log_deck_counts). Each
+    card counts its max copies in any one game (capped to the legal number).
+    Games are added newest first while the union still fits a legal deck (at
+    most `size` cards, one ACE SPEC); the first game that doesn't (deck
+    edited, or a card over-counted) ends it.
+
+    Adding games one by one, the union tends to land on exactly `size` just
+    before it overflows, even when an older version's tech fills the place
+    of a copy never seen. So the list is only complete once `confirm` more
+    games fit it without adding anything.
+
+    Returns {"cards": {card: copies}, "total", "games": games used,
+    "confirmed": games after the union reached `size`, "complete",
+    "stop": None or why the next game was left out}."""
+    cards, used, stop, confirmed = {}, 0, None, 0
+    for game in games:
+        merged = dict(cards)
+        for name, n in (game or {}).items():
+            merged[name] = max(merged.get(name, 0), legal_copies(name, max(1, int(n))))
+        aces = sorted(n for n in merged if n in ACE_SPECS)
+        if len(aces) > 1:
+            stop = "two ACE SPECs: " + ", ".join(aces)
+        elif sum(merged.values()) > size:
+            stop = f"{sum(merged.values())} cards > {size}"
+        if stop:
+            break
+        if sum(cards.values()) == size:
+            confirmed += 1  # already full and still fits: nothing new
+        cards, used = merged, used + 1
+    total = sum(cards.values())
+    return {"cards": cards, "total": total, "games": used, "confirmed": confirmed,
+            "complete": total == size and confirmed >= confirm, "stop": stop}
+
+
+def card_prints(rows=(), lists=()):
+    """{card: (cat, set, number)} for writing a list: prints from your own
+    PTCGL exports first, then the meta sheet's most played print."""
+    prints = {}
+    for text in lists:
+        cat = "P"
+        for line in (text or "").splitlines():
+            line = line.strip()
+            # "Pok.?mon": older stored exports have a mangled é
+            head = re.match(r"(Pok.?mon|Trainer|Energy)\s*:\s*\d+$", line, re.IGNORECASE)
+            if head:
+                cat = "P" if head.group(1).lower().startswith("pok") else CATS[head.group(1).lower()]
+                continue
+            m = re.match(r"\d+\s+(.+?)\s+([A-Za-z0-9-]{2,6})\s+([A-Za-z0-9-]+)$", line)
+            if m:
+                prints.setdefault(card_name(m.group(1)), (cat, m.group(2), m.group(3)))
+    for row in rows:
+        for c in sorted(row.get("cards") or [], key=lambda c: -(c.get("incl") or 0)):
+            if c.get("set") and c.get("number"):
+                prints.setdefault(c["name"], (c["cat"], c["set"], str(c["number"])))
+    return prints
+
+
+def format_list(cards, prints):
+    """(PTCGL export text for {card: copies}, []) or (None, [cards with no
+    known print]). Basic Energy is written as PTCGL does ("Basic {D} Energy")."""
+    missing = sorted(n for n in cards if n not in prints)
+    if missing:
+        return None, missing
+    symbol = {v: k for k, v in ENERGY_TYPES.items()}
+    out = []
+    for cat in ("P", "T", "E"):
+        names = sorted((n for n in cards if prints[n][0] == cat), key=lambda n: (-cards[n], n))
+        out.append(f"{CAT_NAMES[cat]}: {sum(cards[n] for n in names)}")
+        for n in names:
+            shown = f"Basic {{{symbol[n.split()[0]]}}} Energy" if n in BASIC_ENERGY else n
+            out.append(f"{cards[n]} {shown} {prints[n][1]} {prints[n][2]}")
+        out.append("")
+    out.append(f"Total Cards: {sum(cards.values())}")
+    return "\n".join(out), []
+
+
+# Trainers whose "shuffled ... into their deck" puts cards from the discard
+# pile back (not from the hand, like Lillie's Determination or Unfair Stamp).
+RECOVERY_TRAINERS = frozenset({"Energy Recycler", "Super Rod", "Pal Pad", "Energy Retrieval", "Night Stretcher"})
+
+
+def log_deck_counts(battlelog, player, other=None):
+    """{card: copies} that `player`'s deck must hold, from one battle log:
+    the most copies of each card out of the hand and deck at the same time
+    (in play or in the discard pile). Unlike log_card_counts, a card that
+    goes back and is played again doesn't count twice: Night Stretcher
+    ("moved X to their hand"), an ability that shuffles the Pokemon back
+    ("played Dudunsparce." / "X used Run Away Draw", then "shuffled 2 cards
+    into their deck" with the cards listed) and Energy Recycler lower the
+    count; "played Prism Tower." on a Stadium already in play is its effect,
+    not a card. Cards only shown (mulligan, search) count 1. Not capped: see
+    legal_copies."""
+    if not battlelog or not player:
+        return {}
+    names = log_card_counts(battlelog, player, other, cap=None)
+    out, peak, pokemon, stadiums, used = {}, {}, set(), set(), set()
+    pending = False   # the current action returns cards from play / discard to the deck
+    bullets = None    # what the "•" list under the last line is: "put" / "return"
+
+    def ok(name):  # a card name, not "a card" / "2 cards"
+        return name and name[0].isupper() and ":" not in name and not re.search(r"\d", name)
+
+    def put(name):
+        if ok(name):
+            out[name] = out.get(name, 0) + 1
+            peak[name] = max(peak.get(name, 0), out[name])
+
+    def back(name):
+        if out.get(name, 0) > 0:
+            out[name] -= 1
+
+    for raw in battlelog.splitlines():
+        line = raw.strip().replace("’", "'")
+        if not line:
+            continue
+        if line.startswith("•"):
+            for item in line.lstrip("• ").split(","):
+                if bullets == "put":
+                    pokemon.add(card_name(item))
+                    put(card_name(item))
+                elif bullets == "return":
+                    back(card_name(item))
+            continue
+        bullets = None
+        sub = line.startswith("- ")
+        body = line[2:] if sub else line
+        in_play = re.search(r" played (.+?) to the Stadium spot", body)
+        if in_play:
+            stadiums.add(card_name(in_play.group(1)))  # either player's
+        if not body.startswith(player):
+            if not sub:
+                pending = False
+            continue
+        text = body[len(player):]
+        if other and other in text:
+            text = text[:text.index(other)]
+        if text.startswith("'s "):
+            # "<player>'s Dudunsparce used Run Away Draw." (also attacks; harmless)
+            if not sub:
+                pending = bool(re.match(r"'s .+? used ", text))
+            continue
+        if not sub:
+            pending = False
+        evolved = re.match(r"\s+evolved (.+?) to (.+?)(?: in the | on the |\.?$)", text)
+        benched = re.match(r"\s+played (.+?) to the (?:Bench|Active Spot)", text)
+        stadium = re.match(r"\s+played (.+?) to the Stadium spot", text)
+        played = re.match(r"\s+played (.+?)\.?$", text)
+        attached = re.match(r"\s+attached (.+?)(?: to | in the |\.?$)", text)
+        moved = re.match(r"\s+moved " + re.escape(player) + r"'s (.+?) to their hand", text)
+        shuffled = re.match(r"\s+shuffled (.+?) into their deck", text)
+        if "played them to the Bench" in text:
+            bullets = "put"
+        elif evolved:
+            pokemon.update(card_name(evolved.group(n)) for n in (1, 2))
+            put(card_name(evolved.group(2)))
+        elif benched:
+            pokemon.add(card_name(benched.group(1)))
+            put(card_name(benched.group(1)))
+        elif stadium:
+            put(card_name(stadium.group(1)))
+        elif played:
+            name = card_name(played.group(1))
+            if name in pokemon:
+                pending = True  # an ability ("played Dudunsparce."), not a card
+            elif name in stadiums:
+                used.add(name)  # the Stadium's effect ("played Prism Tower."), maybe the opponent's
+            else:
+                put(name)
+                pending = name in RECOVERY_TRAINERS
+        elif attached:
+            put(card_name(attached.group(1)))
+        elif moved:
+            back(card_name(moved.group(1)))
+        elif shuffled and pending:
+            what = shuffled.group(1)
+            if re.fullmatch(r"\d+ cards?", what):
+                bullets = "return"
+            elif what != "their deck":
+                back(card_name(what))
+    return {n: max(1, peak.get(n, 0)) for n in set(names) | set(peak)
+            if ok(n) and not (n in used and not peak.get(n))}

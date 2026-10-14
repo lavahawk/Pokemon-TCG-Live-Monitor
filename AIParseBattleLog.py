@@ -813,6 +813,13 @@ def main():
                               candidates=response_dict.get("Candidates") or [])
             except Exception as exc:
                 print(f"Warning: Could not request the deck confirmation card: {exc}")
+            try:
+                from decklists import capture_from_games
+                captured = capture_from_games(my_deck, username)
+                if captured and captured.get("entry"):
+                    print(f"[Decklist] all 60 cards of {my_deck} seen: list saved and linked.")
+            except Exception as exc:
+                print(f"Warning: decklist auto-capture failed: {exc}")
         else:
             print("DUPLICATE: this battle log is already in the database.")
     except Exception as exc:
