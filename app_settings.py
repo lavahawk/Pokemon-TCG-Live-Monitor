@@ -1,9 +1,13 @@
+import base64
+import ctypes
 import json
 import os
+import sys
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-API_KEY_FILE = os.path.join(BASE_DIR, ".openai_key")
+API_KEY_FILE = os.path.join(BASE_DIR, ".openai_key")  # legacy plaintext; migrated on first read
+API_KEY_SECURE_FILE = os.path.join(BASE_DIR, ".openai_key.dpapi")
 USER_CONFIG_FILE = os.path.join(BASE_DIR, ".user_config")
 APP_SETTINGS_FILE = os.path.join(BASE_DIR, ".app_settings.json")
 
@@ -36,20 +40,68 @@ def save_username(username):
     _write_text_file(USER_CONFIG_FILE, username or "")
 
 
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+
+def _dpapi(data, protect):
+    """Encrypt/decrypt bytes with Windows DPAPI (tied to this Windows user)."""
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    buffer = ctypes.create_string_buffer(data, len(data))
+    blob_in = _DataBlob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char)))
+    blob_out = _DataBlob()
+    func = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
+    if not func(ctypes.byref(blob_in), None, None, None, None, 0x1, ctypes.byref(blob_out)):  # UI_FORBIDDEN
+        raise OSError("DPAPI call failed")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        kernel32.LocalFree(blob_out.pbData)
+
+
+def _remove(path):
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
 def load_api_key():
-    return _read_text_file(API_KEY_FILE)
+    if sys.platform != "win32":
+        return _read_text_file(API_KEY_FILE)
+    encoded = _read_text_file(API_KEY_SECURE_FILE)
+    if encoded:
+        try:
+            return _dpapi(base64.b64decode(encoded), False).decode("utf-8").strip() or None
+        except Exception:
+            pass
+    legacy = _read_text_file(API_KEY_FILE)  # written by older versions and the installer
+    if legacy:
+        try:
+            save_api_key(legacy)
+        except Exception:
+            pass
+    return legacy
 
 
 def save_api_key(api_key):
-    _write_text_file(API_KEY_FILE, api_key or "")
+    api_key = (api_key or "").strip()
+    if sys.platform != "win32":
+        _write_text_file(API_KEY_FILE, api_key)
+        return
+    if not api_key:
+        clear_api_key()
+        return
+    encoded = base64.b64encode(_dpapi(api_key.encode("utf-8"), True)).decode("ascii")
+    _write_text_file(API_KEY_SECURE_FILE, encoded)
+    _remove(API_KEY_FILE)
 
 
 def clear_api_key():
-    try:
-        if os.path.exists(API_KEY_FILE):
-            os.remove(API_KEY_FILE)
-    except Exception:
-        pass
+    _remove(API_KEY_FILE)
+    _remove(API_KEY_SECURE_FILE)
 
 
 def load_app_settings():

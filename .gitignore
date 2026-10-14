@@ -1,5 +1,6 @@
 # API Keys and Sensitive Data
 .openai_key
+.openai_key.dpapi
 .user_config
 *.key
 .env
