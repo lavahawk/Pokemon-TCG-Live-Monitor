@@ -10,6 +10,14 @@ import math
 import threading
 import subprocess
 import webbrowser
+
+# Console prints use ✓/→ etc.; a cp1252 pipe or log would raise UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if _stream is not None:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from PySide6.QtWidgets import (

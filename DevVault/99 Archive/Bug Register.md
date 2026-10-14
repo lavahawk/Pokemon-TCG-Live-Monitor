@@ -48,7 +48,7 @@ Line numbers are from the 2026-10-11 snapshot.
 | BUG-031 | Low | code | fixed (v2.4) | [[AIParseBattleLog]] | OpenAI client has no timeout; 3-model fallback can exceed the monitor's 180 s kill, so nothing is saved |
 | BUG-032 | Low | code | fixed (v2.4) | [[OverlayUI]] | Liveness uses `psutil.pid_exists`, so a recycled PID keeps an orphan overlay alive |
 | BUG-033 | Low | code | fixed 2026-10-14 | [[StatsUI]] | Replay fallback: Playwright not installed and the helper's errors go to DEVNULL, so it fails silently |
-| BUG-034 | Low | confirmed | partial | various | Code health: `\(` SyntaxWarning in banner, unused vars, stale VERSION strings, no-assert test, dead code, doc drift |
+| BUG-034 | Low | confirmed | fixed 2026-10-14 | various | Code health: `\(` SyntaxWarning in banner, unused vars, stale VERSION strings, no-assert test, dead code, doc drift |
 | BUG-036 | High | confirmed | fixed (v2.4) | [[Startup and Installers]] | Pinned packages (numpy 1.26, pandas 2.2, pygame 2.5, pydantic 2.6, matplotlib 3.8) have no wheels for Python 3.13, so pip fails on fresh PCs with the current python.org default. bootstrap_setup.ps1 now finds or installs Python 3.12 |
 | BUG-035 | Low | code | fixed (v2.4) | [[TCGLiveMonitor]] | `pyperclip.copy('')` wipes the user's clipboard every time the game starts |
 | BUG-037 | Critical | confirmed | fixed (v2.4) | [[BattleEndAutomation]] | Real game, home screen: BATTLE LOG template matched a dark bar beside PLAY (0.84) and clicked it twice; the wrong spot was then cached. Fix: OCR must read "BATTLE LOG" in the matched box before any click; unverified positions are never cached |
