@@ -226,7 +226,13 @@ def test_auto_capture_keeps_older_store_lists():
 
 
 if __name__ == "__main__":
+    failures = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
-            fn()
-            print("ok", name)
+            try:
+                fn()
+                print(f"PASS {name}")
+            except Exception as exc:
+                failures += 1
+                print(f"FAIL {name}: {type(exc).__name__}: {exc}")
+    sys.exit(1 if failures else 0)
