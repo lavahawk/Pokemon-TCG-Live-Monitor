@@ -58,11 +58,11 @@ CANDY = ("1100011", "1111111", "0111110", "1111111", "1100011")
 # right-click treats: (weight, colour, effects). happy/energy are meter changes;
 # full = games it stays fed; hyper = seconds of zoomies; calm = no grumpiness.
 TREATS = {
-    "Oran":   (40, (70, 120, 230), {"happy": 10, "energy": 10, "full": 3}),
-    "Pecha":  (20, (245, 150, 190), {"happy": 18, "energy": 5, "full": 3, "calm": True}),
-    "Cheri":  (15, (225, 50, 60), {"happy": 8, "energy": 35, "full": 3, "hyper": 60}),
-    "Chesto": (12, (110, 80, 170), {"happy": 5, "energy": 60, "full": 3}),
-    "Sitrus": (8, (240, 210, 70), {"happy": 22, "energy": 15, "full": 6}),
+    "Oran":   (75, (70, 120, 230), {"happy": 10, "energy": 10, "full": 3}),
+    "Pecha":  (8, (245, 150, 190), {"happy": 18, "energy": 5, "full": 3, "calm": True}),
+    "Cheri":  (7, (225, 50, 60), {"happy": 8, "energy": 35, "full": 3, "hyper": 60}),
+    "Chesto": (6, (110, 80, 170), {"happy": 5, "energy": 60, "full": 3}),
+    "Sitrus": (4, (240, 210, 70), {"happy": 22, "energy": 15, "full": 6}),
 }
 RARE_CANDY_ODDS = 1 / 20
 RARE_CANDY_COOLDOWN_S = 30 * 60
