@@ -49,6 +49,7 @@ from deck_analytics import (
     win_rate_posterior,
 )
 from charts import SeriesChart, TrendChart, MAX_SERIES, series_style
+from charts import deck_rank_points, deck_rank_summary, make_deck_rank_chart, WIN_COLOR, LOSS_COLOR
 import trainerhill_trend
 import adblock
 import card_usage
@@ -4307,6 +4308,37 @@ class StatsWindow(QWidget):
         layout.addWidget(legend)
         return card
 
+    def _create_deck_rank_card(self, analysis):
+        """Compact ladder rank over this deck's games (charts.deck_rank_points).
+        None when no game has a rank; a one-line note for a single game."""
+        battles = [b for b in self.db.get_deck_battles_detailed(analysis.get("deck_name", ""))
+                   if not b.get("imported")]
+        points = deck_rank_points(battles)
+        if not points:
+            return None
+        card, layout = self._create_dashboard_card("RANK WITH THIS DECK")
+        if len(points) < 2:
+            only = points[0]
+            note = QLabel(f"One ranked game so far: rank {only['y']:,} ({league_name(only['y'])}), "
+                          f"{only['tip'][2]}. The chart appears after the next one.")
+            note.setObjectName("deckMetricNote")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            return card
+        layout.addWidget(make_deck_rank_chart(points))
+        legend = QLabel(
+            f"<span style='color:{WIN_COLOR}'>●</span> win &nbsp;"
+            f"<span style='color:{LOSS_COLOR}'>●</span> loss &nbsp;&nbsp;"
+            f"{deck_rank_summary(points)} &nbsp;&nbsp;"
+            "<span style='color:#8A97AA'>hover for each game · drag to zoom</span>")
+        legend.setToolTip("Your ladder rank recorded with each game played with this deck. "
+                          "Games with other decks in between aren't shown, so a step can include them.")
+        legend.setTextFormat(Qt.TextFormat.RichText)
+        legend.setObjectName("deckMetricNote")
+        legend.setWordWrap(True)
+        layout.addWidget(legend)
+        return card
+
     def _load_meta_cache(self, source):
         cache_file = os.path.join(BASE_DIR, f".meta_cache_{source}.json")
         if not os.path.exists(cache_file):
@@ -5182,6 +5214,9 @@ class StatsWindow(QWidget):
         layout.addWidget(hero_card)
 
         layout.addWidget(self._create_deck_trend_card(analysis))
+        rank_card = self._create_deck_rank_card(analysis)
+        if rank_card is not None:
+            layout.addWidget(rank_card)
 
         matchup_card, matchup_layout = self._create_dashboard_card("MATCHUPS VS THE META")
         matchup_card.setProperty("deckMatchups", True)
