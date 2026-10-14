@@ -410,6 +410,7 @@ class MinimalOverlay(QWidget):
         self.deck_timer.start(1000)
         self._session_seen = None
         self._session_prompt_due = None
+        self.pet = None  # HUD buddy (pet.py), off unless overlay_pet is on
         _dbg("__init__ complete")
     
     def _poll_deck_confirm(self):
@@ -439,6 +440,34 @@ class MinimalOverlay(QWidget):
         except Exception as exc:
             _dbg(f"_poll_deck_confirm error: {exc}")
         self._poll_game_session()
+        self._poll_pet()
+
+    def _poll_pet(self):
+        """HUD buddy: create / drop / re-species it as the setting changes,
+        keep it beside the mini GUI and hidden whenever the overlay is."""
+        try:
+            wanted = bool(_overlay_setting("overlay_pet", False))
+            if not wanted:
+                if self.pet is not None:
+                    self.pet.close()
+                    self.pet.deleteLater()
+                    self.pet = None
+                return
+            species = _overlay_setting("overlay_pet_species", "pikachu")
+            if self.pet is None:
+                from pet import PetWidget
+                self.pet = PetWidget(species)
+            else:
+                self.pet.set_species(species)
+            show = self.isVisible() and getattr(self, "_overlay_placed", False)
+            if show:
+                self.pet.follow(self.frameGeometry())
+                if not self.pet.isVisible():
+                    self.pet.show()
+            elif self.pet.isVisible():
+                self.pet.hide()
+        except Exception as exc:
+            _dbg(f"_poll_pet error: {exc}")
 
     def _poll_game_session(self):
         """New Pokemon TCG Live session (monitor wrote .game_session): offer

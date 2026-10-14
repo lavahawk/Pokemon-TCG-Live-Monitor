@@ -1,0 +1,7 @@
+Pixel sprites: PMD Sprite Repository / SpriteCollab (https://sprites.pmdcollab.org),
+licensed CC BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/). Not for commercial use.
+Pokemon is (c) Nintendo / Creatures / GAME FREAK / The Pokemon Company.
+
+pikachu (#0025): sprite credits in SpriteCollab sprite/0025/credits.txt (CHUNSOFT)
+gengar (#0094): sprite credits in SpriteCollab sprite/0094/credits.txt (<@!237286997645983744>, CHUNSOFT)
+eevee (#0133): sprite credits in SpriteCollab sprite/0133/credits.txt (CHUNSOFT)
