@@ -53,6 +53,8 @@ def _load():
         return {"lists": []}
     if not isinstance(data, dict):
         return {"lists": []}
+    if "lists" in data and not isinstance(data["lists"], list):
+        data["lists"] = []
     if "lists" not in data:
         old = list((data.get("by_deck") or {}).values())
         if not old and data.get("latest"):

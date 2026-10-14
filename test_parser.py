@@ -358,6 +358,28 @@ def test_ai_parse_raises_when_every_model_fails():
     assert calls == P.AI_MODELS
 
 
+def test_regression_winner_needs_whole_name():
+    assert P.parse_winner_from_log("Opponent took all of their Prize cards. MrAsh wins.", "Ash") == "MrAsh"
+    assert P.parse_result_from_log("Opponent took all of their Prize cards. Mr. Ash wins.", "Ash") == "Loss"
+    assert P.parse_result_from_log("All Prize cards taken. Ash wins.", "Ash") == "Win"
+
+
+def test_regression_numbered_header_is_not_a_name():
+    log = _log("Turn # 1 - Zoé B's Turn", "Zoé B drew a card.")
+    assert P.log_player_names(log) == ["Zoé B"]
+
+
+def test_regression_opponent_deck_line_anchored_and_accents():
+    saved = P.load_username
+    try:
+        P.load_username = lambda: "TrashAsh"
+        log = _log("Ash decided to go first.", "TrashAsh played Pikachu to the Active Spot.",
+                   "Ash played Flabébé to the Active Spot.")
+        assert P.infer_opponent_deck_from_log(log) == "Flabébé"
+    finally:
+        P.load_username = saved
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

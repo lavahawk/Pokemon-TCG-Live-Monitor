@@ -227,6 +227,18 @@ def test_pick_treat_respects_candy_cooldown():
         pet.random = saved
 
 
+def test_regression_non_object_state_and_string_bools():
+    for raw in ("null", "[]", '"x"'):
+        with open(pet.STATE_FILE, "w", encoding="utf-8") as handle:
+            handle.write(raw)
+        assert pet._load_state()["recalled"] is False
+    with open(pet.STATE_FILE, "w", encoding="utf-8") as handle:
+        json.dump({"recalled": "false"}, handle)
+    assert pet._load_state()["recalled"] is False
+    pet._save_state(dict(pet._load_state(), level=9))
+    assert pet._load_state()["level"] == 9 and not os.path.exists(pet.STATE_FILE + ".tmp")
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

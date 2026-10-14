@@ -273,6 +273,14 @@ def test_log_card_counts_edge_cases():
     assert C._known_card_pattern() is None
 
 
+def test_regression_null_lists_in_store():
+    reset_store()
+    with open(D.STORE_FILE, "w", encoding="utf-8") as handle:
+        json.dump({"lists": None}, handle)
+    assert D.all_decklists() == []
+    reset_store()
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

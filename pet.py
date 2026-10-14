@@ -83,20 +83,28 @@ def _load_state():
             data = json.load(handle)
     except (OSError, ValueError, TypeError, AttributeError):
         data = {}
+    if not isinstance(data, dict):
+        data = {}
     state = {"games": 0, "fed_game": 0, "full_for": 3, "happiness": 60.0, "energy": 80.0, "level": 5,
              "candy_ready_at": 0.0, "recalled": False}
     for key, default in state.items():
+        value = data.get(key, default)
+        if isinstance(default, bool):
+            state[key] = value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "yes")
+            continue
         try:
-            state[key] = type(default)(data.get(key, default))
+            state[key] = type(default)(value)
         except (TypeError, ValueError):
             pass
     return state
 
 
 def _save_state(state):
+    tmp = STATE_FILE + ".tmp"
     try:
-        with open(STATE_FILE, "w", encoding="utf-8") as handle:
+        with open(tmp, "w", encoding="utf-8") as handle:
             json.dump(state, handle)
+        os.replace(tmp, STATE_FILE)  # atomic: an interrupted write can't reset the meters
     except OSError:
         pass
 

@@ -94,7 +94,7 @@ def log_player_names(battlelog):
     text = (battlelog or "").replace("\r\n", "\n")
     patterns = (
         r"(?m)^Turn #\s*\d+\s*-\s*(.+?)'s Turn\s*$",
-        r"(?m)^(.{1,40})'s Turn\s*$",
+        r"(?m)^(?!Turn #)(.{1,40})'s Turn\s*$",
         r"(?m)^(.{1,40}?) chose (?:heads|tails) for the opening coin flip",
         r"(?m)^(.{1,40}?) won the coin toss",
         r"(?m)^(.{1,40}?) decided to go (?:first|second)",
@@ -303,15 +303,19 @@ def parse_winner_from_log(battlelog, username=None):
 
     Names may contain dots, spaces or non-ASCII characters (BUG-023), so the
     known result sentences are stripped instead of guessing name characters.
-    If the player's own username is given and the line ends with it, that
-    name is returned exactly.
+    If the player's own username is given and the line ends with it as a whole
+    name (after a sentence, not "MrAsh" for "Ash"), that name is returned exactly.
     """
     line = _result_line(battlelog)
     if not line:
         return None
     body = line[: -len(" wins.")].strip()
-    if username and body.casefold().endswith(username.strip().casefold()):
-        return username.strip()
+    own = (username or "").strip()
+    if own and body.casefold().endswith(own.casefold()):
+        before = body[: -len(own)].rstrip(" ")
+        known = any(body.startswith(prefix) for prefix in RESULT_PREFIXES)
+        if not before or before in RESULT_PREFIXES or (not known and before.endswith(".")):
+            return own
     for prefix in RESULT_PREFIXES:
         if body.startswith(prefix):
             return body[len(prefix):].strip() or None
@@ -514,8 +518,8 @@ def infer_opponent_deck_from_log(battlelog):
         return None
     own = re.escape(opponent)
     matches = re.findall(
-        rf"{own} played ([A-Za-z0-9'\- ]+?)(?: ex| V| VMAX| VSTAR)? to the Active Spot",
-        battlelog,
+        rf"(?m)^{own} played ([\w'\-. ]+?)(?: ex| V| VMAX| VSTAR)? to the Active Spot",
+        battlelog.replace(chr(13), ""),
         flags=re.IGNORECASE,
     )
     if matches:
