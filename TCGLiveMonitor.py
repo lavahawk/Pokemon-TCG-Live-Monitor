@@ -23,7 +23,6 @@ output; everything is also written to Logs/monitor.log.
 
 import argparse
 import atexit
-import hashlib
 import os
 import queue
 import re

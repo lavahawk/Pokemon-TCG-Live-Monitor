@@ -1,9 +1,7 @@
 """
-Stats Dashboard for Pokemon TCG Live Monitor v2.1
+Stats Dashboard for Pokemon TCG Live Monitor (version: version.py)
 Modern, sleek UI with transparent glass-morphism design
 """
-
-from version import VERSION
 
 import sys
 import os
@@ -16,15 +14,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QFrame, QPushButton, QScrollArea, QGridLayout, QGraphicsOpacityEffect,
-    QTabWidget, QMessageBox, QLineEdit, QToolButton, QStyle, QDialog,
+    QFrame, QPushButton, QScrollArea, QGridLayout,
+    QTabWidget, QMessageBox, QLineEdit, QToolButton, QDialog,
     QDialogButtonBox, QComboBox, QCompleter, QSlider, QCheckBox, QListWidget, QListWidgetItem,
-    QButtonGroup, QListView, QSpinBox, QStackedWidget
+    QButtonGroup, QListView, QSpinBox
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, Property, QThread, Signal, QSize, QObject, QPoint, QEvent, QRectF, QPointF, QRect
-from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QLinearGradient, QFont, QIcon
-from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QSizePolicy, QAbstractItemView
-from PySide6.QtTest import QTest
+from PySide6.QtCore import Qt, QTimer, QEasingCurve, QThread, Signal, QSize, QObject, QPoint, QEvent, QRectF, QPointF, QRect
+from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QIcon
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QSizePolicy, QAbstractItemView
 from BattleDatabase import BattleDatabase
 from weights import cached_expansions, load_weights, save_weights, DEFAULT_WEIGHTS, LABELS as WEIGHT_LABELS
 from deck_analytics import (
@@ -45,7 +42,6 @@ from deck_analytics import (
     rank_weighted_winrate,
     sample_confidence,
     verdict_from_probability,
-    wilson_interval,
     win_rate_posterior,
 )
 from charts import SeriesChart, TrendChart, MAX_SERIES, series_style
@@ -112,7 +108,6 @@ import shutil
 import time
 import startup_utils
 import weakref
-from urllib.parse import quote_plus, urljoin
 
 try:
     import pygame
@@ -5119,10 +5114,6 @@ class StatsWindow(QWidget):
         matched_meta = analysis.get("matched_meta")
         matched_row = matched_meta.get("row") if matched_meta else {}
         deck_icons = analysis.get("deck_icons", [])
-        summary = analysis.get("summary", {})
-        bayes_pct = summary.get("bayes_mean", 0) * 100.0
-        delta_vs_meta = analysis.get("delta_vs_meta")
-        field_benchmark = analysis.get("field_benchmark")
 
         hero_card, hero_layout = self._create_dashboard_card("DECK SNAPSHOT")
         hero_top = QHBoxLayout()
@@ -7704,7 +7695,6 @@ class StatsWindow(QWidget):
         rows = [r for r in rows if (r.get(share_key) or 0) > 0]
         rows.sort(key=lambda r: -(r.get(share_key) or 0))
         by_key = {r["id"]: r for r in rows}
-        field_total = sum(r.get("share_en") or 0 for r in rows) or 1.0
 
         def overall(r):
             return self._meta_rate_posterior(r.get("wins"), r.get("losses"), r.get("ties"))
@@ -7790,7 +7780,6 @@ class StatsWindow(QWidget):
                     f"#{res.get('rank_high')})" + ("" if res.get("ranked") else " · needs more games"))
             table.item(i, 0).setData(MINE_ROLE, is_mine)
             basis = "own games" if (is_mine and own_basis) else "with archetype"
-            eff = res.get("eff_games", 0)
             self._set_meta_deck_cell(table, i, 1, r.get("deck", ""), r.get("icons", []),
                                      subtitle=(f"{r.get('raw_games', 0)} games · {basis}" if is_mine else None),
                                      sort_value=r.get("deck", "").lower(), link=link, mine=is_mine)
@@ -9076,7 +9065,6 @@ class StatsWindow(QWidget):
     def check_console_availability(self):
         """Check if console window is available and set button state"""
         try:
-            import ctypes
             import win32gui
             import win32process
             import psutil
@@ -9139,7 +9127,7 @@ class StatsWindow(QWidget):
                             try:
                                 with open(pid_file, 'w') as f:
                                     f.write(str(monitor_pid))
-                                print(f"[Console Detection] Updated PID file")
+                                print("[Console Detection] Updated PID file")
                             except:
                                 pass
                             break
@@ -9160,7 +9148,7 @@ class StatsWindow(QWidget):
                                 title = win32gui.GetWindowText(hwnd)
                                 if class_name == "ConsoleWindowClass":
                                     self.monitor_console_hwnd = hwnd
-                                    print(f"[Console Detection] ✓ FOUND MONITOR CONSOLE")
+                                    print("[Console Detection] ✓ FOUND MONITOR CONSOLE")
                                     print(f"[Console Detection]   PID: {pid}, HWND: {hwnd}, Title: '{title}'")
                                     return False
                     except:
@@ -9172,7 +9160,7 @@ class StatsWindow(QWidget):
                 
                 if self.monitor_console_hwnd:
                     console_found = True
-                    print(f"[Console Detection] ✓ Console ready for control")
+                    print("[Console Detection] ✓ Console ready for control")
                 else:
                     print(f"[Console Detection] ✗ No console window found for monitor PID {monitor_pid}")
             else:

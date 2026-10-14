@@ -10,7 +10,6 @@ Every sound except "ding" (ding.mp3, played with pygame) is synthesised, so
 there is nothing to ship or lose. No Qt here: the monitor imports it.
 """
 
-import io
 import math
 import os
 import struct

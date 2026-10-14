@@ -10,7 +10,6 @@ import sys
 import winreg
 from pathlib import Path
 
-from version import VERSION
 TASK_NAME = "PokemonTCGLiveMonitor_v2.4"
 REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REG_VALUE = "PokemonTCGLiveMonitor"
@@ -212,10 +211,7 @@ def _delete_task_elevated(task_name: str) -> bool:
     """
     try:
         import ctypes
-        from ctypes import wintypes
 
-        # Build the command: schtasks /delete /tn "<task>" /f
-        command = f'schtasks /delete /tn "{task_name}" /f'
         # ShellExecuteW with "runas" verb triggers a UAC elevation prompt.
         result = ctypes.windll.shell32.ShellExecuteW(
             None,

@@ -99,9 +99,6 @@ class AutoClicker:
         }
         return True
 
-    def has_template(self, template_name):
-        return template_name in self.templates
-
     # ── matching ───────────────────────────────────────────────────────
     def _candidate_scales(self, name, window_height):
         key = f"{name}@{int(window_height)}"
@@ -298,13 +295,6 @@ class AutoClicker:
             if restore and have_saved:
                 user32.SetCursorPos(saved.x, saved.y)
         return True
-
-    def click_button(self, template_name, region=None, force=False, mode="physical"):
-        """Backwards-compatible: find then physically click."""
-        coords = self.find_button(template_name, region)
-        if not coords:
-            return False
-        return self.physical_click(*coords)
 
 
 def save_template_meta(template_name, window_rect, threshold=DEFAULT_THRESHOLD):

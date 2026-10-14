@@ -68,12 +68,6 @@ class RankDetector:
                 return json.load(f)
         return {}
     
-    def save_regions(self, regions):
-        """Save screen regions to config file"""
-        with open(REGIONS_CONFIG, 'w') as f:
-            json.dump(regions, f, indent=4)
-        self.regions = regions
-    
     def find_game_window(self):
         """
         Find the Pokemon TCG Live game window (exact title match).
@@ -184,85 +178,6 @@ class RankDetector:
             return img
         except Exception:
             return None
-    
-    def check_pixel_colors(self, region_name, expected_colors):
-        """
-        Check if specific pixels in a region match expected colors
-        Used for screen validation
-        
-        Args:
-            region_name: Region to check
-            expected_colors: List of tuples: [(x_offset, y_offset, (r, g, b), tolerance), ...]
-                x_offset, y_offset: Position within the region
-                (r, g, b): Expected RGB color
-                tolerance: Allowed color difference (0-255)
-        
-        Returns:
-            Boolean - True if all pixels match within tolerance
-        """
-        img = self.capture_region(region_name)
-        if not img:
-            return False
-        
-        img_array = np.array(img)
-        
-        for x, y, expected_rgb, tolerance in expected_colors:
-            if x >= img_array.shape[1] or y >= img_array.shape[0]:
-                return False
-            
-            actual_rgb = img_array[y, x][:3]  # Get RGB, ignore alpha if present
-            
-            # Calculate color difference
-            diff = np.abs(actual_rgb.astype(int) - np.array(expected_rgb).astype(int))
-            
-            if np.any(diff > tolerance):
-                return False
-        
-        return True
-    
-    def validate_screen_by_template(self, region_name, template_path, threshold=0.8):
-        """
-        Check if a template image exists in the captured region
-        Used to detect specific screens (main menu, post-battle, etc.)
-        
-        Args:
-            region_name: Region to search in
-            template_path: Path to template image (small screenshot of unique UI element)
-            threshold: Matching confidence (0.0-1.0), higher = stricter
-        
-        Returns:
-            Boolean - True if template found
-        """
-        if not os.path.exists(template_path):
-            print(f"Template not found: {template_path}")
-            return False
-        
-        # Capture region
-        img = self.capture_region(region_name)
-        if not img:
-            return False
-        
-        try:
-            # Convert to OpenCV format
-            img_array = np.array(img)
-            if img_array.size == 0:
-                return False
-            
-            img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-        except Exception:
-            return False
-        
-        # Load template
-        template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-        if template is None:
-            return False
-        
-        # Template matching
-        result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-        
-        return max_val >= threshold
     
     def validate_screen_by_text(self, region_name, expected_texts, partial_match=True):
         """
@@ -550,33 +465,6 @@ class RankDetector:
             if not silent:
                 print("No text detected")
             return None
-    
-    def get_rank_with_retry(self, max_attempts=3, delay=0.5, validate_screen=True):
-        """
-        Try to get rank multiple times with delay between attempts
-        
-        Args:
-            max_attempts: Number of times to try
-            delay: Seconds to wait between attempts
-            validate_screen: If True, only return rank if on main menu
-            
-        Returns:
-            Rank number or None
-        """
-        import time
-        
-        for attempt in range(max_attempts):
-            if validate_screen:
-                rank = self.extract_rank_safe(validate_screen=True, debug=False)
-            else:
-                rank = self.extract_rank(debug=False)
-            
-            if rank is not None:
-                return rank
-            if attempt < max_attempts - 1:
-                time.sleep(delay)
-        
-        return None
 
 
 def read_rank_confirmed(detector, last_accepted=None, reads=2, delay=1.0, big_jump=100, debug=False):
@@ -644,7 +532,7 @@ def test_rank_detection():
     if rank:
         print(f"\n✓ SUCCESS: Detected rank = {rank}")
     else:
-        print(f"\n✗ FAILED: Could not detect rank")
+        print("\n✗ FAILED: Could not detect rank")
         print("Check debug_rank.png to see what was captured")
     
     print("=" * 50)
