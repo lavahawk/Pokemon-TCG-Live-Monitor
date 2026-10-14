@@ -7,7 +7,6 @@ import math
 import os
 import re
 from difflib import SequenceMatcher
-from statistics import NormalDist
 
 TIE_WIN_WEIGHT = 1.0 / 3.0  # default ("third"); see tie_mode()
 
@@ -108,10 +107,6 @@ def normalize_deck_name(name):
     text = text.replace("-", " ")
     tokens = [token for token in text.split() if token and token not in IGNORED_NAME_TOKENS]
     return " ".join(tokens)
-
-
-def deck_tokens(name):
-    return set(normalize_deck_name(name).split())
 
 
 def wilson_interval(wins, total, z=1.96):

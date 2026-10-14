@@ -1,9 +1,7 @@
 """
-Minimal Game Overlay for Pokemon TCG Live Monitor v2.1
+Minimal Game Overlay for Pokemon TCG Live Monitor (version: version.py)
 Ultra-compact, professional overlay that follows the game and allows click-through
 """
-
-from version import VERSION
 
 import sys
 import os
@@ -215,7 +213,7 @@ class LimitlessChatWindow(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         try:
-            import win32gui, win32con, win32api
+            import win32con, win32api
             hwnd = int(self.winId())
             style = win32api.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
             win32api.SetWindowLong(
@@ -850,7 +848,6 @@ class MinimalOverlay(QWidget):
         pixmap.fill(Qt.GlobalColor.transparent)
         p = QPainter(pixmap)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        r = size / 2.0 - 0.5
         # Outline circle
         pen = QColor(color)
         pen.setAlpha(220)

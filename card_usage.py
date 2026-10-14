@@ -174,7 +174,7 @@ def set_known_cards(names):
     names = sorted({n for n in names if n and len(n) > 2}, key=len, reverse=True)
     if names != _PATTERN["names"]:
         _PATTERN["names"] = names
-        alt = "|".join(re.escape(n).replace("\ ", r"\s+") for n in names)
+        alt = "|".join(re.escape(n).replace(r"\ ", r"\s+") for n in names)
         _PATTERN["regex"] = re.compile(rf"(?<![\w'])({alt})(?![\w'])") if names else None
 
 

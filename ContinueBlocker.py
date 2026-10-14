@@ -22,8 +22,8 @@ import time
 import argparse
 import os
 
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QPen
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QPainter, QColor, QPen
 from PySide6.QtWidgets import QApplication, QWidget, QLabel, QHBoxLayout, QPushButton
 
 import win32gui
@@ -46,27 +46,6 @@ def _dbg(msg):
             f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
     except Exception:
         pass
-
-
-def _make_pokeball_pixmap(size=14):
-    """Tiny flat pokeball matching the mini GUI's glyph style."""
-    pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing, False)  # keep the 8-bit look
-    accent = QColor("#FFD9D9")
-    dark = QColor("#3A3A3A")
-    s = size
-    half = s // 2
-    # top half
-    p.fillRect(0, 0, s, half, accent)
-    # bottom half
-    p.fillRect(0, half, s, s - half, dark)
-    # center band + button
-    p.fillRect(0, half - 1, s, 2, QColor("#1A1A1A"))
-    p.fillRect(half - 2, half - 2, 4, 4, QColor("#E9E9E9"))
-    p.end()
-    return pm
 
 
 class ContinueBlocker(QWidget):

@@ -161,11 +161,6 @@ def all_decklists():
     return _load()["lists"]
 
 
-def latest_decklist():
-    lists = all_decklists()
-    return lists[0] if lists else None
-
-
 def store_mtime():
     try:
         return os.path.getmtime(STORE_FILE)

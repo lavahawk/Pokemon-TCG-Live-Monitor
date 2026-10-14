@@ -66,7 +66,6 @@ def event_weights():
 def effective_games(row, pilot_sd=None):
     raw = row.get("raw_games") or 0
     eff = row.get("eff_games")
-    weighted = sum(float(row.get(k) or 0) for k in ("wins", "losses", "ties"))
     tau = f"{pilot_sd * 100:.0f}%" if pilot_sd else "τ"
     lines = [f"{F}evidence (effective sample size) = Kish n ÷ design effect{END}",
              f"{F}Kish n = (Σ w·g)² / Σ w²·g{END}  {DIM}(w = event weight, g = games){END}",

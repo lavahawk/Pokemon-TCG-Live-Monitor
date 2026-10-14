@@ -674,7 +674,7 @@ class TrendChart(QWidget):
                 p.drawPath(edge)
         else:
             for k in order:
-                s, (_lower, upper) = self.series[k], stacks[k]
+                s, upper = self.series[k], stacks[k][1]
                 color, dashed = series_style(s["slot"])
                 if dim and s["id"] != self.focus:
                     color.setAlpha(55)
