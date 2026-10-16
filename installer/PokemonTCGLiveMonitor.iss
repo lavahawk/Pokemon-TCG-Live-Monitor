@@ -49,7 +49,9 @@ WizardStyle=modern
 WizardSizePercent=110
 WizardImageFile={#ArtDir}\wizard-large-100.bmp,{#ArtDir}\wizard-large-200.bmp
 WizardSmallImageFile={#ArtDir}\wizard-small-100.bmp,{#ArtDir}\wizard-small-200.bmp
-Compression=lzma2/ultra64
+; lzma2/ultra64 made Setup die right after start on some PCs (exit -1, nothing
+; installed; found 2026-10-16). max is ~2% bigger and installs everywhere.
+Compression=lzma2/max
 SolidCompression=yes
 LZMAUseSeparateProcess=yes
 ; Running copies are stopped by [Code] (Python processes ignore Restart Manager).
