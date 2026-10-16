@@ -101,14 +101,17 @@ Name: "{autoprograms}\{#AppName}\Tools\Monitor (debug console)"; Filename: "{app
 Name: "{autoprograms}\{#AppName}\Tools\Recapture auto-export buttons"; Filename: "{app}\runtime\python.exe"; Parameters: """{app}\SetupAutoClicker.py"""; WorkingDir: "{app}"; IconFilename: "{app}\icon.ico"
 Name: "{autoprograms}\{#AppName}\Tools\Log files"; Filename: "{app}\Logs"
 Name: "{autoprograms}\{#AppName}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Pokemon TCG Live Stats"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\StatsUI.py"""; WorkingDir: "{app}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
+; In-app updates (silent) leave the desktop and auto-start choices exactly as the user has them now.
+Name: "{autodesktop}\Pokemon TCG Live Stats"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\StatsUI.py"""; WorkingDir: "{app}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon; Check: not WizardSilent
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#RunValue}"; ValueData: """{app}\runtime\pythonw.exe"" ""{app}\TCGLiveMonitor.py"" --headless"; Tasks: autostart
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#RunValue}"; ValueData: """{app}\runtime\pythonw.exe"" ""{app}\TCGLiveMonitor.py"" --headless"; Tasks: autostart; Check: not WizardSilent
 
 [Run]
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\TCGLiveMonitor.py"" --headless"; WorkingDir: "{app}"; Description: "Start the monitor now"; Flags: postinstall nowait skipifsilent
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\StatsUI.py"""; WorkingDir: "{app}"; Description: "Open the Stats Dashboard"; Flags: postinstall nowait skipifsilent unchecked
+; In-app update (updater.py runs this installer with /VERYSILENT /RELAUNCH=1): start the monitor again.
+Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\TCGLiveMonitor.py"" --headless"; WorkingDir: "{app}"; Flags: nowait; Check: RelaunchAfterUpdate
 
 [UninstallDelete]
 ; Generated at runtime. Battle history, settings and logs are handled by the
@@ -197,6 +200,11 @@ begin
   Exec('schtasks.exe', '/delete /tn "PokemonTCGLiveMonitor_v2.4" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|0}') = '1');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Dir, User, Key: String;
@@ -215,11 +223,14 @@ begin
     else
       DeleteFile(Dir + '\.openai_key');
   end;
-  if not FileExists(Dir + '\.openai_key') and not FileExists(Dir + '\.app_settings.json') then
+  // First install without a key: start in local-only mode. Never on an
+  // update, and never when a key is already stored (encrypted since 2.7).
+  if not WizardSilent and not FileExists(Dir + '\.openai_key') and not FileExists(Dir + '\.openai_key.dpapi')
+     and not FileExists(Dir + '\.app_settings.json') then
     SaveStringToFile(Dir + '\.app_settings.json', '{"local_only_mode": true}', False);
   // Unticked on this run: remove an earlier auto-start entry of THIS install
   // (never one that launches another copy, e.g. a dev checkout).
-  if not WizardIsTaskSelected('autostart') and RunValueIsOurs(Dir) then
+  if not WizardSilent and not WizardIsTaskSelected('autostart') and RunValueIsOurs(Dir) then
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}');
 end;
 

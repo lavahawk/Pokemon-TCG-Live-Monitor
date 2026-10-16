@@ -4101,6 +4101,140 @@ class StatsWindow(QWidget):
             self._window_focus_protection_active = False
             self.end_protected_interaction()
     
+    def _create_data_transfer_card(self):
+        """Advanced → Your data: one .zip to back up, move to a new PC, restore."""
+        import datatransfer
+        card = self.create_card("Your Data · Back Up & Move")
+        body = QVBoxLayout()
+        body.setContentsMargins(12, 4, 12, 12)
+        body.setSpacing(8)
+        desc = QLabel("One file with your battles, settings, decklists, HUD buddy, window layout, screen "
+                      "calibration and battle logs. Import it on a new PC (or after a reinstall) to pick up where "
+                      "you left off. Your OpenAI key isn't included - enter it again on the new PC.")
+        desc.setObjectName("settingsDesc")
+        desc.setWordWrap(True)
+        body.addWidget(desc)
+        self._data_status = QLabel("")
+        self._data_status.setObjectName("settingsDesc")
+        self._data_status.setWordWrap(True)
+        self._data_status.setTextFormat(Qt.TextFormat.RichText)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        def button(text, tip, slot):
+            b = QPushButton(text)
+            b.setObjectName("eloScaleBtn")
+            b.setFixedHeight(28)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+            return b
+
+        button("Export…", "Save a backup .zip (default: your Downloads folder).", self._export_data)
+        button("Import…", "Restore a backup .zip. What's here now is copied to Backups\\ first.", self._import_data)
+        clouds = datatransfer.cloud_folders()
+        for label, folder in clouds:
+            button(f"Save to {label}", f"Export straight into your synced {label} folder:\n{folder}",
+                   lambda _c=False, f=folder, n=label: self._export_data(folder=f, cloud=n))
+        synced = {label for label, _ in clouds}
+        for label, url in datatransfer.CLOUD_UPLOAD_PAGES:
+            if label not in synced:
+                button(f"Upload to {label} ↗", f"Export to Downloads, then open {label} to upload the file "
+                                                "(it's selected in Explorer for dragging in).",
+                       lambda _c=False, n=label, u=url: self._export_data(upload_page=u, cloud=n))
+        row.addStretch()
+        body.addLayout(row)
+        body.addWidget(self._data_status)
+        card.layout().addLayout(body)
+        return card
+
+    def _export_data(self, folder=None, upload_page=None, cloud=None):
+        import datatransfer
+        from PySide6.QtWidgets import QFileDialog
+        name = datatransfer.default_export_name()
+        if folder:
+            path = os.path.join(folder, name)
+        elif upload_page:
+            path = os.path.join(os.path.expanduser("~"), "Downloads", name)
+        else:
+            self.begin_protected_interaction()
+            try:
+                path, _ = QFileDialog.getSaveFileName(self, "Export your data",
+                                                      os.path.join(os.path.expanduser("~"), "Downloads", name),
+                                                      "Backup (*.zip)")
+            finally:
+                self.end_protected_interaction()
+            if not path:
+                return
+        try:
+            result = datatransfer.export_data(path)
+        except Exception as exc:
+            self._data_status.setText(f"<span style='color:#EF9A9A'>Export failed: {exc}</span>")
+            return
+        where = f"your {cloud} folder" if folder else os.path.dirname(path)
+        self._data_status.setText(f"<span style='color:#81C784'>✓ Exported {result['battles']} battles and "
+                                  f"{result['logs']} battle logs</span> to {where}: <b>{os.path.basename(path)}</b>")
+        if upload_page:
+            webbrowser.open(upload_page)
+        if upload_page or not folder:
+            try:
+                subprocess.Popen(["explorer", f"/select,{os.path.normpath(path)}"])
+            except Exception:
+                pass
+
+    def _import_data(self):
+        import datatransfer
+        from PySide6.QtWidgets import QFileDialog
+        self.begin_protected_interaction()
+        try:
+            path, _ = QFileDialog.getOpenFileName(self, "Import a backup", os.path.join(os.path.expanduser("~"), "Downloads"),
+                                                  "Backup (*.zip)")
+            if not path:
+                return
+            try:
+                manifest = datatransfer.read_manifest(path)
+            except ValueError as exc:
+                QMessageBox.warning(self, "Import", str(exc))
+                return
+            answer = QMessageBox.question(
+                self, "Import your data",
+                f"Restore {manifest.get('battles', 0)} battles and your settings from this backup "
+                f"(made {str(manifest.get('created', ''))[:16].replace('T', ' ')}, v{manifest.get('version', '?')})?\n\n"
+                "Your current data is copied to the Backups folder first.")
+        finally:
+            self.end_protected_interaction()
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            result = datatransfer.import_data(path)
+        except Exception as exc:
+            self._data_status.setText(f"<span style='color:#EF9A9A'>Import failed: {exc}</span>")
+            return
+        self._data_status.setText(f"<span style='color:#81C784'>✓ Restored {result['battles']} battles "
+                                  f"({result['files']} files).</span> Restart the app to load everything. "
+                                  f"Your previous data is in {result['backup']}.")
+        self._deck_dashboards_dirty = True
+        QTimer.singleShot(0, self.load_stats)
+
+    def _check_updates_now(self):
+        """The overlay shows the result in its update card; without an overlay
+        (dashboard started on its own) a message box does."""
+        overlay = self.parent_overlay
+        if overlay is not None and hasattr(overlay, "check_for_updates"):
+            overlay.check_for_updates()
+            return
+        import updater
+        from version import APP_VERSION
+        release = updater.update_available({})
+        if release:
+            QMessageBox.information(self, "Update available",
+                                    f"Version {release['version']} is out (you have {APP_VERSION}).\n"
+                                    "Start the app from its shortcut to install it with one click, "
+                                    f"or download it from:\n{release['page']}")
+        else:
+            QMessageBox.information(self, "Up to date", f"You have the latest version ({APP_VERSION}).")
+
     def show_api_key_setting(self):
         """Advanced tab, scrolled to the OpenAI key field, focused and pulsed
         (the manual-mode notice and the deck card link here)."""
@@ -7143,6 +7277,7 @@ class StatsWindow(QWidget):
         layout.addWidget(self._create_overlay_prefs_card())
         layout.addWidget(self._create_sound_prefs_card())
         layout.addWidget(self._create_import_card())
+        layout.addWidget(self._create_data_transfer_card())
 
         # Debugging Section
         debug_card = self.create_card("Debugging & Development")
@@ -10248,13 +10383,31 @@ class StatsWindow(QWidget):
                  "W-L isn't 0-0). It fades away on its own after about 10 seconds."),
                 ("manual_mode_notice", "Remind me when AI deck detection is off",
                  "Without an OpenAI API key (or with local-only mode on) a small card says so when the "
-                 "overlay starts, with a shortcut to the key setting.")):
+                 "overlay starts, with a shortcut to the key setting."),
+                ("check_updates", "Check for updates when the app starts",
+                 "Looks for a newer release on GitHub shortly after the overlay appears. If there is one, a "
+                 "card offers to download and install it (one click; your battles and settings stay).")):
             box = QCheckBox(text)
             box.setObjectName("settingsCheck")
             box.setToolTip(tip)
             box.setChecked(bool(settings.get(key, True)))
             box.toggled.connect(lambda checked, k=key: self._save_app_setting(k, bool(checked)))
             body.addWidget(box)
+
+        update_row = QHBoxLayout()
+        update_row.setSpacing(8)
+        from version import APP_VERSION as _app_version
+        update_label = QLabel(f"Version {_app_version}")
+        update_label.setStyleSheet("color: rgba(235,242,250,0.65); font-size: 11px;")
+        update_row.addWidget(update_label)
+        update_btn = QPushButton("Check for updates now")
+        update_btn.setObjectName("eloScaleBtn")
+        update_btn.setFixedHeight(26)
+        update_btn.setToolTip("Ask GitHub for the latest release now (a skipped version is offered again).")
+        update_btn.clicked.connect(self._check_updates_now)
+        update_row.addWidget(update_btn)
+        update_row.addStretch()
+        body.addLayout(update_row)
 
         # HUD buddy (pet.py): off by default.
         pet_row = QHBoxLayout()

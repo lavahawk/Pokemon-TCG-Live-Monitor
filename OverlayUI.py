@@ -5,7 +5,9 @@ Ultra-compact, professional overlay that follows the game and allows click-throu
 
 import sys
 import os
+import threading
 import time
+import webbrowser
 import win32gui
 import win32process
 import win32con
@@ -440,6 +442,7 @@ class MinimalOverlay(QWidget):
                 self.deck_popup.tick(menu_seen_at(), anchor, self.isVisible())
                 self._position_chat_window()
             self._poll_manual_mode_notice(anchor)
+            self._poll_update(anchor)
         except Exception as exc:
             _dbg(f"_poll_deck_confirm error: {exc}")
         self._poll_game_session()
@@ -484,6 +487,126 @@ class MinimalOverlay(QWidget):
                                          secondary=("Don't remind me", self._mute_manual_notice))
         self._manual_notice.show_at(anchor)
         _dbg(f"manual mode notice shown (local_only={local_only}, has_key={has_key})")
+
+    UPDATE_CHECK_DELAY_S = 25  # after the mini GUI is placed: let the game settle first
+
+    def _poll_update(self, anchor):
+        """Once per launch: look for a newer release (updater.py) on a worker
+        thread; offer it in a card above the mini GUI."""
+        card = getattr(self, "_update_card", None)
+        if card is not None and card.isVisible():
+            popup = self.deck_popup
+            notice = getattr(self, "_manual_notice", None)
+            bottom = anchor[1]
+            for other in (popup, notice):
+                if other is not None and other.isVisible():
+                    bottom = min(bottom, other.y() - 6)
+            card.reposition((anchor[0], bottom))
+        state = getattr(self, "_update_state", None)
+        if state is None:
+            self._update_state = state = {"placed_at": time.time(), "result": None, "checking": False,
+                                          "done": False, "manual": False, "download": None}
+        if state["done"] or not self.isVisible():
+            return
+        if not state["checking"] and state["result"] is None:
+            if not state["manual"]:
+                if not _overlay_setting("check_updates", True):
+                    state["done"] = True
+                    return
+                if time.time() - state["placed_at"] < self.UPDATE_CHECK_DELAY_S:
+                    return
+            state["checking"] = True
+
+            def work():
+                try:
+                    import updater
+                    from app_settings import load_app_settings
+                    settings = {} if state["manual"] else load_app_settings()
+                    release = updater.update_available(settings)
+                    state["result"] = ("update", release) if release else ("none", None)
+                except Exception as exc:
+                    state["result"] = ("error", str(exc))
+                state["checking"] = False
+            threading.Thread(target=work, daemon=True).start()
+            return
+        if state["checking"] or state["result"] is None:
+            return
+        state["done"] = True
+        kind, release = state["result"]
+        _dbg(f"update check: {kind} {release.get('version') if isinstance(release, dict) else release}")
+        if kind == "update":
+            self._show_update_card(release, anchor)
+        elif state["manual"]:
+            self._show_update_card(None, anchor)
+
+    def check_for_updates(self):
+        """Advanced → "Check now": check immediately (skipped version included)."""
+        self._update_state = {"placed_at": 0, "result": None, "checking": False, "done": False,
+                              "manual": True, "download": None}
+        old = getattr(self, "_update_card", None)
+        if old is not None:
+            old.close()
+            self._update_card = None
+
+    def _show_update_card(self, release, anchor):
+        from deck_popup import UpdateCard
+        import updater
+        from version import APP_VERSION
+        card = UpdateCard(APP_VERSION, release, updater.can_self_install())
+        self._update_card = card
+        if release is None:
+            card.show_up_to_date(APP_VERSION)
+        card.on_later = card.close
+        card.on_page = lambda: (webbrowser.open((release or {}).get("page") or updater.RELEASES_PAGE))
+
+        def skip():
+            from app_settings import load_app_settings, save_app_settings
+            settings = load_app_settings()
+            settings["skip_update_version"] = release.get("version")
+            save_app_settings(settings)
+            card.close()
+        card.on_skip = skip
+        card.on_update = lambda: self._start_update(card, release)
+        card.show_at(anchor)
+
+    def _start_update(self, card, release):
+        """Download (worker thread), verify, run the installer silently, quit.
+        The installer stops the monitor too and starts it again afterwards."""
+        import updater
+        job = {"done": 0, "total": 0, "path": None, "error": None, "finished": False}
+
+        def work():
+            try:
+                job["path"] = updater.download(
+                    release, progress=lambda d, t: job.update(done=d, total=t))
+            except Exception as exc:
+                job["error"] = str(exc) or type(exc).__name__
+            job["finished"] = True
+        threading.Thread(target=work, daemon=True).start()
+        card.show_progress(0, (release.get("installer") or {}).get("size") or 0)
+        timer = QTimer(card)
+        timer.setInterval(200)
+
+        def tick():
+            if not job["finished"]:
+                card.show_progress(job["done"], job["total"])
+                return
+            timer.stop()
+            if job["error"]:
+                _dbg(f"update download failed: {job['error']}")
+                card.show_error(f"Couldn't download the update ({job['error']}).")
+                return
+            card.show_installing()
+            try:
+                updater.launch_installer(job["path"])
+            except Exception as exc:
+                _dbg(f"update launch failed: {exc}")
+                card.show_error(f"Couldn't start the installer ({exc}).")
+                return
+            _dbg(f"update installer started: {job['path']}")
+            QTimer.singleShot(2500, QApplication.quit)  # the installer closes the rest
+        timer.timeout.connect(tick)
+        timer.start()
 
     def _mute_manual_notice(self):
         try:

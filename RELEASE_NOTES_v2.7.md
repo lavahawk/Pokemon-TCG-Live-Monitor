@@ -30,6 +30,11 @@ Link a list to a deck (Deck page → **+ Import decklist**), then open the **Dec
 - Deck pages have a new **Rank with this deck** chart.
 - Refreshing is about 5× faster, and the browser tabs only load when you open them.
 
+## Updates and your data
+- The app now checks for updates when it starts. If there's a new version, a small card offers to install it. One click downloads it, checks it, installs it and restarts the app. You can turn this off, or check by hand, in Advanced → Preferences · Overlay.
+- Updates only replace program files. Your battles, settings, API key, decklists and logs are left alone, and they're copied to the Backups folder first anyway.
+- **Advanced → Your Data · Back Up & Move**: export everything to one .zip and import it on a new PC. There are buttons to save it straight into your Google Drive, Box or OneDrive folder, or open the website to upload it. Your OpenAI key isn't included, so enter it again on the new PC.
+
 ## Privacy and security
 - Your OpenAI key is now stored encrypted with your Windows account, not as a plain text file. It's converted automatically.
 - There's a short note on what is sent where, and an option (on by default) to hide both usernames from OpenAI.

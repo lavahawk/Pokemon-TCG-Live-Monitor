@@ -818,3 +818,186 @@ class NoticeCard(QWidget):
         p.setBrush(accent)
         p.drawRoundedRect(QRectF(5, 9, 3, self.height() - 18), 1.5, 1.5)
         p.end()
+
+
+class UpdateCard(QWidget):
+    """"Update available" card in the deck card's style: offer -> download
+    progress -> installing (or an error with a link to the release page).
+    The overlay drives it; callbacks: on_update, on_later, on_skip, on_page."""
+
+    def __init__(self, current, release, can_install):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                         | Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setFixedWidth(CARD_W + 20)
+        self.release = release or {}
+        self.can_install = can_install
+        self.accent = BLUE
+        self.progress = None  # 0..1 while downloading
+        self.on_update = self.on_later = self.on_skip = self.on_page = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 8, 10, 10)
+        root.setSpacing(4)
+        head = QHBoxLayout()
+        self.caption = QLabel()
+        self.caption.setObjectName("cap")
+        head.addWidget(self.caption)
+        head.addStretch()
+        self.chip = QLabel()
+        self.chip.setObjectName("chip")
+        head.addWidget(self.chip)
+        self.close_btn = QToolButton()
+        self.close_btn.setObjectName("close")
+        self.close_btn.setText("✕")
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.clicked.connect(lambda: self._call(self.on_later))
+        head.addWidget(self.close_btn)
+        root.addLayout(head)
+        self.body = QLabel()
+        self.body.setObjectName("msg")
+        self.body.setWordWrap(True)
+        self.body.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.body.linkActivated.connect(lambda _l: self._call(self.on_page))
+        root.addWidget(self.body)
+        self.bar_space = QWidget()
+        self.bar_space.setFixedHeight(8)
+        root.addWidget(self.bar_space)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 2, 0, 0)
+        row.setSpacing(5)
+        self.primary = QPushButton()
+        self.primary.setObjectName("primary")
+        self.later = QPushButton("Later")
+        self.later.setObjectName("link")
+        self.skip = QPushButton("Skip this version")
+        self.skip.setObjectName("link")
+        for btn in (self.primary, self.later, self.skip):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            row.addWidget(btn)
+        row.addStretch()
+        root.addLayout(row)
+        self.primary.clicked.connect(self._primary_clicked)
+        self.later.clicked.connect(lambda: self._call(self.on_later))
+        self.skip.clicked.connect(lambda: self._call(self.on_skip))
+        self.setStyleSheet(CARD_STYLE)
+        self._fade = QVariantAnimation(self, duration=300, easingCurve=QEasingCurve.Type.OutCubic)
+        self._fade.valueChanged.connect(lambda v: self.setWindowOpacity(0.97 * float(v)))
+        self.mode = None
+        self.show_offer(current)
+
+    def _call(self, callback):
+        if callback is not None:
+            callback()
+
+    def _primary_clicked(self):
+        if self.mode == "offer" and self.can_install:
+            self._call(self.on_update)
+        else:
+            self._call(self.on_page)
+
+    def _set_chip(self, text, color):
+        self.chip.setText(text)
+        self.chip.setVisible(bool(text))
+        self.chip.setStyleSheet(
+            f"color: rgb({color.red()},{color.green()},{color.blue()});"
+            f"background: rgba({color.red()},{color.green()},{color.blue()},0.16);"
+            f"border: 1px solid rgba({color.red()},{color.green()},{color.blue()},0.45);")
+
+    def _layout(self, buttons):
+        self.primary.setVisible("primary" in buttons)
+        self.later.setVisible("later" in buttons)
+        self.skip.setVisible("skip" in buttons)
+        self.bar_space.setVisible(self.progress is not None)
+        self.adjustSize()
+        needed = self.layout().totalHeightForWidth(self.width())
+        if needed > self.height():
+            self.resize(self.width(), needed)
+        self.update()
+
+    def show_offer(self, current):
+        self.mode = "offer"
+        self.accent = BLUE
+        self.progress = None
+        version = self.release.get("version") or "?"
+        self.caption.setText("UPDATE AVAILABLE")
+        self._set_chip(f"v{version}", BLUE)
+        how = ("It downloads, installs over this copy and restarts the app. Your battles and settings stay."
+               if self.can_install else "This copy runs from source, so get it from the release page.")
+        self.body.setText(f"Version {version} is out (you have {current}). {how} "
+                          f"<a href='notes' style='color:#7CC4F0;'>What's new</a>")
+        self.primary.setText("Update now" if self.can_install else "Open release page")
+        self._layout({"primary", "later", "skip"})
+
+    def show_progress(self, done, total):
+        self.mode = "downloading"
+        self.progress = (done / total) if total else 0.0
+        mb = done / 1048576
+        self.caption.setText("DOWNLOADING UPDATE")
+        self._set_chip(f"{int(self.progress * 100)}%" if total else f"{mb:.0f} MB", BLUE)
+        self.body.setText(f"{mb:.0f}{f' of {total / 1048576:.0f}' if total else ''} MB · checking it, then installing.")
+        self._layout(set())
+
+    def show_installing(self):
+        self.mode = "installing"
+        self.progress = 1.0
+        self.accent = GREEN
+        self.caption.setText("INSTALLING")
+        self._set_chip("", GREEN)
+        self.body.setText("The app closes for a moment and starts again by itself.")
+        self._layout(set())
+
+    def show_error(self, message):
+        self.mode = "error"
+        self.progress = None
+        self.accent = RED
+        self.caption.setText("UPDATE FAILED")
+        self._set_chip("", RED)
+        self.body.setText(f"{message} Nothing was changed.")
+        self.primary.setText("Open release page")
+        self._layout({"primary", "later"})
+
+    def show_up_to_date(self, current):
+        self.mode = "uptodate"
+        self.progress = None
+        self.accent = GREEN
+        self.caption.setText("UP TO DATE")
+        self._set_chip(f"v{current}", GREEN)
+        self.body.setText("You have the latest version.")
+        self.later.setText("OK")
+        self._layout({"later"})
+
+    def show_at(self, anchor):
+        self.reposition(anchor)
+        self.setWindowOpacity(0.0)
+        self.show()
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.start()
+
+    def reposition(self, anchor):
+        if anchor:
+            right, bottom = anchor
+            self.move(int(right - self.width()), int(bottom - self.height()))
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        card = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(80, 80, 80, 215), 1))
+        p.setBrush(QColor(20, 20, 20, 236))
+        p.drawRoundedRect(card, 10, 10)
+        accent = QColor(self.accent)
+        accent.setAlpha(230)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(accent)
+        p.drawRoundedRect(QRectF(5, 9, 3, self.height() - 18), 1.5, 1.5)
+        if self.progress is not None and self.bar_space.isVisible():
+            geo = self.bar_space.geometry()
+            track = QRectF(geo.x(), geo.y() + 2, geo.width() - 4, 4)
+            p.setBrush(QColor(255, 255, 255, 30))
+            p.drawRoundedRect(track, 2, 2)
+            fill = QRectF(track.x(), track.y(), track.width() * max(0.02, min(1.0, self.progress)), track.height())
+            p.setBrush(QColor(self.accent))
+            p.drawRoundedRect(fill, 2, 2)
+        p.end()

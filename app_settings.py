@@ -74,19 +74,22 @@ def _remove(path):
 def load_api_key():
     if sys.platform != "win32":
         return _read_text_file(API_KEY_FILE)
+    # A plaintext key is newer than the encrypted one (the installer's account
+    # page writes it): it wins, and is encrypted and removed right away.
+    legacy = _read_text_file(API_KEY_FILE)
+    if legacy:
+        try:
+            save_api_key(legacy)
+        except Exception:
+            pass
+        return legacy
     encoded = _read_text_file(API_KEY_SECURE_FILE)
     if encoded:
         try:
             return _dpapi(base64.b64decode(encoded), False).decode("utf-8").strip() or None
         except Exception:
             pass
-    legacy = _read_text_file(API_KEY_FILE)  # written by older versions and the installer
-    if legacy:
-        try:
-            save_api_key(legacy)
-        except Exception:
-            pass
-    return legacy
+    return None
 
 
 def save_api_key(api_key):
