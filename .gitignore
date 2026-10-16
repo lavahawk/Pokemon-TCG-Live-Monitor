@@ -147,3 +147,6 @@ installer/Output/
 .ui_cache/
 .pet_state.json
 .local_model_cache.json
+.tcgplayer_web_profile/
+.card_image_cache/
+.tcgcsv_cache/

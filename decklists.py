@@ -309,3 +309,151 @@ def capture_from_games(deck_name, username, db_path=None, rows=None, store=True)
         if result["text"] and store:
             result["entry"] = auto_capture(deck_name, result["text"], result["games"])
     return result
+
+
+# ── list lines: card pictures, TCGplayer mass entry ──────────────────────
+_LINE = re.compile(r"^\s*(\d+)\s+(.+?)\s+([A-Za-z][A-Za-z0-9-]{1,6})\s+(\d+[A-Za-z]?)\s*$")
+_ENERGY_SYMBOLS = {"G": "Grass", "R": "Fire", "W": "Water", "L": "Lightning", "P": "Psychic",
+                   "F": "Fighting", "D": "Darkness", "M": "Metal", "Y": "Fairy", "N": "Dragon", "C": "Colorless"}
+
+# PTCGL set codes -> TCGplayer mass-entry codes, where they differ (Scarlet &
+# Violet and Mega Evolution codes are the same on both; checked 2026-10-15).
+TCGPLAYER_SET_CODES = {
+    "SSH": "SWSH01", "RCL": "SWSH02", "DAA": "SWSH03", "VIV": "SWSH04", "BST": "SWSH05", "CRE": "SWSH06",
+    "EVS": "SWSH07", "FST": "SWSH08", "BRS": "SWSH09", "ASR": "SWSH10", "LOR": "SWSH11", "SIT": "SWSH12",
+    "PR-SV": "SVP", "PR-SW": "SWSD", "CPA": "CHP", "DET": "DEP",
+    "SUM": "SM01", "GRI": "SM02", "BUS": "SM03", "CIN": "SM04", "UPR": "SM05", "FLI": "SM06",
+    "LOT": "SM8", "TEU": "SM9", "UNB": "SM10", "UNM": "SM11", "CEC": "SM12", "PR-SM": "SMP",
+}
+# PTCGL codes -> Limitless image folders, where they differ.
+IMAGE_SET_CODES = {"PR-SV": "SVP", "PR-SW": "SWSHP"}
+CARD_IMAGE_URL = "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/tpci/{code}/{code}_{number}_R_EN_SM.png"
+TCGPLAYER_MASS_ENTRY = "https://www.tcgplayer.com/massentry"
+
+# TCGplayer affiliate (Impact) link, e.g. "https://partner.tcgplayer.com/c/1234567/1830156/21018".
+# When set, Buy on TCGplayer opens <this>?u=<the Mass Entry URL> so purchases
+# are credited to it. Empty = plain TCGplayer link.
+TCGPLAYER_AFFILIATE_BASE = ""
+
+# TCGplayer's catalogue (product IDs by set and number), mirrored daily by
+# tcgcsv.com. Category 3 = Pokemon. Cached in .tcgcsv_cache/ for a week.
+TCGCSV = "https://tcgcsv.com/tcgplayer/3"
+TCGCSV_DIR = os.path.join(BASE_DIR, ".tcgcsv_cache")
+TCGCSV_MAX_AGE_S = 7 * 86400
+
+
+def list_lines(text):
+    """A PTCGL export as [{"section", "qty", "name", "set", "number"}], in order."""
+    out, section = [], "Pokémon"
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        head = _SECTION.match(line)
+        if head:
+            section = {"p": "Pokémon", "t": "Trainer", "e": "Energy"}[head.group(1)[0].lower()]
+            continue
+        m = _LINE.match(line)
+        if m:
+            out.append({"section": section, "qty": int(m.group(1)), "name": m.group(2),
+                        "set": m.group(3).upper(), "number": m.group(4)})
+    return out
+
+
+def spelled_name(name):
+    """PTCGL's energy symbols in words: "Basic {D} Energy" -> "Basic Darkness Energy"."""
+    return re.sub(r"\{(\w)\}", lambda m: _ENERGY_SYMBOLS.get(m.group(1).upper(), m.group(1)), name)
+
+
+def card_image_url(set_code, number):
+    code = IMAGE_SET_CODES.get(set_code.upper(), set_code.upper())
+    digits = re.match(r"\d+", str(number))
+    padded = f"{int(digits.group()):03d}{str(number)[digits.end():]}" if digits else str(number)
+    return CARD_IMAGE_URL.format(code=code, number=padded)
+
+
+def _tcgcsv_json(path, cache_name, fetch=None, max_age=TCGCSV_MAX_AGE_S):
+    """tcgcsv JSON with a disk cache; a stale cache is used when offline."""
+    os.makedirs(TCGCSV_DIR, exist_ok=True)
+    cache = os.path.join(TCGCSV_DIR, cache_name)
+    fresh = os.path.exists(cache) and time.time() - os.path.getmtime(cache) < max_age
+    if not fresh:
+        try:
+            if fetch is not None:
+                data = fetch(f"{TCGCSV}/{path}")
+            else:
+                from urllib.request import Request, urlopen
+                req = Request(f"{TCGCSV}/{path}", headers={"User-Agent": "PTCGL-Monitor"})
+                with urlopen(req, timeout=20) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+            tmp = cache + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(data, handle)
+            os.replace(tmp, cache)
+            return data
+        except Exception:
+            pass
+    try:
+        with open(cache, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+
+def _number_key(number):
+    """"095/167", "95", "TG05" -> comparable key ("95", "TG5")."""
+    head = str(number or "").split("/")[0].strip().upper()
+    m = re.match(r"([A-Z]*)0*(\d+)([A-Z]*)$", head)
+    return f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else head
+
+
+def tcgplayer_product_ids(text, fetch=None):
+    """{(set, number): TCGplayer productId} for the list's cards, via tcgcsv.
+    fetch(url) -> parsed JSON can be passed in (tests)."""
+    cards = list_lines(text)
+    groups = (_tcgcsv_json("groups", "groups.json", fetch) or {}).get("results") or []
+    by_abbr = {}
+    for g in groups:
+        by_abbr.setdefault(str(g.get("abbreviation") or "").upper(), g.get("groupId"))
+    found = {}
+    for code in {c["set"] for c in cards}:
+        group = by_abbr.get(TCGPLAYER_SET_CODES.get(code, code).upper())
+        if not group:
+            continue
+        products = (_tcgcsv_json(f"{group}/products", f"products_{group}.json", fetch) or {}).get("results") or []
+        index = {}
+        for prod in products:
+            number = next((e.get("value") for e in prod.get("extendedData") or [] if e.get("name") == "Number"), None)
+            if number:
+                index.setdefault(_number_key(number), prod.get("productId"))
+        for card in cards:
+            if card["set"] == code:
+                pid = index.get(_number_key(card["number"]))
+                if pid:
+                    found[(card["set"], card["number"])] = pid
+    return found
+
+
+def tcgplayer_lines(text, product_ids=None):
+    """Mass-entry lines. Exact products ("4-550172") where the catalogue knows
+    the card; otherwise "4 Dreepy [TWM]" (TCGplayer matches it by name)."""
+    lines = []
+    ids = product_ids or {}
+    for card in list_lines(text):
+        pid = ids.get((card["set"], card["number"]))
+        if pid:
+            lines.append(f"{card['qty']}-{pid}")
+        else:
+            code = TCGPLAYER_SET_CODES.get(card["set"], card["set"])
+            lines.append(f"{card['qty']} {spelled_name(card['name'])} [{code}]")
+    return lines
+
+
+def tcgplayer_url(text, product_ids=None, affiliate=None):
+    """TCGplayer Mass Entry with Pokemon selected and the list filled in,
+    wrapped in the affiliate link when one is configured."""
+    from urllib.parse import quote
+    url = (f"{TCGPLAYER_MASS_ENTRY}?productline=Pokemon&c="
+           + quote("||".join(tcgplayer_lines(text, product_ids)), safe=""))
+    base = (affiliate if affiliate is not None else TCGPLAYER_AFFILIATE_BASE).strip()
+    if base:
+        url = f"{base}{'&' if '?' in base else '?'}u={quote(url, safe='')}"
+    return url

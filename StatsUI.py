@@ -3556,6 +3556,12 @@ class GlassPanel(QWidget):
         super().hideEvent(event)
         self.chrome.stop()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        callback = getattr(self, "resized", None)
+        if callback is not None and not self._collapsed:
+            callback()
+
     def closeEvent(self, event):
         for callback in self._closing_callbacks:
             try:
@@ -5434,6 +5440,10 @@ class StatsWindow(QWidget):
 
         header(entry["name"].upper())
         menu.addAction("View list", lambda: self._view_decklist(entry))
+        menu.addAction("View as picture", lambda: self._view_decklist_picture(entry))
+        menu.addAction("Print decklist", lambda: self._print_decklist(entry))
+        menu.addAction("Buy on TCGplayer", lambda: self._buy_on_tcgplayer(entry))
+        menu.addSeparator()
         menu.addAction("Card suggestions", lambda: self._show_card_suggestions(deck_name, matched_row, entry))
         menu.addAction("Compare with the meta", lambda: self._open_cards_compare(entry["id"]))
         menu.addSeparator()
@@ -5638,6 +5648,372 @@ class StatsWindow(QWidget):
         copy.clicked.connect(lambda: (QApplication.clipboard().setText(entry.get("text") or ""), copy.setText("Copied ✓")))
         col.addWidget(copy)
         dialog.open_panel()
+
+    # ── decklist: print / picture / buy ──
+    def _print_decklist(self, entry):
+        """In Person → Print your decklist (pokedata.ovh sheet), this list picked."""
+        index = self._main_tab_index("In Person")
+        if index < 0:
+            return
+        self.tab_widget.setCurrentIndex(index)
+        self._refresh_decklist_choices()
+        combo = self.in_person_deck_combo
+        found = combo.findData(entry.get("id"))
+        if found >= 0:
+            combo.setCurrentIndex(found)
+        self._open_in_person("print")
+
+    CARD_W, CARD_H, CARD_GAP, CARD_COLS = 126, 176, 8, 10
+
+    def _view_decklist_picture(self, entry):
+        """The list as one image of its cards (Limitless card scans, cached in
+        .card_image_cache/), with copy counts. Save as PNG or copy it."""
+        from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+        from decklists import card_image_url, list_lines
+        cards = list_lines(entry.get("text") or "")
+        if not cards:
+            QMessageBox.information(self, "Decklist", "This list has no card lines to draw.")
+            return
+        cache_dir = os.path.join(BASE_DIR, ".card_image_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        images = {}
+        panel = GlassPanel(self, entry.get("name") or "Decklist", size=(1000, 760),
+                           pill_text=f"{entry.get('name') or 'Decklist'} · picture")
+        panel.add_style("QLabel#deckPicture { background: transparent; }"
+                        "QLabel#pictureStatus { color: rgba(168,182,204,0.85); font-size: 10px; background: transparent; }")
+        col = QVBoxLayout(panel.content)
+        col.setContentsMargins(12, 10, 12, 12)
+        col.setSpacing(8)
+        top = QHBoxLayout()
+        status = QLabel("Loading card images…")
+        status.setObjectName("pictureStatus")
+        top.addWidget(status, 1)
+        save_btn = QPushButton("Save PNG…")
+        copy_btn = QPushButton("Copy image")
+        for b in (save_btn, copy_btn):
+            b.setObjectName("limitlessBtn")
+            b.setFixedHeight(28)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            top.addWidget(b)
+        col.addLayout(top)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        label = QLabel()
+        label.setObjectName("deckPicture")
+        label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(label)
+        col.addWidget(scroll, 1)
+        state = {"pixmap": None}
+
+        def key(card):
+            return f"{card['set']}_{card['number']}"
+
+        def render():
+            pixmap = self._render_deck_picture(entry, cards, images)
+            state["pixmap"] = pixmap
+            width = max(200, scroll.viewport().width() - 4)
+            label.setPixmap(pixmap.scaledToWidth(min(width, pixmap.width()),
+                                                 Qt.TransformationMode.SmoothTransformation))
+            loaded = sum(1 for c in cards if key(c) in images)
+            status.setText(f"{sum(c['qty'] for c in cards)} cards · {len(cards)} different"
+                           + ("" if loaded == len(cards) else f" · loading images {loaded}/{len(cards)}…"))
+
+        debounce = QTimer(panel)
+        debounce.setSingleShot(True)
+        debounce.setInterval(120)
+        debounce.timeout.connect(render)
+
+        net = QNetworkAccessManager(panel)
+        for card in cards:
+            k = key(card)
+            path = os.path.join(cache_dir, f"{k}.png")
+            if os.path.exists(path):
+                pix = QPixmap(path)
+                if not pix.isNull():
+                    images[k] = pix
+                    continue
+            reply = net.get(QNetworkRequest(QUrl(card_image_url(card["set"], card["number"]))))
+
+            def done(reply=reply, k=k, path=path):
+                data = bytes(reply.readAll())
+                reply.deleteLater()
+                pix = QPixmap()
+                if data and pix.loadFromData(data):
+                    images[k] = pix
+                    try:
+                        with open(path, "wb") as handle:
+                            handle.write(data)
+                    except OSError:
+                        pass
+                else:
+                    images[k] = None  # no scan: drawn as a name tile
+                debounce.start()
+            reply.finished.connect(done)
+
+        def save():
+            from PySide6.QtWidgets import QFileDialog
+            if state["pixmap"] is None:
+                return
+            name = re.sub(r'[\\/:*?"<>|]+', "_", entry.get("name") or "decklist")
+            default = os.path.join(os.path.expanduser("~"), "Downloads", f"{name}.png")
+            path, _ = QFileDialog.getSaveFileName(panel, "Save decklist picture", default, "PNG image (*.png)")
+            if path:
+                state["pixmap"].save(path, "PNG")
+                status.setText(f"Saved to {path}")
+
+        def copy():
+            if state["pixmap"] is not None:
+                QApplication.clipboard().setPixmap(state["pixmap"])
+                copy_btn.setText("Copied ✓")
+                QTimer.singleShot(1600, lambda: copy_btn.setText("Copy image"))
+
+        save_btn.clicked.connect(save)
+        copy_btn.clicked.connect(copy)
+        panel.resized = debounce.start
+        render()
+        panel.open_panel()
+        QTimer.singleShot(0, render)
+
+    def _render_deck_picture(self, entry, cards, images):
+        """Paint the list: title, then a grid per section, copy counts as badges."""
+        from PySide6.QtGui import QFont, QLinearGradient, QPainterPath
+        w, h, gap, cols = self.CARD_W, self.CARD_H, self.CARD_GAP, self.CARD_COLS
+        margin, head_h, section_h = 22, 54, 30
+        sections = []
+        for card in cards:
+            if not sections or sections[-1][0] != card["section"]:
+                sections.append((card["section"], []))
+            sections[-1][1].append(card)
+        height = margin + head_h
+        for _name, group in sections:
+            rows = (len(group) + cols - 1) // cols
+            height += section_h + rows * (h + gap)
+        height += margin - gap
+        width = margin * 2 + cols * w + (cols - 1) * gap
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pixmap)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        bg = QLinearGradient(0, 0, 0, height)
+        bg.setColorAt(0, QColor(18, 23, 33))
+        bg.setColorAt(1, QColor(11, 14, 20))
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        p.setBrush(bg)
+        p.drawRoundedRect(QRectF(0.5, 0.5, width - 1, height - 1), 14, 14)
+
+        title = QFont("Segoe UI", 18)
+        title.setBold(True)
+        p.setFont(title)
+        p.setPen(QColor(240, 244, 250))
+        p.drawText(QRectF(margin, margin - 4, width - 2 * margin, 30), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   entry.get("name") or "Decklist")
+        small = QFont("Segoe UI", 9)
+        p.setFont(small)
+        p.setPen(QColor(150, 162, 180))
+        total = sum(c["qty"] for c in cards)
+        stamp = (entry.get("captured_at") or "")[:10]
+        p.drawText(QRectF(margin, margin + 24, width - 2 * margin, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   f"{total} cards" + (f"  ·  exported {stamp}" if stamp else ""))
+
+        y = margin + head_h
+        section_font = QFont("Segoe UI", 9)
+        section_font.setBold(True)
+        section_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
+        badge_font = QFont("Segoe UI", 10)
+        badge_font.setBold(True)
+        tile_font = QFont("Segoe UI", 8)
+        for name, group in sections:
+            p.setFont(section_font)
+            p.setPen(QColor(120, 182, 236))
+            p.drawText(QRectF(margin, y, width, section_h - 6), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+                       f"{name.upper()}  ·  {sum(c['qty'] for c in group)}")
+            y += section_h
+            for i, card in enumerate(group):
+                x = margin + (i % cols) * (w + gap)
+                cy = y + (i // cols) * (h + gap)
+                rect = QRectF(x, cy, w, h)
+                pix = images.get(f"{card['set']}_{card['number']}")
+                path = QPainterPath()
+                path.addRoundedRect(rect, 6, 6)
+                if pix:
+                    p.save()
+                    p.setClipPath(path)
+                    scaled = pix.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                        Qt.TransformationMode.SmoothTransformation)
+                    p.drawPixmap(int(x - (scaled.width() - w) / 2), int(cy - (scaled.height() - h) / 2), scaled)
+                    p.restore()
+                else:
+                    p.setPen(QPen(QColor(255, 255, 255, 40), 1))
+                    p.setBrush(QColor(255, 255, 255, 14))
+                    p.drawPath(path)
+                    p.setFont(tile_font)
+                    p.setPen(QColor(220, 228, 238))
+                    p.drawText(rect.adjusted(8, 8, -8, -8), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                               f"{card['name']}\n{card['set']} {card['number']}")
+                # copy-count badge
+                badge = QRectF(x + w - 34, cy + h - 30, 28, 24)
+                p.setPen(QPen(QColor(255, 255, 255, 70), 1))
+                p.setBrush(QColor(12, 16, 24, 225))
+                p.drawRoundedRect(badge, 7, 7)
+                p.setFont(badge_font)
+                p.setPen(QColor(255, 255, 255))
+                p.drawText(badge, Qt.AlignmentFlag.AlignCenter, f"{card['qty']}")
+            y += ((len(group) + cols - 1) // cols) * (h + gap)
+        p.end()
+        return pixmap
+
+    # Presses Add to Cart in TCGplayer's Mass Entry: the "Item Options" dialog
+    # that opens with a pre-filled list has its own Add to Cart; without the
+    # dialog, the form's button. Status in window.__ptcglAdd for polling.
+    TCGPLAYER_ADD_JS = """
+    (function () {
+      if (window.__ptcglAdd) return window.__ptcglAdd;
+      window.__ptcglAdd = 'waiting';
+      var start = Date.now(), mainClicked = 0;
+      function isAdd(b) { return /^\\s*add to cart\\s*$/i.test(b.innerText || '') && !b.disabled && b.offsetParent !== null; }
+      var timer = setInterval(function () {
+        var dialog = Array.prototype.find.call(document.querySelectorAll('[role=dialog]'), function (d) {
+          return d.offsetParent !== null && /item options/i.test(d.innerText || '');
+        });
+        if (dialog) {
+          var b = Array.prototype.find.call(dialog.querySelectorAll('button'), isAdd);
+          if (b) { b.click(); window.__ptcglAdd = 'clicked'; clearInterval(timer); return; }
+        } else if (!mainClicked && Date.now() - start > 2500) {
+          var main = Array.prototype.find.call(document.querySelectorAll('button'), function (b) {
+            return isAdd(b) && !b.closest('[role=dialog]');
+          });
+          if (main) { main.click(); mainClicked = Date.now(); }
+        } else if (mainClicked && Date.now() - mainClicked > 5000) {
+          window.__ptcglAdd = 'clicked'; clearInterval(timer); return;
+        }
+        if (Date.now() - start > 25000) { window.__ptcglAdd = 'timeout'; clearInterval(timer); }
+      }, 400);
+      return 'started';
+    })();
+    """
+
+    def _tcgplayer_profile(self):
+        """Own persistent web profile, so a TCGplayer sign-in and cart stay."""
+        if getattr(self, "_tcg_profile", None) is None:
+            folder = os.path.join(BASE_DIR, ".tcgplayer_web_profile")
+            os.makedirs(folder, exist_ok=True)
+            profile = QWebEngineProfile("tcgplayer-cart", self)
+            adblock.install(profile)
+            profile.setPersistentStoragePath(folder)
+            profile.setCachePath(os.path.join(folder, "cache"))
+            profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies)
+            self._tcg_profile = profile
+        return self._tcg_profile
+
+    def _buy_on_tcgplayer(self, entry):
+        """TCGplayer Mass Entry with Pokemon picked and the list filled in as
+        exact products (qty-productId via tcgcsv); Add to Cart is pressed for
+        you. Optimize and check out in the same panel (or your browser)."""
+        import decklists
+        text = entry.get("text") or ""
+        cards = decklists.list_lines(text)
+        if not cards:
+            QMessageBox.information(self, "TCGplayer", "This list has no card lines to buy.")
+            return
+        affiliate = bool(decklists.TCGPLAYER_AFFILIATE_BASE.strip())
+        panel = GlassPanel(self, f"Buy on TCGplayer · {entry.get('name') or 'Decklist'}", size=(1120, 820),
+                           pill_text="TCGplayer cart")
+        panel.add_style("QLabel#buyStatus { color: rgba(236,242,252,0.88); font-size: 11px; background: transparent; }"
+                        "QLabel#buyNote { color: rgba(168,182,204,0.70); font-size: 9px; background: transparent; }")
+        col = QVBoxLayout(panel.content)
+        col.setContentsMargins(10, 8, 10, 10)
+        col.setSpacing(6)
+        top = QHBoxLayout()
+        status = QLabel("Looking up the exact TCGplayer products for your list…")
+        status.setObjectName("buyStatus")
+        top.addWidget(status, 1)
+        external = QPushButton("Open in browser ↗")
+        external.setObjectName("limitlessBtn")
+        external.setFixedHeight(28)
+        external.setEnabled(False)
+        external.setToolTip("The same pre-filled Mass Entry page in your own browser (press Add to Cart there).")
+        top.addWidget(external)
+        col.addLayout(top)
+        if affiliate:
+            note = QLabel("Affiliate link: buying through it supports this app at no extra cost to you.")
+            note.setObjectName("buyNote")
+            col.addWidget(note)
+        view = QWebEngineView() if WEBENGINE_AVAILABLE else None
+        page = None
+        if view is not None:
+            page = QWebEnginePage(self._tcgplayer_profile(), view)
+            view.setPage(page)
+            col.addWidget(view, 1)
+        else:
+            col.addStretch()
+        state = {"started": False, "polls": 0, "url": None, "result": None, "count": len(cards)}
+
+        def lookup():
+            try:
+                state["result"] = decklists.tcgplayer_product_ids(text)
+            except Exception:
+                state["result"] = {}
+        threading.Thread(target=lookup, daemon=True).start()
+
+        poll = QTimer(panel)
+        poll.setInterval(700)
+        wait = QTimer(panel)
+        wait.setInterval(150)
+
+        def on_status(value):
+            if value == "clicked":
+                poll.stop()
+                status.setText(f"✓ Your {state['count']} cards are in the cart - optimize and check out below "
+                               "(sign in once; it's remembered).")
+            elif value == "timeout" or state["polls"] > 45:
+                poll.stop()
+                status.setText("Couldn't press Add to Cart automatically - click it on the page below.")
+
+        def check():
+            state["polls"] += 1
+            if "/cart" in view.url().toString():  # Add to Cart navigates to the cart
+                on_status("clicked")
+                return
+            page.runJavaScript("window.__ptcglAdd || ''", on_status)
+
+        poll.timeout.connect(check)
+
+        def ready():
+            if state["result"] is None:
+                return
+            wait.stop()
+            ids = state["result"]
+            url = decklists.tcgplayer_url(text, ids)
+            state["url"] = url
+            external.setEnabled(True)
+            exact = sum(1 for c in cards if (c["set"], c["number"]) in ids)
+            missing = len(cards) - exact
+            detail = "" if not missing else f" ({missing} matched by name - check those)"
+            if view is None:
+                status.setText(f"Opened in your browser{detail}.")
+                webbrowser.open(url)
+                return
+            status.setText(f"Opening TCGplayer Mass Entry with {len(cards)} cards{detail}…")
+            view.load(QUrl(url))
+
+        wait.timeout.connect(ready)
+        wait.start()
+        external.clicked.connect(lambda: state["url"] and webbrowser.open(state["url"]))
+
+        if view is not None:
+            def loaded(ok):
+                if not ok or state["started"] or "massentry" not in view.url().toString():
+                    return
+                state["started"] = True
+                status.setText(f"Pokémon selected, {state['count']} cards filled in - adding them to your cart…")
+                page.runJavaScript(self.TCGPLAYER_ADD_JS)
+                poll.start()
+            view.loadFinished.connect(loaded)
+        panel.on_close(poll.stop)
+        panel.on_close(wait.stop)
+        panel.open_panel()
 
     def _open_cards_compare(self, lid):
         """Meta → Cards with this list chosen (it jumps to the closest archetype)."""
