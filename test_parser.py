@@ -35,6 +35,8 @@ def _no_network(*_a, **_k):
 meta_sources._api_get = _no_network
 
 import AIParseBattleLog as P
+import ai_usage
+ai_usage.USAGE_FILE = os.path.join(tempfile.mkdtemp(prefix="ai_usage_test_"), ".ai_usage.json")  # never the real ledger
 import card_usage
 
 assert os.path.abspath(P.db.db_path) == os.path.abspath(TEST_DB), "parser must not open the real DB"

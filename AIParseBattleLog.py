@@ -664,13 +664,28 @@ def _coerce_confidence_value(value, default=0):
     return max(0, min(100, int(round(numeric))))
 
 
-# Recent OpenAI model used for battle-log parsing. Falls back to older models
-# if the primary is unavailable (e.g. revoked or renamed).
-AI_MODELS = [
-    "gpt-5.4-nano-2026-03-17",
-    "gpt-4.1-mini",
-    "gpt-4o",
-]
+# OpenAI models for battle-log parsing, tried in order (a model that fails is
+# skipped). The order, the daily switch to the light model and the monthly
+# budget live in ai_usage.py.
+import ai_usage
+AI_MODELS = list(ai_usage.MODEL_ORDER)
+
+
+def _record_ai_usage(model, completion, prompt_chars):
+    """Cost of this call from OpenAI's token counts (estimated if missing)."""
+    try:
+        usage = getattr(completion, "usage", None)
+        prompt = getattr(usage, "prompt_tokens", None)
+        output = getattr(usage, "completion_tokens", None)
+        details = getattr(usage, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", 0) or 0
+        if not isinstance(prompt, int) or not isinstance(output, int):
+            prompt, output, cached = prompt_chars // 4, 200, 0
+        cost = ai_usage.record(model, prompt, output, cached)
+        print(f"[AI] {prompt} in / {output} out tokens = ${cost:.5f} "
+              f"(${ai_usage.budget_left():.2f} left this month)")
+    except Exception as exc:
+        print(f"[AI] usage not recorded: {exc}")
 
 
 def ai_parse(battlelog, username, api_key, anonymize=None, client=None):
@@ -741,7 +756,7 @@ Battlelog:
 """
 
     last_error = None
-    for model in AI_MODELS:
+    for model in ai_usage.models_for_now():
         try:
             completion = client.chat.completions.create(
                 model=model,
@@ -762,6 +777,7 @@ Battlelog:
                 Confidence=_coerce_confidence_value(payload.get("Confidence")),
             )
             print(f"[AI] Parsed using model: {model}")
+            _record_ai_usage(model, completion, len(prompt) + 60)
             alternatives = _coerce_candidates(payload)
             result = {
                 "My_deck": parsed.My_deck,
@@ -811,12 +827,17 @@ def main():
 
     settings_local_only = is_local_only_mode()
     api_key = load_api_key()
-    use_local_only = settings_local_only or not api_key
-    manual_reason = ("local_only" if settings_local_only else "no_key") if use_local_only else None
+    budget_spent = bool(api_key) and not settings_local_only and ai_usage.over_budget()
+    use_local_only = settings_local_only or not api_key or budget_spent
+    manual_reason = None
+    if use_local_only:
+        manual_reason = "local_only" if settings_local_only else ("no_key" if not api_key else "ai_budget")
 
     if use_local_only:
         if settings_local_only:
             print("Local-only mode is enabled. Falling back to manual opponent deck entry.")
+        elif budget_spent:
+            print(f"AI usage limit reached for this month; manual mode until {ai_usage.next_reset()}.")
         else:
             print("No OpenAI API key found. Falling back to local-only parsing.")
         response_dict = local_fallback_parse(battlelog, username)

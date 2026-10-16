@@ -150,3 +150,5 @@ installer/Output/
 .tcgplayer_web_profile/
 .card_image_cache/
 .tcgcsv_cache/
+.ai_usage.json
+DevVault/

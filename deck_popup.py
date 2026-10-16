@@ -450,6 +450,8 @@ class DeckConfirmPopup(QWidget):
             "local_only": "Local-only mode: AI deck detection is off. " + link.format("Change in Advanced"),
             "ai_failed": "The AI couldn't be reached, so the deck is asked instead. "
                          + link.format("Check the key in Advanced"),
+            "ai_budget": "AI deck detection is paused: this month's AI usage limit is reached. "
+                         "It starts again on the 1st.",
         }.get(manual) if mode in ("edit", "new") else None
         self.manual_note.setText(note or "")
         self.manual_note.setVisible(bool(note))

@@ -208,7 +208,7 @@ Get-ChildItem $Stage -Recurse -Directory -Filter "__pycache__" -ErrorAction Sile
 # every upgrade (it did, v2.4.0-v2.6.0). Remove everything the app generates.
 $generated = @("tcg_battles.db", "*.db-journal", ".app_settings.json", ".user_config", ".openai_key",
     ".openai_key.dpapi", ".decklists.json", ".deck_archetypes.json", ".pet_state.json",
-    ".stats_window_geometry.json", ".last_deck", ".monitor_pid", ".monitor_lock", ".local_model_cache.json",
+    ".stats_window_geometry.json", ".last_deck", ".ai_usage.json", ".monitor_pid", ".monitor_lock", ".local_model_cache.json",
     ".meta_cache_*.json", ".chat_capture.json", ".overlay_debug.log*", ".game_session")
 foreach ($pattern in $generated) {
     Get-ChildItem -Path $Stage -Filter $pattern -Force -File -ErrorAction SilentlyContinue | Remove-Item -Force

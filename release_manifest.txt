@@ -17,6 +17,7 @@ RankDetector.py
 game_window.py
 leagues.py
 local_model.py
+ai_usage.py
 updater.py
 datatransfer.py
 app_settings.py
