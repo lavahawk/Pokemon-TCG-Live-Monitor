@@ -38,7 +38,7 @@ def _write_json(path, data):
 
 
 def write_request(battle_id, deck, *, source, needs_input, my_deck=None, result=None,
-                  confidence=None, candidates=()):
+                  confidence=None, candidates=(), manual=None):
     """Ask the overlay to show (or ask for) the opponent's deck of a saved battle.
 
     source: "ai" (picked by the AI parser), "cards" (from the opponent's
@@ -46,6 +46,8 @@ def write_request(battle_id, deck, *, source, needs_input, my_deck=None, result=
             the log) or "none" (nothing to go on).
     candidates: up to 3 (deck, probability 0-1 or None), best first; the
             card offers them as one-click choices.
+    manual: why the AI wasn't used - "no_key" or "local_only" (None = AI ran).
+            The card then always asks, and says AI detection is off.
     """
     _write_json(REQUEST_FILE, {
         "battle_id": battle_id,
@@ -56,6 +58,7 @@ def write_request(battle_id, deck, *, source, needs_input, my_deck=None, result=
         "result": result or "",
         "confidence": confidence,
         "candidates": [{"deck": d, "p": p} for d, p in candidates if d],
+        "manual": manual,
         "created": time.time(),
         "handled": False,
     })
@@ -180,6 +183,45 @@ def known_deck_names(db=None):
         pass
     add(OTHER)
     return names
+
+
+def deck_suggestions(db=None):
+    """Autocomplete rows, best first: Limitless archetypes by meta share, then
+    other decks you've faced (most often first). [(name, share % or None, times faced)]"""
+    faced = {}
+    if db is not None:
+        try:
+            conn = db._connect()
+            try:
+                rows = conn.execute("SELECT opponent_deck, COUNT(*) c FROM battles "
+                                    "GROUP BY opponent_deck ORDER BY c DESC").fetchall()
+            finally:
+                conn.close()
+            for deck, count in rows:
+                name = " ".join(str(deck or "").split())
+                if name:
+                    faced.setdefault(name.casefold(), [name, 0])[1] += int(count or 0)
+        except Exception:
+            pass
+    out, seen = [], set()
+    try:
+        with open(LIMITLESS_CACHE_FILE, "r", encoding="utf-8") as handle:
+            rows = (json.load(handle) or {}).get("rows") or []
+    except Exception:
+        rows = []
+    for row in sorted(rows, key=lambda r: -(r.get("share") or 0)):
+        name = " ".join(str(row.get("deck") or "").split())
+        key = name.casefold()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append((name, float(row.get("share") or 0.0), faced.get(key, [name, 0])[1]))
+    for key, (name, count) in sorted(faced.items(), key=lambda kv: -kv[1][1]):
+        if key in seen or key.startswith("unknown"):
+            continue
+        seen.add(key)
+        out.append((name, None, count))
+    return out
 
 
 def canonical_name(text, names):

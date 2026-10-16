@@ -6,9 +6,12 @@ shown after each saved battle (requests come from deck_confirm.py).
           icons and probabilities, the pick highlighted. Clicking one saves
           it; "Other…" types a name. Fades once the game is back on the main
           menu, unless the pick is a low-confidence one (then it waits).
-  edit  - type the deck (autocomplete: your recorded opponent decks, then
-          Limitless archetypes). Used straight away when no AI pick exists
-          (local-only mode, no API key, AI failed).
+  edit  - type the deck. The dropdown opens straight away with the meta's
+          top archetypes (icons, meta share, how often you've faced them) and
+          narrows as you type. Used straight away when no AI pick exists
+          (local-only mode, no API key, AI failed); the local guesses are then
+          offered as one-click choices above the field, and a footer says AI
+          detection is off.
   new   - the typed name isn't known: add it as a new deck or save as Other.
   done  - saved: chime, check mark with a ring, then fades.
 """
@@ -16,13 +19,14 @@ shown after each saved battle (requests come from deck_confirm.py).
 import math
 import time
 
-from PySide6.QtCore import Qt, QTimer, QVariantAnimation, QEasingCurve, QStringListModel, QPointF, QRectF
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import Qt, QTimer, QVariantAnimation, QEasingCurve, QPointF, QRectF, QEvent, QSize
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QStandardItemModel, QStandardItem, QIcon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QToolButton, QCompleter,
+    QStyledItemDelegate, QStyle,
 )
 
-from deck_confirm import OTHER, canonical_name, deck_icon_paths, known_deck_names, mark_handled, play_chime
+from deck_confirm import OTHER, canonical_name, deck_icon_paths, deck_suggestions, mark_handled, play_chime
 
 BLUE = QColor(74, 159, 216)
 AMBER = QColor(240, 180, 60)
@@ -81,14 +85,87 @@ class ChoiceButton(QPushButton):
         self.setToolTip(f"Save “{deck}” as the opponent's deck")
 
 
+SHARE_ROLE = Qt.ItemDataRole.UserRole + 1
+FACED_ROLE = Qt.ItemDataRole.UserRole + 2
+_icon_cache = {}
+
+
+def deck_icon(deck, size=ICON_PX):
+    """Up to two Pokemon icons side by side, as one QIcon (cached)."""
+    key = (deck.casefold(), size)
+    if key in _icon_cache:
+        return _icon_cache[key]
+    pixmaps = [QPixmap(path) for path in deck_icon_paths(deck)]
+    pixmaps = [pix for pix in pixmaps if not pix.isNull()][:2]
+    canvas = QPixmap(size * 2, size)
+    canvas.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    for i, pix in enumerate(pixmaps):
+        scaled = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation)
+        painter.drawPixmap(i * (size - 3) + (size - scaled.width()) // 2, (size - scaled.height()) // 2, scaled)
+    painter.end()
+    _icon_cache[key] = QIcon(canvas) if pixmaps else QIcon()
+    return _icon_cache[key]
+
+
+class SuggestionDelegate(QStyledItemDelegate):
+    """Dropdown row: icons, deck name, then the meta share (or how often
+    you've faced it) right-aligned and dimmed."""
+
+    ROW_H = 24
+
+    def sizeHint(self, option, index):
+        return QSize(option.rect.width(), self.ROW_H)
+
+    def paint(self, painter, option, index):
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(option.rect).adjusted(2, 1, -2, -1)
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(240, 180, 60, 60))
+            painter.drawRoundedRect(rect, 5, 5)
+        elif option.state & QStyle.StateFlag.State_MouseOver:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 18))
+            painter.drawRoundedRect(rect, 5, 5)
+        name = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        icon = index.data(Qt.ItemDataRole.DecorationRole)
+        x = rect.left() + 5
+        if isinstance(icon, QIcon) and not icon.isNull():
+            icon.paint(painter, int(x), int(rect.center().y() - ICON_PX / 2), ICON_PX * 2, ICON_PX)
+        x += ICON_PX * 2 + 2
+        share = index.data(SHARE_ROLE)
+        faced = index.data(FACED_ROLE) or 0
+        meta_text = f"{share:.1f}%" if share else (f"faced {faced}×" if faced else "")
+        font = painter.font()
+        small = painter.font()
+        small.setPointSizeF(max(6.5, font.pointSizeF() - 1.5))
+        painter.setFont(small)
+        meta_w = painter.fontMetrics().horizontalAdvance(meta_text) + 8 if meta_text else 0
+        painter.setPen(QColor(150, 158, 168))
+        painter.drawText(QRectF(rect.right() - meta_w - 4, rect.top(), meta_w, rect.height()),
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, meta_text)
+        painter.setFont(font)
+        selected = option.state & QStyle.StateFlag.State_Selected
+        painter.setPen(QColor(255, 255, 255) if selected else QColor(232, 235, 239))
+        text_rect = QRectF(x, rect.top(), rect.right() - meta_w - 8 - x, rect.height())
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, int(text_rect.width())))
+        painter.restore()
+
+
 class DeckConfirmPopup(QWidget):
-    def __init__(self, db):
+    def __init__(self, db, open_settings=None):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                          | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFixedWidth(CARD_W)
         self.db = db
+        self.open_settings = open_settings  # callback: dashboard -> Advanced (API key)
         self.request = None
         self.mode = None
         self.current = ""
@@ -152,16 +229,22 @@ class DeckConfirmPopup(QWidget):
 
         self.field = QLineEdit()
         self.field.setObjectName("field")
-        self.field.setPlaceholderText("Type the opponent's deck…")
+        self.field.setPlaceholderText("Search meta decks or type a name…")
         self.field.returnPressed.connect(self._submit)
-        self.model = QStringListModel(self)
+        self.model = QStandardItemModel(self)
         self.completer = QCompleter(self.model, self.field)
         self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        self.completer.setMaxVisibleItems(7)
+        self.completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.completer.setMaxVisibleItems(8)
         self.completer.activated.connect(lambda text: QTimer.singleShot(0, lambda: self._submit(text)))
-        self.completer.popup().setStyleSheet(POPUP_STYLE)
+        popup = self.completer.popup()
+        popup.setStyleSheet(POPUP_STYLE)
+        popup.setItemDelegate(SuggestionDelegate(popup))
+        popup.setMouseTracking(True)
+        popup.setUniformItemSizes(True)
         self.field.setCompleter(self.completer)
+        self.field.installEventFilter(self)
         root.addWidget(self.field)
 
         self.new_box = QWidget()
@@ -197,7 +280,49 @@ class DeckConfirmPopup(QWidget):
         self.hint.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self.hint.linkActivated.connect(lambda _l: self._set_mode("edit", prefill=""))
         root.addWidget(self.hint)
+
+        # Manual mode: say why the deck isn't detected, link to the API key setting.
+        self.manual_note = QLabel()
+        self.manual_note.setObjectName("manualNote")
+        self.manual_note.setWordWrap(True)
+        self.manual_note.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.manual_note.linkActivated.connect(self._open_settings)
+        root.addWidget(self.manual_note)
         self.setStyleSheet(CARD_STYLE)
+
+    def _open_settings(self, _link=None):
+        if self.open_settings is not None:
+            try:
+                self.open_settings()
+            except Exception:
+                pass
+
+    def _load_suggestions(self):
+        """Fill the dropdown: meta archetypes by share, then decks you've faced."""
+        self.model.clear()
+        self.names = []
+        for name, share, faced in deck_suggestions(self.db):
+            item = QStandardItem(deck_icon(name), name)
+            item.setData(share, SHARE_ROLE)
+            item.setData(faced, FACED_ROLE)
+            item.setEditable(False)
+            self.model.appendRow(item)
+            self.names.append(name)
+
+    def _show_suggestions(self):
+        """Open the dropdown even before anything is typed."""
+        if self.mode != "edit" or not self.field.isVisible():
+            return
+        self.completer.setCompletionPrefix(self.field.text())
+        popup = self.completer.popup()
+        popup.setMinimumWidth(max(self.field.width(), CARD_W - 10))
+        self.completer.complete()
+
+    def eventFilter(self, obj, event):
+        if obj is self.field and event.type() in (QEvent.Type.FocusIn, QEvent.Type.MouseButtonPress):
+            if not self.completer.popup().isVisible():
+                QTimer.singleShot(0, self._show_suggestions)
+        return super().eventFilter(obj, event)
 
     # ── public: driven by the overlay ──
     def offer(self, request, anchor):
@@ -208,12 +333,16 @@ class DeckConfirmPopup(QWidget):
         self._anchor = anchor
         self.request = dict(request)
         self.current = (request.get("deck") or "").strip()
-        self.names = known_deck_names(self.db)
-        self.model.setStringList(self.names)
+        if self.current.casefold().startswith("unknown"):
+            self.current = ""
+        self._load_suggestions()
         self._fade_deadline = None
         self._leaving = False
         self._outro.stop()
-        if request.get("needs_input") and not self._candidates():
+        if request.get("manual"):
+            # No AI: always ask; the local guesses sit above the field as choices.
+            self._set_mode("edit", prefill="", focus=False)
+        elif request.get("needs_input") and not self._candidates():
             guess = self.current if request.get("source") == "guess" else ""
             self._set_mode("edit", prefill=guess, focus=False)
         else:
@@ -256,9 +385,11 @@ class DeckConfirmPopup(QWidget):
         self.mode = mode
         result = (self.request or {}).get("result", "").upper()
         source = (self.request or {}).get("source")
+        manual = (self.request or {}).get("manual")
         has_choices = mode == "show" and bool(self._candidates())
+        manual_choices = mode == "edit" and bool(manual) and bool(self._candidates())
         self.name.setVisible(mode == "done" or (mode == "show" and not has_choices))
-        self.choices_box.setVisible(has_choices)
+        self.choices_box.setVisible(has_choices or manual_choices)
         self.field.setVisible(mode == "edit")
         self.new_box.setVisible(mode == "new")
         self.chip.setVisible(mode in ("show", "edit"))
@@ -291,7 +422,13 @@ class DeckConfirmPopup(QWidget):
             self.chip.setVisible(bool(result))
             self.field.setText(prefill)
             self.field.selectAll()
-            self.hint.setText("Enter to save  ·  Esc to cancel" if not asked else "Enter to save")
+            if manual_choices:
+                self._fill_choices()
+            if manual:
+                self.hint.setText("Best guesses above  ·  or search below, Enter to save"
+                                  if manual_choices else "Search meta decks  ·  Enter to save")
+            else:
+                self.hint.setText("Enter to save  ·  Esc to cancel" if not asked else "Enter to save")
             if focus:
                 self.activateWindow()
                 self.raise_()
@@ -307,6 +444,15 @@ class DeckConfirmPopup(QWidget):
             self.caption.setText("SAVED")
             self.hint.setText("")
         self.hint.setVisible(bool(self.hint.text()))
+        link = "<a href='settings' style='color:#F0B43C;'>{}</a>"
+        note = {
+            "no_key": "AI deck detection is off (manual mode). " + link.format("Add an OpenAI key in Advanced"),
+            "local_only": "Local-only mode: AI deck detection is off. " + link.format("Change in Advanced"),
+            "ai_failed": "The AI couldn't be reached, so the deck is asked instead. "
+                         + link.format("Check the key in Advanced"),
+        }.get(manual) if mode in ("edit", "new") else None
+        self.manual_note.setText(note or "")
+        self.manual_note.setVisible(bool(note))
         self.adjustSize()
         # sizeHint ignores word-wrapped labels; size to the height they need at CARD_W.
         needed = self.layout().totalHeightForWidth(CARD_W)
@@ -330,6 +476,8 @@ class DeckConfirmPopup(QWidget):
         # The pick's probability comes from the candidates list when present.
         probs = {(i.get("deck") or "").casefold(): i.get("p") for i in (self.request or {}).get("candidates") or []}
         out = [(d, p if p is not None else probs.get(d.casefold())) for d, p in out]
+        if (self.request or {}).get("manual"):
+            return out[:3]  # manual mode: even one guess is worth a one-click button
         return out[:3] if len(out) > 1 else []
 
     def _low_confidence(self):
@@ -373,7 +521,7 @@ class DeckConfirmPopup(QWidget):
         if event.key() == Qt.Key.Key_Escape:
             if self.mode == "new":
                 self._set_mode("edit", prefill=self.pending)
-            elif self.mode == "edit":
+            elif self.mode == "edit" and not (self.request or {}).get("needs_input"):
                 self._set_mode("show")
             return
         super().keyPressEvent(event)
@@ -514,6 +662,8 @@ CARD_STYLE = """
     QLabel#chip { font-size: 8px; font-weight: 800; border-radius: 6px; padding: 0px 5px; }
     QLabel#name { color: #F2F4F7; font-size: 13px; font-weight: 600; }
     QLabel#hint { color: #7D848D; font-size: 9px; }
+    QLabel#manualNote { color: #A9906A; font-size: 9px; padding-top: 3px;
+                        border-top: 1px solid rgba(255,255,255,0.07); }
     QLabel#msg { color: #C9CED6; font-size: 10px; }
     QPushButton#choice, QPushButton#choicePicked {
         background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10);
@@ -544,9 +694,127 @@ CARD_STYLE = """
 
 POPUP_STYLE = """
     QListView {
-        background: #181A1E; border: 1px solid rgba(240,180,60,0.45); color: #E8EBEF;
-        font-family: 'Segoe UI', Arial; font-size: 11px; outline: none;
+        background: #16181C; border: 1px solid rgba(240,180,60,0.40); border-radius: 8px;
+        color: #E8EBEF; font-family: 'Segoe UI', Arial; font-size: 11px; outline: none; padding: 3px;
     }
-    QListView::item { padding: 3px 6px; }
-    QListView::item:selected { background: rgba(240,180,60,0.25); color: #FFFFFF; }
+    QListView::item { background: transparent; }
+    QScrollBar:vertical { background: transparent; width: 6px; margin: 4px 1px; }
+    QScrollBar::handle:vertical { background: rgba(255,255,255,0.18); border-radius: 3px; min-height: 18px; }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 """
+
+
+class NoticeCard(QWidget):
+    """Small card in the deck card's style, above the mini GUI: a title, a line
+    of text and up to two actions. Fades by itself unless hovered."""
+
+    def __init__(self, title, text, primary=None, secondary=None, linger_ms=14000):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                         | Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setFixedWidth(CARD_W)
+        self.accent = AMBER
+        self._anchor = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 8, 10, 9)
+        root.setSpacing(4)
+        head = QHBoxLayout()
+        caption = QLabel(title)
+        caption.setObjectName("cap")
+        head.addWidget(caption)
+        head.addStretch()
+        close = QToolButton()
+        close.setObjectName("close")
+        close.setText("✕")
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.clicked.connect(self.dismiss)
+        head.addWidget(close)
+        root.addLayout(head)
+        body = QLabel(text)
+        body.setObjectName("msg")
+        body.setWordWrap(True)
+        root.addWidget(body)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 2, 0, 0)
+        row.setSpacing(5)
+        for spec, name in ((primary, "primary"), (secondary, "link")):
+            if not spec:
+                continue
+            label, callback = spec
+            btn = QPushButton(label)
+            btn.setObjectName(name)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _c=False, cb=callback: self._act(cb))
+            row.addWidget(btn)
+        row.addStretch()
+        root.addLayout(row)
+        self.setStyleSheet(CARD_STYLE)
+        self._fade = QVariantAnimation(self, duration=450, easingCurve=QEasingCurve.Type.InOutCubic)
+        self._fade.valueChanged.connect(lambda v: self.setWindowOpacity(0.97 * float(v)))
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.dismiss)
+        self._linger = linger_ms
+        self._closing = False
+
+    def _act(self, callback):
+        try:
+            callback()
+        finally:
+            self.dismiss()
+
+    def show_at(self, anchor):
+        self.adjustSize()
+        needed = self.layout().totalHeightForWidth(CARD_W)
+        if needed > self.height():
+            self.resize(CARD_W, needed)
+        self.reposition(anchor)
+        self.setWindowOpacity(0.0)
+        self.show()
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.start()
+        if self._linger:
+            self._timer.start(self._linger)
+
+    def reposition(self, anchor):
+        if anchor:
+            self._anchor = anchor
+            right, bottom = anchor
+            self.move(int(right - self.width()), int(bottom - self.height()))
+
+    def enterEvent(self, event):
+        self._timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if self._linger and self.isVisible() and not self._closing:
+            self._timer.start(5000)
+        super().leaveEvent(event)
+
+    def dismiss(self):
+        if not self.isVisible() or self._closing:
+            return
+        self._closing = True
+        self._timer.stop()
+        self._fade.stop()
+        self._fade.setStartValue(max(0.0, self.windowOpacity() / 0.97))
+        self._fade.setEndValue(0.0)
+        self._fade.finished.connect(self.close)
+        self._fade.start()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        card = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(80, 80, 80, 215), 1))
+        p.setBrush(QColor(20, 20, 20, 236))
+        p.drawRoundedRect(card, 10, 10)
+        accent = QColor(self.accent)
+        accent.setAlpha(230)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(accent)
+        p.drawRoundedRect(QRectF(5, 9, 3, self.height() - 18), 1.5, 1.5)
+        p.end()

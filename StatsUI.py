@@ -3846,6 +3846,25 @@ class StatsWindow(QWidget):
             self._window_focus_protection_active = False
             self.end_protected_interaction()
     
+    def show_api_key_setting(self):
+        """Advanced tab, scrolled to the OpenAI key field, focused and pulsed
+        (the manual-mode notice and the deck card link here)."""
+        index = self._main_tab_index("Advanced")
+        if index < 0 or not hasattr(self, "api_key_input"):
+            return
+        self.tab_widget.setCurrentIndex(index)
+        field = self.api_key_input
+
+        def focus():
+            try:
+                self.settings_scroll.ensureWidgetVisible(field, 40, 120)
+                field.setFocus()
+                card = field.parentWidget()
+                FlashOverlay(card if card is not None else field, radius=10, color="#F0B43C")
+            except Exception:
+                pass
+        QTimer.singleShot(120, focus)
+
     def minimize_to_overlay(self):
         """Minimize stats window back to mini overlay"""
         self.is_minimized = True
@@ -9236,7 +9255,10 @@ class StatsWindow(QWidget):
                  "Elo:1487 | Max:1513 | 3-2  vs  Elo:1487 | 3-2"),
                 ("overlay_session_reset_prompt", "Offer to reset today's W-L when the game starts",
                  "A small Reset? popup above the overlay when Pokemon TCG Live starts (only if today's "
-                 "W-L isn't 0-0). It fades away on its own after about 10 seconds.")):
+                 "W-L isn't 0-0). It fades away on its own after about 10 seconds."),
+                ("manual_mode_notice", "Remind me when AI deck detection is off",
+                 "Without an OpenAI API key (or with local-only mode on) a small card says so when the "
+                 "overlay starts, with a shortcut to the key setting.")):
             box = QCheckBox(text)
             box.setObjectName("settingsCheck")
             box.setToolTip(tip)

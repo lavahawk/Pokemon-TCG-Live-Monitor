@@ -161,7 +161,10 @@ def is_tournament_battle(battlelog, username):
 
 def prompt_string(title, prompt, *, secret=False):
     if _console_available():
-        return input(f"{prompt}\n> ").strip()
+        try:
+            return input(f"{prompt}\n> ").strip()
+        except (EOFError, OSError):
+            return ""  # no real console after all (e.g. stdin is NUL): never block the import
     from qt_dialogs import ask_string
     return ask_string(title, prompt, secret=secret)
 
@@ -785,6 +788,7 @@ def main():
     settings_local_only = is_local_only_mode()
     api_key = load_api_key()
     use_local_only = settings_local_only or not api_key
+    manual_reason = ("local_only" if settings_local_only else "no_key") if use_local_only else None
 
     if use_local_only:
         if settings_local_only:
@@ -799,6 +803,7 @@ def main():
             print(f"AI parse failed: {exc}")
             print("Falling back to local-only parsing.")
             response_dict = local_fallback_parse(battlelog, username)
+            manual_reason = "ai_failed"
 
     my_deck = response_dict.get("My_deck") or "Unknown Deck"
     opponents_deck = response_dict.get("OpponentsDeck") or "Unknown"
@@ -859,10 +864,13 @@ def main():
             try:
                 # Overlay card: shows the AI's pick (click to fix) or asks for the deck.
                 from deck_confirm import write_request
+                # Manual mode (no key / local-only / AI failed) always asks, like the
+                # AI's low-confidence picks; the guesses are offered as choices.
                 write_request(battle_id, opponents_deck, source=deck_source,
-                              needs_input=deck_source not in ("ai", "cards"),
+                              needs_input=bool(manual_reason) or deck_source not in ("ai", "cards"),
                               my_deck=my_deck, result=win_or_loss, confidence=confidence,
-                              candidates=response_dict.get("Candidates") or [])
+                              candidates=response_dict.get("Candidates") or [],
+                              manual=manual_reason)
             except Exception as exc:
                 print(f"Warning: Could not request the deck confirmation card: {exc}")
             try:

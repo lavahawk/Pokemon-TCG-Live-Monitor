@@ -428,7 +428,7 @@ class MinimalOverlay(QWidget):
                 if request:
                     if self.deck_popup is None:
                         from deck_popup import DeckConfirmPopup
-                        self.deck_popup = DeckConfirmPopup(self.db)
+                        self.deck_popup = DeckConfirmPopup(self.db, open_settings=self.open_api_key_setting)
                     self.deck_popup.offer(request, anchor)
                     # HUD buddy: celebrate a win, mope after a loss (once per battle)
                     if self.pet is not None and request.get("battle_id") != getattr(self, "_pet_reacted", None):
@@ -439,10 +439,71 @@ class MinimalOverlay(QWidget):
             if self.deck_popup is not None:
                 self.deck_popup.tick(menu_seen_at(), anchor, self.isVisible())
                 self._position_chat_window()
+            self._poll_manual_mode_notice(anchor)
         except Exception as exc:
             _dbg(f"_poll_deck_confirm error: {exc}")
         self._poll_game_session()
         self._poll_pet()
+
+    def _poll_manual_mode_notice(self, anchor):
+        """Once per launch, when the mini GUI is placed: no OpenAI key (or
+        local-only mode) means opponent decks are asked for by hand - say so,
+        and offer the key setting. Stacks above the deck card if both show."""
+        notice = getattr(self, "_manual_notice", None)
+        if notice is not None:
+            if notice.isVisible():
+                popup = self.deck_popup
+                if popup is not None and popup.isVisible():
+                    anchor = (anchor[0], popup.y() - 6)
+                notice.reposition(anchor)
+            return
+        if getattr(self, "_manual_notice_checked", False) or not self.isVisible():
+            return
+        self._manual_notice_checked = True
+        try:
+            from app_settings import is_local_only_mode, load_api_key
+            local_only = is_local_only_mode()
+            has_key = bool(load_api_key())
+        except Exception as exc:
+            _dbg(f"manual notice check failed: {exc}")
+            return
+        if has_key and not local_only:
+            return
+        if not _overlay_setting("manual_mode_notice", True):
+            return
+        from deck_popup import NoticeCard
+        if local_only:
+            title, text = "MANUAL MODE", ("Local-only mode is on, so AI deck detection is off. After each "
+                                          "battle you'll pick the opponent's deck yourself.")
+            primary = ("Open Advanced", self.open_api_key_setting)
+        else:
+            title, text = "MANUAL MODE", ("No OpenAI API key, so AI deck detection is off. Battles are still "
+                                          "logged; you'll pick the opponent's deck after each one.")
+            primary = ("Add API key", self.open_api_key_setting)
+        self._manual_notice = NoticeCard(title, text, primary=primary,
+                                         secondary=("Don't remind me", self._mute_manual_notice))
+        self._manual_notice.show_at(anchor)
+        _dbg(f"manual mode notice shown (local_only={local_only}, has_key={has_key})")
+
+    def _mute_manual_notice(self):
+        try:
+            from app_settings import load_app_settings, save_app_settings
+            settings = load_app_settings()
+            settings["manual_mode_notice"] = False
+            save_app_settings(settings)
+        except Exception as exc:
+            _dbg(f"mute manual notice failed: {exc}")
+
+    def open_api_key_setting(self):
+        """Dashboard -> Advanced, at the OpenAI key field."""
+        try:
+            if self.stats_window is None or not self.stats_window.isVisible():
+                self.animate_arrow("▼")
+                self.open_stats_dashboard()
+            if self.stats_window is not None:
+                self.stats_window.show_api_key_setting()
+        except Exception as exc:
+            _dbg(f"open_api_key_setting failed: {exc}")
 
     def _on_ball_double_click(self):
         """The mini GUI's Pokeball: the first double-click calls the HUD buddy
