@@ -110,14 +110,15 @@ if (Test-Path (Join-Path $RtCache ".complete")) {
     # Build-time-only parts of the Python package itself.
     Remove-Paths $RtCache @("include", "libs", "Lib\test", "Lib\idlelib", "Lib\tkinter", "Lib\turtledemo", "Lib\ensurepip\_bundled")
     # Qt: dev tools, headers, QML and modules the app doesn't import
-    # (app uses Core/Gui/Widgets/Test/WebEngineCore/WebEngineWidgets; the
+    # (app uses Core/Gui/Widgets/Test/WebEngineCore/WebEngineWidgets, plus
+    # Network (card images), Pdf + PrintSupport (decklist printing); the
     # smoke test below proves the trimmed set still works).
     Remove-Paths $qt @("include", "typesystems", "glue", "metatypes", "scripts", "doc", "examples", "qml",
         "designer.exe", "linguist.exe", "assistant.exe", "lupdate.exe", "lrelease.exe", "qml*.exe",
         "balsam*.exe", "qsb.exe", "svgtoqml.exe", "uic.exe", "rcc.exe", "androiddeployqt*.exe", "*.pyi",
         "translations\qt*.qm")
     $unused = @("3D", "Quick3D", "Charts", "DataVisualization", "Graphs", "Multimedia", "SpatialAudio",
-        "Pdf", "Designer", "UiTools", "Bluetooth", "Nfc", "Sensors", "SerialPort", "SerialBus",
+        "Designer", "UiTools", "Bluetooth", "Nfc", "Sensors", "SerialPort", "SerialBus",
         "TextToSpeech", "Location", "RemoteObjects", "Scxml", "StateMachine", "HttpServer",
         "VirtualKeyboard", "Help", "ShaderTools", "Quick3DPhysics", "Lottie", "WebView", "QuickTimeline")
     foreach ($m in $unused) {

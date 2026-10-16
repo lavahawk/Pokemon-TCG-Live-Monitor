@@ -33,7 +33,8 @@ def check(name, fn):
 
 # 1. Third-party packages the app imports.
 for mod in ("PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "PySide6.QtTest",
-            "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "cv2", "numpy", "mss",
+            "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtNetwork",
+            "PySide6.QtPdf", "PySide6.QtPrintSupport", "cv2", "numpy", "mss",
             "pytesseract", "psutil", "pyperclip", "win32gui", "win32process", "win32con", "matplotlib",
             "openpyxl", "pandas", "requests", "bs4", "lxml", "openai", "pygame", "pyfiglet",
             "colorama", "PIL", "sqlite3", "ssl", "ctypes"):

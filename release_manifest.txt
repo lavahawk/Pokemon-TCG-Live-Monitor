@@ -165,3 +165,4 @@ pet_sprites\pikachu\shiny\anim.json
 LICENSE
 README.md
 RELEASE_NOTES_v2.6.md
+RELEASE_NOTES_v2.7.md
