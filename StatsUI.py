@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QButtonGroup, QListView, QSpinBox
 )
 from PySide6.QtCore import Qt, QTimer, QEasingCurve, QThread, Signal, QSize, QObject, QPoint, QEvent, QRectF, QPointF, QRect
-from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QIcon
+from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QIcon, QCursor, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QSizePolicy, QAbstractItemView
 from BattleDatabase import BattleDatabase
 from weights import cached_expansions, load_weights, save_weights, DEFAULT_WEIGHTS, LABELS as WEIGHT_LABELS
@@ -3135,6 +3135,219 @@ class MetaFetcher(QThread):
         }
 
 
+class TitleBarButton(QPushButton):
+    """Title-bar button with a painted icon (font glyphs like ⛶ / 🗗 render as
+    boxes on some systems)."""
+
+    def __init__(self, kind, parent=None):
+        super().__init__("", parent)
+        self.kind = kind
+        self.setObjectName("minBtn")
+        self.setFixedSize(22, 22)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_kind(self, kind):
+        self.kind = kind
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        alpha = 240 if self.underMouse() else 185
+        pen = QPen(QColor(255, 255, 255, alpha), 1.3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        c = QPointF(self.width() / 2.0, self.height() / 2.0)
+        if self.kind == "max":
+            painter.drawRoundedRect(QRectF(c.x() - 5, c.y() - 5, 10, 10), 2, 2)
+        elif self.kind == "restore":
+            painter.drawRoundedRect(QRectF(c.x() - 5, c.y() - 2.5, 7.5, 7.5), 1.6, 1.6)
+            painter.drawPolyline([QPointF(c.x() - 2.5, c.y() - 4), QPointF(c.x() - 2.5, c.y() - 5.5),
+                                  QPointF(c.x() + 5, c.y() - 5.5), QPointF(c.x() + 5, c.y() + 2),
+                                  QPointF(c.x() + 3.5, c.y() + 2)])
+        else:  # "min": back to the overlay
+            painter.drawPolyline([QPointF(c.x() - 4.5, c.y() - 2), QPointF(c.x(), c.y() + 2.5),
+                                  QPointF(c.x() + 4.5, c.y() - 2)])
+        painter.end()
+
+
+class FramelessChrome(QObject):
+    """Moves and resizes a frameless window.
+
+    Drag the title bar or the empty strip beside the tabs to move; drag any
+    edge or the corner grip to resize; double-click the title bar (or F11) to
+    expand. Uses the OS move/resize loop when available (smooth, multi-monitor
+    aware) and falls back to manual geometry updates."""
+
+    EDGE = 7
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = window
+        self.manual = None  # ("move", offset) | ("resize", edges, start_global, start_geometry)
+        self._cursor_shape = None
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setInterval(60)
+        self._hover_timer.timeout.connect(self._update_hover_cursor)
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    # hover cursor: polled, because child widgets swallow mouse-move events
+    def start(self):
+        self._hover_timer.start()
+
+    def stop(self):
+        self._hover_timer.stop()
+        self._set_cursor(None)
+
+    def busy(self):
+        return self.manual is not None
+
+    def edges_at(self, global_pos):
+        win = self.window
+        edges = Qt.Edge(0)
+        if getattr(win, "_expanded", False) or not win.isVisible():
+            return edges
+        local = win.mapFromGlobal(global_pos)
+        x, y, w, h = local.x(), local.y(), win.width(), win.height()
+        if not (-1 <= x <= w and -1 <= y <= h):
+            return edges
+        if x <= self.EDGE:
+            edges |= Qt.Edge.LeftEdge
+        elif x >= w - self.EDGE:
+            edges |= Qt.Edge.RightEdge
+        if y <= self.EDGE:
+            edges |= Qt.Edge.TopEdge
+        elif y >= h - self.EDGE:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    @staticmethod
+    def cursor_for(edges):
+        left, right = Qt.Edge.LeftEdge in edges, Qt.Edge.RightEdge in edges
+        top, bottom = Qt.Edge.TopEdge in edges, Qt.Edge.BottomEdge in edges
+        if (left and top) or (right and bottom):
+            return Qt.CursorShape.SizeFDiagCursor
+        if (right and top) or (left and bottom):
+            return Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return Qt.CursorShape.SizeHorCursor
+        if top or bottom:
+            return Qt.CursorShape.SizeVerCursor
+        return None
+
+    def _set_cursor(self, shape):
+        if shape == self._cursor_shape:
+            return
+        if self._cursor_shape is not None:
+            QApplication.restoreOverrideCursor()
+        if shape is not None:
+            QApplication.setOverrideCursor(QCursor(shape))
+        self._cursor_shape = shape
+
+    def _update_hover_cursor(self):
+        if self.manual is not None:
+            return
+        if QApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            return
+        app = QApplication.instance()
+        if app is not None and app.activePopupWidget() is not None:
+            self._set_cursor(None)
+            return
+        self._set_cursor(self.cursor_for(self.edges_at(QCursor.pos())))
+
+    def is_drag_area(self, obj, pos):
+        win = self.window
+        if obj is getattr(win, "title_bar", None):
+            return True
+        tabs = getattr(win, "tab_widget", None)
+        if tabs is None:
+            return False
+        bar = tabs.tabBar()
+        if obj is tabs:  # the strip right of the last tab
+            return pos.y() <= bar.geometry().bottom()
+        if obj is bar:
+            return bar.tabAt(pos.toPoint() if hasattr(pos, "toPoint") else pos) < 0
+        return False
+
+    def begin_move(self, global_pos):
+        win = self.window
+        if getattr(win, "_expanded", False):
+            # Pull the window out of the expanded state under the cursor, like Windows does.
+            frac = (global_pos.x() - win.x()) / max(1.0, float(win.width()))
+            grab_y = global_pos.y() - win.y()
+            win.set_expanded(False)
+            win.move(int(global_pos.x() - frac * win.width()), int(global_pos.y() - min(grab_y, 16)))
+        handle = win.windowHandle()
+        if handle is not None and handle.startSystemMove():
+            return
+        self.manual = ("move", global_pos - win.frameGeometry().topLeft())
+
+    def begin_resize(self, edges, global_pos):
+        win = self.window
+        handle = win.windowHandle()
+        if handle is not None and handle.startSystemResize(edges):
+            return
+        self.manual = ("resize", edges, global_pos, QRect(win.geometry()))
+
+    def _manual_update(self, global_pos):
+        win = self.window
+        if self.manual[0] == "move":
+            win.move(global_pos - self.manual[1])
+            return
+        _, edges, start, geo = self.manual
+        delta = global_pos - start
+        left, top, right, bottom = geo.left(), geo.top(), geo.right(), geo.bottom()
+        if Qt.Edge.LeftEdge in edges:
+            left = min(left + delta.x(), right - win.minimumWidth() + 1)
+        if Qt.Edge.RightEdge in edges:
+            right = max(right + delta.x(), left + win.minimumWidth() - 1)
+        if Qt.Edge.TopEdge in edges:
+            top = min(top + delta.y(), bottom - win.minimumHeight() + 1)
+        if Qt.Edge.BottomEdge in edges:
+            bottom = max(bottom + delta.y(), top + win.minimumHeight() - 1)
+        win.setGeometry(QRect(QPoint(left, top), QPoint(right, bottom)))
+
+    def eventFilter(self, obj, event):
+        et = event.type()
+        if et not in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove,
+                      QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):
+            return False
+        if self.manual is not None:
+            if et == QEvent.Type.MouseMove:
+                self._manual_update(event.globalPosition().toPoint())
+                return True
+            if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                self.manual = None
+                self.window.save_window_geometry()
+                return True
+            return False
+        if not isinstance(obj, QWidget) or obj.window() is not self.window:
+            return False
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+        global_pos = event.globalPosition().toPoint()
+        if et == QEvent.Type.MouseButtonPress:
+            if obj is getattr(self.window, "resize_handle", None):
+                self.begin_resize(Qt.Edge.RightEdge | Qt.Edge.BottomEdge, global_pos)
+                return True
+            edges = self.edges_at(global_pos)
+            if edges:
+                self.begin_resize(edges, global_pos)
+                return True
+            if self.is_drag_area(obj, event.position()):
+                self.begin_move(global_pos)
+                return True
+        elif et == QEvent.Type.MouseButtonDblClick and self.is_drag_area(obj, event.position()):
+            self.window.toggle_fullscreen()
+            return True
+        return False
+
+
 class StatsWindow(QWidget):
     """Modern sleek stats dashboard - minimizes to mini overlay"""
     
@@ -3158,7 +3371,9 @@ class StatsWindow(QWidget):
         self.resize_start_size = None
         self.resize_start_geometry = None
         self._resize_edges = (False, False, False, False)
-        self._pre_fullscreen_geometry = None
+        self._expanded = False          # filling the screen's work area
+        self._normal_geometry = None    # what to go back to (and what gets saved)
+        self._restore_expanded = False
         self.limitless_row_links = []
         self.deck_tab_lookup = {}
         self.deck_analyses = []
@@ -3235,21 +3450,21 @@ class StatsWindow(QWidget):
 
         # Deck Dashboards Tab
         decks_tab = self.create_decks_tab()
-        self.decks_tab_index = self.tab_widget.addTab(decks_tab, "Decks")
+        self.tab_widget.addTab(decks_tab, "Decks")
 
         # Unified meta (online + in-person + Japan, preference-weighted)
-        self.meta_tab_index = self.tab_widget.addTab(self.create_meta_tab(), "Meta")
+        self.tab_widget.addTab(self.create_meta_tab(), "Meta")
 
         # In-person play tools (event finder, homies, decklist printing)
-        self.in_person_tab_index = self.tab_widget.addTab(self.create_in_person_tab(), "In Person")
+        self.tab_widget.addTab(self.create_in_person_tab(), "In Person")
 
         # Limitless Dashboard Tab
         limitless_dashboard_tab = self.create_limitless_dashboard_tab()
-        self.limitless_dashboard_tab_index = self.tab_widget.addTab(limitless_dashboard_tab, "Limitless Dashboard")
+        self.tab_widget.addTab(limitless_dashboard_tab, "Limitless Dashboard")
 
         # Replay Tab
         replay_tab = self.create_replay_tab()
-        self.replay_tab_index = self.tab_widget.addTab(replay_tab, "Replay")
+        self.tab_widget.addTab(replay_tab, "Replay")
         self._set_replay_tab_visible(False)
         
         # TrainerHill Tab
@@ -3272,6 +3487,14 @@ class StatsWindow(QWidget):
         support_tab = self.create_support_tab()
         self.tab_widget.addTab(support_tab, "Donate")
         
+        main_bar = self.tab_widget.tabBar()
+        main_bar.setMovable(True)            # drag tabs to reorder; the order is remembered
+        main_bar.setUsesScrollButtons(True)  # narrow window: arrows instead of squashed tabs
+        main_bar.setElideMode(Qt.TextElideMode.ElideNone)
+        main_bar.setExpanding(False)
+        self._apply_main_tab_order()
+        main_bar.tabMoved.connect(lambda *_: self._save_main_tab_order())
+
         layout.addWidget(self.tab_widget)
         layout.addWidget(self.create_footer_bar())
         
@@ -3283,8 +3506,10 @@ class StatsWindow(QWidget):
         # Start resizable and restore the user's preferred popup size if available
         self.setMinimumSize(900, 520)
         self.resize(1100, 760)
+        self.chrome = FramelessChrome(self)
         self.restore_window_geometry()
         self._apply_window_opacity(self.surface_opacity_scale)
+        QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self.toggle_fullscreen)
 
         if self.limitless_manager:
             self.limitless_manager.set_overlay(self.parent_overlay)
@@ -3309,6 +3534,8 @@ class StatsWindow(QWidget):
         title_bar = QFrame()
         title_bar.setObjectName("titleBar")
         title_bar.setFixedHeight(32)  # Smaller title bar
+        title_bar.setToolTip("Drag to move · double-click to fill the screen")
+        self.title_bar = title_bar
         
         layout = QHBoxLayout(title_bar)
         layout.setContentsMargins(16, 0, 12, 0)
@@ -3317,18 +3544,14 @@ class StatsWindow(QWidget):
         # Empty title area - clean minimal design
         layout.addStretch()
         
-        # Fullscreen button
-        self.fullscreen_btn = QPushButton("⛶")
-        self.fullscreen_btn.setObjectName("minBtn")
-        self.fullscreen_btn.setFixedSize(22, 22)
+        # Expand / restore button
+        self.fullscreen_btn = TitleBarButton("max")
         self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
-        self.fullscreen_btn.setToolTip("Toggle fullscreen")
+        self.fullscreen_btn.setToolTip("Fill the screen (F11)")
         layout.addWidget(self.fullscreen_btn)
-        
-        # Minimize button (down arrow) - only button needed
-        min_btn = QPushButton("▼")
-        min_btn.setObjectName("minBtn")
-        min_btn.setFixedSize(22, 22)  # Slightly smaller
+
+        # Back to the mini overlay
+        min_btn = TitleBarButton("min")
         min_btn.clicked.connect(self.minimize_to_overlay)
         min_btn.setToolTip("Minimize to overlay")
         layout.addWidget(min_btn)
@@ -3336,33 +3559,83 @@ class StatsWindow(QWidget):
         return title_bar
 
     def toggle_fullscreen(self):
-        """Toggle between fullscreen and the saved window geometry."""
-        if self.isFullScreen():
-            self.showNormal()
-            # Restore the saved geometry after leaving fullscreen.
-            self._restore_saved_geometry()
-        else:
-            self._pre_fullscreen_geometry = (self.x(), self.y(), self.width(), self.height())
-            self.showFullScreen()
-        self.fullscreen_btn.setText("🗗" if self.isFullScreen() else "⛶")
+        """Fill the screen's work area, or go back to the normal window."""
+        self.set_expanded(not self._expanded)
 
-    def _restore_saved_geometry(self):
-        try:
-            if os.path.exists(STATS_WINDOW_STATE_FILE):
-                with open(STATS_WINDOW_STATE_FILE, "r", encoding="utf-8") as handle:
-                    state = json.load(handle)
-                x = int(state.get("x", 100))
-                y = int(state.get("y", 100))
-                w = int(state.get("width", 900))
-                h = int(state.get("height", 600))
-                self.setGeometry(x, y, w, h)
-                return
-        except Exception:
-            pass
-        # Fallback to the geometry captured before entering fullscreen.
-        if getattr(self, "_pre_fullscreen_geometry", None):
-            x, y, w, h = self._pre_fullscreen_geometry
-            self.setGeometry(x, y, w, h)
+    def _screen_area(self, point=None):
+        screen = QGuiApplication.screenAt(point) if point is not None else None
+        if screen is None:
+            screen = self.screen() or QGuiApplication.primaryScreen()
+        return screen.availableGeometry()
+
+    def _fit_to_screen(self, rect):
+        """Clamp a normal-window rect onto a screen. A rect that fills the whole
+        screen (an old saved fullscreen size) becomes a comfortable default."""
+        area = self._screen_area(rect.center())
+        if rect.width() >= area.width() - 8 and rect.height() >= area.height() - 8:
+            w = max(self.minimumWidth(), min(1100, int(area.width() * 0.8)))
+            h = max(self.minimumHeight(), min(760, int(area.height() * 0.85)))
+            return QRect(area.x() + (area.width() - w) // 2, area.y() + (area.height() - h) // 2, w, h)
+        w = min(max(rect.width(), self.minimumWidth()), area.width())
+        h = min(max(rect.height(), self.minimumHeight()), area.height())
+        x = min(max(rect.x(), area.left()), area.right() - w + 1)
+        y = min(max(rect.y(), area.top()), area.bottom() - h + 1)
+        return QRect(x, y, w, h)
+
+    def set_expanded(self, expanded):
+        expanded = bool(expanded)
+        if expanded == self._expanded:
+            return
+        if expanded:
+            self._normal_geometry = QRect(self.geometry())
+            self._expanded = True
+            self.setGeometry(self._screen_area(self.geometry().center()))
+        else:
+            self._expanded = False
+            base = self._normal_geometry or QRect(self.x(), self.y(), 1100, 760)
+            self.setGeometry(self._fit_to_screen(base))
+        self._sync_window_chrome()
+        self.save_window_geometry()
+
+    def _sync_window_chrome(self):
+        if hasattr(self, "fullscreen_btn"):
+            self.fullscreen_btn.set_kind("restore" if self._expanded else "max")
+            self.fullscreen_btn.setToolTip("Restore size (F11)" if self._expanded else "Fill the screen (F11)")
+        if hasattr(self, "resize_handle"):
+            self.resize_handle.setVisible(not self._expanded)
+
+    def _apply_main_tab_order(self):
+        order = self.app_settings.get("main_tab_order") if isinstance(getattr(self, "app_settings", None), dict) else None
+        if not isinstance(order, list):
+            return
+        bar = self.tab_widget.tabBar()
+        target = 0
+        for name in order:
+            index = self._main_tab_index(name)
+            if index < 0:
+                continue
+            if index != target:
+                bar.moveTab(index, target)
+            target += 1
+
+    def _save_main_tab_order(self):
+        names = [self.tab_widget.tabText(i) for i in range(self.tab_widget.count())]
+        self._save_app_setting("main_tab_order", names)
+
+    def _main_tab_index(self, name):
+        tabs = getattr(self, "tab_widget", None)
+        if tabs is None:
+            return -1
+        for i in range(tabs.count()):
+            if tabs.tabText(i) == name:
+                return i
+        return -1
+
+    decks_tab_index = property(lambda self: self._main_tab_index("Decks"))
+    meta_tab_index = property(lambda self: self._main_tab_index("Meta"))
+    in_person_tab_index = property(lambda self: self._main_tab_index("In Person"))
+    limitless_dashboard_tab_index = property(lambda self: self._main_tab_index("Limitless Dashboard"))
+    replay_tab_index = property(lambda self: self._main_tab_index("Replay"))
 
     def create_footer_bar(self):
         """Create a minimal footer that only exposes a resize grip."""
@@ -3388,9 +3661,6 @@ class StatsWindow(QWidget):
 
         self.resize_handle = WindowResizeHandle(footer)
         self.resize_handle.setToolTip("Drag to resize")
-        self.resize_handle.resize_started.connect(self._begin_manual_resize)
-        self.resize_handle.resize_delta.connect(self._update_manual_resize)
-        self.resize_handle.resize_finished.connect(self._finish_manual_resize)
         layout.addWidget(self.resize_handle, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
         return footer
 
@@ -3418,33 +3688,18 @@ class StatsWindow(QWidget):
             self._opacity_save_timer.timeout.connect(self.save_window_geometry)
         self._opacity_save_timer.start(500)
 
-    def _begin_manual_resize(self, global_pos):
-        self.resizing = True
-        self.resize_start_global = global_pos
-        self.resize_start_size = self.size()
-
-    def _update_manual_resize(self, global_pos):
-        if not self.resizing or self.resize_start_global is None or self.resize_start_size is None:
-            return
-        delta = global_pos - self.resize_start_global
-        self.resize(
-            max(self.minimumWidth(), self.resize_start_size.width() + delta.x()),
-            max(self.minimumHeight(), self.resize_start_size.height() + delta.y()),
-        )
-
-    def _finish_manual_resize(self):
-        self.resizing = False
-        self.resize_start_global = None
-        self.resize_start_size = None
-        self.save_window_geometry()
-
     def save_window_geometry(self):
+        """Save the *normal* geometry (never the expanded one) plus the mode."""
         try:
+            rect = self._normal_geometry if self._expanded else self.geometry()
+            if rect is None:
+                return
             payload = {
-                "x": self.x(),
-                "y": self.y(),
-                "width": self.width(),
-                "height": self.height(),
+                "x": rect.x(),
+                "y": rect.y(),
+                "width": rect.width(),
+                "height": rect.height(),
+                "expanded": bool(self._expanded),
                 "surface_opacity": round(self.surface_opacity_scale, 3),
             }
             with open(STATS_WINDOW_STATE_FILE, "w", encoding="utf-8") as handle:
@@ -3458,128 +3713,16 @@ class StatsWindow(QWidget):
                 return
             with open(STATS_WINDOW_STATE_FILE, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-            self.resize(
-                max(self.minimumWidth(), int(payload.get("width", self.width()))),
-                max(self.minimumHeight(), int(payload.get("height", self.height()))),
-            )
-            self.move(int(payload.get("x", self.x())), int(payload.get("y", self.y())))
+            rect = QRect(int(payload.get("x", self.x())), int(payload.get("y", self.y())),
+                         int(payload.get("width", self.width())), int(payload.get("height", self.height())))
+            self._normal_geometry = self._fit_to_screen(rect)
+            self.setGeometry(self._normal_geometry)
+            self._restore_expanded = bool(payload.get("expanded", False))
             self.surface_opacity_scale = max(0.70, min(1.25, float(payload.get("surface_opacity", self.surface_opacity_scale))))
             if hasattr(self, "opacity_slider"):
                 self.opacity_slider.setValue(int(round(self.surface_opacity_scale * 100)))
         except Exception:
             pass
-    
-    def _resize_edge_at(self, pos):
-        """Return which edge(s) the cursor is over for all-edge resizing.
-
-        Returns a tuple of flags: (left, right, top, bottom). Uses a small
-        hit zone (RESIZE_MARGIN px) around each edge.
-        """
-        margin = 6
-        w = self.width()
-        h = self.height()
-        x = pos.x()
-        y = pos.y()
-        left = x <= margin
-        right = x >= w - margin
-        top = y <= margin
-        bottom = y >= h - margin
-        return left, right, top, bottom
-
-    def _resize_cursor_for_edges(self, left, right, top, bottom):
-        if (left and top) or (right and bottom):
-            return Qt.CursorShape.SizeFDiagCursor
-        if (right and top) or (left and bottom):
-            return Qt.CursorShape.SizeBDiagCursor
-        if left or right:
-            return Qt.CursorShape.SizeHorCursor
-        if top or bottom:
-            return Qt.CursorShape.SizeVerCursor
-        return Qt.CursorShape.ArrowCursor
-
-    def mousePressEvent(self, event):
-        """Handle mouse press for dragging and all-edge resizing"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            pos = event.position()
-            left, right, top, bottom = self._resize_edge_at(pos)
-            if left or right or top or bottom:
-                # Start an edge resize.
-                self.resizing = True
-                self._resize_edges = (left, right, top, bottom)
-                self.resize_start_global = event.globalPosition().toPoint()
-                self.resize_start_geometry = self.geometry()
-                event.accept()
-                return
-            # Check if clicking on title bar area (top 32px) to drag.
-            if pos.y() < 32:
-                self.dragging = True
-                self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                event.accept()
-    
-    def mouseMoveEvent(self, event):
-        """Handle mouse move for dragging and all-edge resizing"""
-        if self.resizing:
-            self._update_edge_resize(event.globalPosition().toPoint())
-            event.accept()
-            return
-        if self.dragging and event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self.drag_position)
-            event.accept()
-            return
-        # Update the resize cursor when hovering over an edge (no button held).
-        if not event.buttons():
-            left, right, top, bottom = self._resize_edge_at(event.position())
-            if left or right or top or bottom:
-                self.setCursor(self._resize_cursor_for_edges(left, right, top, bottom))
-            else:
-                self.unsetCursor()
-    
-    def mouseReleaseEvent(self, event):
-        """Handle mouse release to stop dragging/resizing"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.dragging = False
-            self.resizing = False
-            self._resize_edges = (False, False, False, False)
-            self.unsetCursor()
-            self.save_window_geometry()
-            event.accept()
-
-    def _update_edge_resize(self, global_pos):
-        """Resize the window from any edge based on the drag delta."""
-        if not self.resizing or self.resize_start_global is None or self.resize_start_geometry is None:
-            return
-        left, right, top, bottom = self._resize_edges
-        start_geo = self.resize_start_geometry
-        delta = global_pos - self.resize_start_global
-
-        new_left = start_geo.left()
-        new_top = start_geo.top()
-        new_right = start_geo.right()
-        new_bottom = start_geo.bottom()
-
-        if left:
-            new_left = start_geo.left() + delta.x()
-        if right:
-            new_right = start_geo.right() + delta.x()
-        if top:
-            new_top = start_geo.top() + delta.y()
-        if bottom:
-            new_bottom = start_geo.bottom() + delta.y()
-
-        min_w = self.minimumWidth()
-        min_h = self.minimumHeight()
-        if new_right - new_left < min_w:
-            if left:
-                new_left = new_right - min_w
-            else:
-                new_right = new_left + min_w
-        if new_bottom - new_top < min_h:
-            if top:
-                new_top = new_bottom - min_h
-            else:
-                new_bottom = new_top + min_h
-
-        self.setGeometry(new_left, new_top, new_right - new_left, new_bottom - new_top)
 
     def _schedule_geometry_save(self):
         """Debounced: write geometry once movement/resizing pauses (BUG-028)."""
@@ -3591,13 +3734,32 @@ class StatsWindow(QWidget):
             self._geometry_timer = timer
         timer.start(400)
 
+    def _track_normal_geometry(self):
+        if not self._expanded and self.isVisible():
+            self._normal_geometry = QRect(self.geometry())
+        self._schedule_geometry_save()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._schedule_geometry_save()
+        self._track_normal_geometry()
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        self._schedule_geometry_save()
+        self._track_normal_geometry()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.chrome.start()
+        if self._restore_expanded:
+            self._restore_expanded = False
+            QTimer.singleShot(0, lambda: self.set_expanded(True))
+        elif self._expanded:
+            # Screen layout may have changed while hidden (monitor unplugged, taskbar moved).
+            QTimer.singleShot(0, lambda: self.setGeometry(self._screen_area(self.geometry().center())))
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.chrome.stop()
 
     def closeEvent(self, event):
         if self.parent_overlay is not None and not getattr(self, "_really_close", False):
@@ -10023,7 +10185,7 @@ class StatsWindow(QWidget):
     def _refresh_blocked(self):
         """A dialog, popup menu, drag/resize or held mouse button: rebuilding
         the pages now would yank things out from under the user."""
-        if self.dragging or self.resizing:
+        if self.dragging or self.resizing or self.chrome.busy():
             return True
         if QApplication.mouseButtons() != Qt.MouseButton.NoButton:
             return True
@@ -11233,6 +11395,23 @@ class StatsWindow(QWidget):
             QTabBar::tab:hover:!selected {
                 background: rgba(255, 255, 255, 0.05);
                 color: rgba(255, 255, 255, 0.7);
+            }
+
+            QTabWidget#mainTabs > QTabBar QToolButton {
+                background: rgba(20,24,30,0.92);
+                border: 1px solid rgba(255,255,255,0.14);
+                border-radius: 6px;
+                color: rgba(255,255,255,0.85);
+                width: 22px;
+                margin: 2px 1px;
+            }
+            QTabWidget#mainTabs > QTabBar QToolButton:hover {
+                background: rgba(74,159,216,0.35);
+                border-color: rgba(74,159,216,0.6);
+                color: white;
+            }
+            QTabWidget#mainTabs > QTabBar QToolButton:disabled {
+                color: rgba(255,255,255,0.2);
             }
 
             QTabWidget#deckTabs::pane {
