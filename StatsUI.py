@@ -3168,7 +3168,13 @@ class TitleBarButton(QPushButton):
             painter.drawPolyline([QPointF(c.x() - 2.5, c.y() - 4), QPointF(c.x() - 2.5, c.y() - 5.5),
                                   QPointF(c.x() + 5, c.y() - 5.5), QPointF(c.x() + 5, c.y() + 2),
                                   QPointF(c.x() + 3.5, c.y() + 2)])
-        else:  # "min": back to the overlay
+        elif self.kind == "up":  # open again (from a collapsed pill)
+            painter.drawPolyline([QPointF(c.x() - 4.5, c.y() + 2), QPointF(c.x(), c.y() - 2.5),
+                                  QPointF(c.x() + 4.5, c.y() + 2)])
+        elif self.kind == "close":
+            painter.drawLine(QPointF(c.x() - 4, c.y() - 4), QPointF(c.x() + 4, c.y() + 4))
+            painter.drawLine(QPointF(c.x() + 4, c.y() - 4), QPointF(c.x() - 4, c.y() + 4))
+        else:  # "min": back to the overlay / collapse
             painter.drawPolyline([QPointF(c.x() - 4.5, c.y() - 2), QPointF(c.x(), c.y() + 2.5),
                                   QPointF(c.x() + 4.5, c.y() - 2)])
         painter.end()
@@ -3210,7 +3216,7 @@ class FramelessChrome(QObject):
     def edges_at(self, global_pos):
         win = self.window
         edges = Qt.Edge(0)
-        if getattr(win, "_expanded", False) or not win.isVisible():
+        if getattr(win, "_expanded", False) or getattr(win, "_no_resize", False) or not win.isVisible():
             return edges
         local = win.mapFromGlobal(global_pos)
         x, y, w, h = local.x(), local.y(), win.width(), win.height()
@@ -3323,7 +3329,9 @@ class FramelessChrome(QObject):
                 return True
             if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 self.manual = None
-                self.window.save_window_geometry()
+                save = getattr(self.window, "save_window_geometry", None)
+                if save is not None:
+                    save()
                 return True
             return False
         if not isinstance(obj, QWidget) or obj.window() is not self.window:
@@ -3343,9 +3351,223 @@ class FramelessChrome(QObject):
                 self.begin_move(global_pos)
                 return True
         elif et == QEvent.Type.MouseButtonDblClick and self.is_drag_area(obj, event.position()):
-            self.window.toggle_fullscreen()
-            return True
+            toggle = getattr(self.window, "toggle_fullscreen", None)
+            if toggle is not None:
+                toggle()
+                return True
         return False
+
+
+class GlassPanel(QWidget):
+    """A tool window that looks and behaves like the dashboard: the same glass
+    surface, stylesheet and opacity slider, frameless, always on top, dragged
+    by its title bar and resized from any edge. Non-modal, so the dashboard
+    and the game stay usable while it's open.
+
+    The ▾ button collapses it to a small pill that floats over the game (click
+    it to bring the panel back; drag to move). `content` is the body widget.
+    """
+
+    PILL_H = 34
+
+    def __init__(self, owner, title, size=(460, 440), pill_text=""):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                         | Qt.WindowType.Tool)
+        self.owner = owner
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.setWindowTitle(title)
+        self.setMinimumSize(320, 220)
+        self._collapsed = False
+        self._full_geometry = None
+        self._closing_callbacks = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.container = GlassFrame()
+        self.container.setObjectName("glassContainer")
+        outer.addWidget(self.container)
+        col = QVBoxLayout(self.container)
+        col.setContentsMargins(1, 1, 1, 1)
+        col.setSpacing(0)
+
+        self.title_bar = QFrame()
+        self.title_bar.setObjectName("titleBar")
+        self.title_bar.setFixedHeight(32)
+        bar = QHBoxLayout(self.title_bar)
+        bar.setContentsMargins(14, 0, 10, 0)
+        bar.setSpacing(8)
+        self.title_label = QLabel(title.upper())
+        self.title_label.setObjectName("panelTitle")
+        bar.addWidget(self.title_label)
+        bar.addStretch()
+        collapse = TitleBarButton("min")
+        collapse.setToolTip("Minimize to a pill (keeps working while you're in the game)")
+        collapse.clicked.connect(self.collapse)
+        bar.addWidget(collapse)
+        close = TitleBarButton("close")
+        close.setToolTip("Close (Esc)")
+        close.clicked.connect(self.close)
+        bar.addWidget(close)
+        col.addWidget(self.title_bar)
+
+        self.content = QWidget()
+        self.content.setObjectName("panelContent")
+        col.addWidget(self.content, 1)
+
+        # collapsed state
+        self.pill = QFrame(self)
+        self.pill.setObjectName("panelPill")
+        pill_row = QHBoxLayout(self.pill)
+        pill_row.setContentsMargins(12, 0, 8, 0)
+        pill_row.setSpacing(8)
+        self.pill_dot = QLabel("●")
+        self.pill_dot.setObjectName("pillDot")
+        pill_row.addWidget(self.pill_dot)
+        self.pill_label = QLabel(pill_text or title)
+        self.pill_label.setObjectName("pillText")
+        pill_row.addWidget(self.pill_label, 1)
+        expand = TitleBarButton("up")
+        expand.setToolTip("Open")
+        expand.clicked.connect(self.expand)
+        pill_row.addWidget(expand)
+        self.pill.hide()
+        for widget in (self.pill, self.pill_dot, self.pill_label):
+            widget.installEventFilter(self)
+        self._pill_press = None
+        self._pulse = QTimer(self)
+        self._pulse.setInterval(650)
+        self._pulse.timeout.connect(self._pulse_dot)
+        self._pulse_on = True
+
+        self.chrome = FramelessChrome(self)
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.close)
+        self.resize(*size)
+        self.apply_theme()
+        panels = getattr(owner, "_glass_panels", None)
+        if panels is not None:
+            panels.append(self)
+
+    # ── theme: follow the dashboard (styles + opacity slider) ──
+    def apply_theme(self):
+        scale = getattr(self.owner, "surface_opacity_scale", 1.0)
+        self.container.set_scale(scale)
+        self.setStyleSheet((self.owner.styleSheet() if self.owner is not None else "") + self.PANEL_STYLE
+                           + getattr(self, "extra_style", ""))
+
+    PANEL_STYLE = """
+        QLabel#panelTitle { color: rgba(236,242,252,0.78); font-size: 10px; font-weight: 700;
+                            letter-spacing: 1.5px; background: transparent; }
+        QWidget#panelContent { background: transparent; }
+        QFrame#panelPill { background: rgba(16,20,28,0.94); border: 1px solid rgba(74,159,216,0.45);
+                           border-radius: 16px; }
+        QLabel#pillText { color: rgba(236,242,252,0.92); font-size: 11px; font-weight: 600; background: transparent; }
+        QLabel#pillDot { color: #6BB6E8; font-size: 10px; background: transparent; }
+    """
+
+    def add_style(self, css):
+        self.extra_style = getattr(self, "extra_style", "") + css
+        self.apply_theme()
+
+    # ── show / position ──
+    def open_panel(self):
+        owner = self.owner
+        if owner is not None and owner.isVisible():
+            area = owner.geometry()
+        else:
+            screen = QGuiApplication.primaryScreen()
+            area = screen.availableGeometry() if screen else QRect(0, 0, 1280, 800)
+        self.move(area.x() + (area.width() - self.width()) // 2, area.y() + (area.height() - self.height()) // 2)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def on_close(self, callback):
+        self._closing_callbacks.append(callback)
+
+    def set_pill_text(self, text, found=False):
+        self.pill_label.setText(text)
+        self._pill_found = bool(found)
+        self._pulse_dot(force_on=True)
+
+    # ── collapse to a pill ──
+    def collapse(self):
+        if self._collapsed:
+            return
+        self._collapsed = True
+        self._no_resize = True
+        self._full_geometry = QRect(self.geometry())
+        self.container.hide()
+        self.pill.show()
+        width = 280
+        self.setMinimumSize(width, self.PILL_H)
+        self.setGeometry(self._full_geometry.right() - width + 1, self._full_geometry.top(), width, self.PILL_H)
+        self.pill.setGeometry(0, 0, width, self.PILL_H)
+        self._pulse.start()
+
+    def expand(self):
+        if not self._collapsed:
+            return
+        self._collapsed = False
+        self._no_resize = False
+        self._pulse.stop()
+        self.pill.hide()
+        self.container.show()
+        self.setMinimumSize(320, 220)
+        if self._full_geometry is not None:
+            # Open where the pill now is (it may have been dragged).
+            full = QRect(self._full_geometry)
+            full.moveTopRight(self.geometry().topRight())
+            self.setGeometry(full)
+        self.raise_()
+        self.activateWindow()
+
+    def _pulse_dot(self, force_on=False):
+        """Waiting: a slow blue blink. Found: steady green."""
+        found = getattr(self, "_pill_found", False)
+        self._pulse_on = True if (force_on or found) else not self._pulse_on
+        color = QColor("#66BB6A" if found else "#6BB6E8")
+        alpha = 1.0 if self._pulse_on else 0.3
+        self.pill_dot.setStyleSheet(f"color: rgba({color.red()},{color.green()},{color.blue()},{alpha});")
+
+    def eventFilter(self, obj, event):
+        if self._collapsed and obj in (self.pill, self.pill_dot, self.pill_label):
+            et = event.type()
+            if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self._pill_press = event.globalPosition().toPoint()
+                return True
+            if et == QEvent.Type.MouseMove and self._pill_press is not None:
+                if (event.globalPosition().toPoint() - self._pill_press).manhattanLength() > 4:
+                    start = self._pill_press
+                    self._pill_press = None
+                    self.chrome.begin_move(start)
+                return True
+            if et == QEvent.Type.MouseButtonRelease and self._pill_press is not None:
+                self._pill_press = None
+                self.expand()
+                return True
+        return super().eventFilter(obj, event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.chrome.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.chrome.stop()
+
+    def closeEvent(self, event):
+        for callback in self._closing_callbacks:
+            try:
+                callback()
+            except Exception:
+                pass
+        self._closing_callbacks = []
+        panels = getattr(self.owner, "_glass_panels", None)
+        if panels is not None and self in panels:
+            panels.remove(self)
+        self.chrome.stop()
+        super().closeEvent(event)
 
 
 class StatsWindow(QWidget):
@@ -3371,6 +3593,7 @@ class StatsWindow(QWidget):
         self.resize_start_size = None
         self.resize_start_geometry = None
         self._resize_edges = (False, False, False, False)
+        self._glass_panels = []         # open GlassPanels (themed with this window)
         self._expanded = False          # filling the screen's work area
         self._normal_geometry = None    # what to go back to (and what gets saved)
         self._restore_expanded = False
@@ -3678,6 +3901,11 @@ class StatsWindow(QWidget):
     def _apply_window_opacity(self, opacity_value):
         self.surface_opacity_scale = max(0.70, min(1.25, float(opacity_value)))
         self.apply_modern_style()
+        for panel in list(getattr(self, "_glass_panels", [])):
+            try:
+                panel.apply_theme()
+            except RuntimeError:
+                pass
 
     def _on_opacity_slider_changed(self, value):
         self._apply_window_opacity(value / 100.0)
@@ -4989,8 +5217,7 @@ class StatsWindow(QWidget):
         anim.start()
 
     def show_cards_played(self, log_file, opponent_deck=""):
-        """Dialog: every card each player showed in one battle (copies seen)."""
-        from PySide6.QtWidgets import QDialog
+        """Panel: every card each player showed in one battle (copies seen)."""
         from app_settings import load_username
         import card_usage
         path = self._resolve_log_file_path(log_file)
@@ -5015,11 +5242,10 @@ class StatsWindow(QWidget):
         mine = card_usage.log_card_counts(text, username, opponent)
         theirs = card_usage.log_card_counts(text, opponent, username)
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Cards played")
-        dialog.setStyleSheet("QDialog { background: #11161F; } QLabel { color: rgba(236,242,252,0.92); }")
-        dialog.resize(620, 560)
-        outer = QVBoxLayout(dialog)
+        dialog = GlassPanel(self, "Cards played", size=(620, 560),
+                            pill_text="Cards played" + (f" · vs {opponent_deck}" if opponent_deck else ""))
+        dialog.add_style("QLabel { color: rgba(236,242,252,0.92); background: transparent; }")
+        outer = QVBoxLayout(dialog.content)
         outer.setContentsMargins(14, 12, 14, 12)
         head = QLabel(f"<b>{os.path.basename(path)}</b>"
                       + (f" · vs {opponent_deck}" if opponent_deck else "")
@@ -5041,11 +5267,7 @@ class StatsWindow(QWidget):
                 table.setItem(r, 1, cell)
             columns.addWidget(table)
         outer.addLayout(columns)
-        self.begin_protected_interaction()
-        try:
-            dialog.exec()
-        finally:
-            self.end_protected_interaction()
+        dialog.open_panel()
 
     def _create_deck_dashboard_page(self, analysis):
         scroll = PageScrollArea()
@@ -5234,13 +5456,23 @@ class StatsWindow(QWidget):
     def _import_decklist_dialog(self, deck_name):
         """Pick the list for a deck. Watches the clipboard while open: export
         the deck in PTCGL (Export → Copy to clipboard) and it's picked up."""
-        from PySide6.QtWidgets import QDialog, QPlainTextEdit
+        from PySide6.QtWidgets import QPlainTextEdit
         from decklists import all_decklists, auto_name, card_count, import_decklist, is_ptcgl_decklist, link_decklist
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Import decklist")
-        dialog.setStyleSheet(
-            "QDialog { background: #0F141D; }"
+        existing = getattr(self, "_decklist_panel", None)
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.expand()
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+            except RuntimeError:
+                pass
+        dialog = GlassPanel(self, "Import decklist", size=(460, 460),
+                            pill_text="Waiting for a decklist on your clipboard…")
+        self._decklist_panel = dialog
+        dialog.add_style(
             "QLabel { color: rgba(236,242,252,0.90); background: transparent; }"
             "QListWidget { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);"
             " border-radius: 8px; color: #E6ECF5; font-size: 11px; outline: none; padding: 4px; }"
@@ -5256,14 +5488,14 @@ class StatsWindow(QWidget):
             " color: white; font-weight: 700; padding: 7px 18px; }"
             "QPushButton#primary:disabled { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.35); }"
             "QPushButton#secondary { background: transparent; border: 1px solid rgba(255,255,255,0.16);"
-            " border-radius: 6px; color: #D6DAE0; padding: 7px 16px; }")
-        dialog.resize(440, 420)
-        col = QVBoxLayout(dialog)
-        col.setContentsMargins(18, 16, 18, 14)
+            " border-radius: 6px; color: #D6DAE0; padding: 7px 16px; }"
+            "QPushButton#secondary:hover { border-color: rgba(255,255,255,0.32); color: #FFFFFF; }")
+        col = QVBoxLayout(dialog.content)
+        col.setContentsMargins(18, 12, 18, 14)
         col.setSpacing(10)
 
-        title = QLabel(f"<span style='font-size:15px;font-weight:700'>Import decklist</span><br>"
-                       f"<span style='color:#8A97AA;font-size:11px'>for {deck_name}</span>")
+        title = QLabel(f"<span style='color:#8A97AA;font-size:11px'>for</span> "
+                       f"<span style='font-size:15px;font-weight:700'>{deck_name}</span>")
         col.addWidget(title)
 
         status = QLabel()
@@ -5303,9 +5535,12 @@ class StatsWindow(QWidget):
                 status.setText(f"<span style='color:#66BB6A;font-weight:700'>✓ Decklist found on your clipboard</span>"
                                f"<br><span style='color:#8A97AA'>{auto_name(found)} · {card_count(found)} cards"
                                f"</span>")
+                dialog.set_pill_text(f"✓ {auto_name(found)} · {card_count(found)} cards", found=True)
             else:
                 status.setText("<span style='color:#6BB6E8'>●</span> Waiting for a list… In Pokémon TCG Live: "
-                               "<b>Decks → this deck → Export → Copy to clipboard</b>. It shows up here by itself.")
+                               "<b>Decks → this deck → Export → Copy to clipboard</b>. It shows up here by itself."
+                               "<br><span style='color:#8A97AA'>Minimize this (▾) while you're in the game; "
+                               "it opens again when the list arrives.</span>")
 
         def add_choice(text, label, select=False, top=False):
             item = QListWidgetItem(label)
@@ -5331,6 +5566,7 @@ class StatsWindow(QWidget):
             if not is_ptcgl_decklist(text):
                 return
             set_status(text)
+            dialog.expand()  # back from the pill once the export lands
             if text not in known:
                 known.add(text)
                 add_choice(text, f"{auto_name(text)}   ·   {card_count(text)} cards   ·   from clipboard",
@@ -5362,7 +5598,9 @@ class StatsWindow(QWidget):
                 return
             entry = import_decklist(text, deck_name)
             link_decklist(deck_name, entry["id"])
-            dialog.accept()
+            self._deck_dashboards_dirty = True
+            QTimer.singleShot(0, self._refresh_deck_dashboards)
+            dialog.close()
 
         set_status()
         clipboard = QApplication.clipboard()
@@ -5372,31 +5610,26 @@ class StatsWindow(QWidget):
         choices.itemDoubleClicked.connect(lambda *_: accept())
         edit.textChanged.connect(update_link)
         manual_btn.clicked.connect(toggle_manual)
-        cancel.clicked.connect(dialog.reject)
+        cancel.clicked.connect(dialog.close)
         link.clicked.connect(accept)
         update_link()
 
-        self.begin_protected_interaction()
-        try:
-            ok = dialog.exec()
-        finally:
-            self.end_protected_interaction()
+        def stop_watching():
             try:
                 clipboard.dataChanged.disconnect(check_clipboard)
             except (RuntimeError, TypeError):
                 pass
-        if ok:
-            self._deck_dashboards_dirty = True
-            QTimer.singleShot(0, self._refresh_deck_dashboards)
+        dialog.on_close(stop_watching)
+        dialog.open_panel()
 
     def _view_decklist(self, entry):
-        from PySide6.QtWidgets import QDialog, QPlainTextEdit
-        dialog = QDialog(self)
-        dialog.setWindowTitle(entry.get("name") or "Decklist")
-        dialog.setStyleSheet("QDialog { background: #11161F; } QPlainTextEdit { background: rgba(255,255,255,0.05); "
-                             "color: #E6ECF5; border: none; font-family: Consolas; }")
-        dialog.resize(420, 620)
-        col = QVBoxLayout(dialog)
+        from PySide6.QtWidgets import QPlainTextEdit
+        dialog = GlassPanel(self, entry.get("name") or "Decklist", size=(420, 620),
+                            pill_text=entry.get("name") or "Decklist")
+        dialog.add_style("QPlainTextEdit { background: rgba(255,255,255,0.04); color: #E6ECF5; border: 1px solid "
+                         "rgba(255,255,255,0.08); border-radius: 8px; font-family: Consolas; padding: 6px; }")
+        col = QVBoxLayout(dialog.content)
+        col.setContentsMargins(14, 12, 14, 14)
         view = QPlainTextEdit(entry.get("text") or "")
         view.setReadOnly(True)
         col.addWidget(view)
@@ -5404,7 +5637,7 @@ class StatsWindow(QWidget):
         copy.setObjectName("settingsBtn")
         copy.clicked.connect(lambda: (QApplication.clipboard().setText(entry.get("text") or ""), copy.setText("Copied ✓")))
         col.addWidget(copy)
-        dialog.exec()
+        dialog.open_panel()
 
     def _open_cards_compare(self, lid):
         """Meta → Cards with this list chosen (it jumps to the closest archetype)."""
@@ -5425,7 +5658,6 @@ class StatsWindow(QWidget):
     def _show_card_suggestions(self, deck_name, matched_row, entry):
         """Cards most lists of the archetype play that yours doesn't (or plays
         fewer of), and your rare picks."""
-        from PySide6.QtWidgets import QDialog
         from AIParseBattleLog import load_meta_rows
         mine = card_usage.parse_list(entry.get("text"))
         rows = [r for r in load_meta_rows() if r.get("cards")]
@@ -5451,11 +5683,11 @@ class StatsWindow(QWidget):
                 lines.append("<span style='color:#8A97AA'>None.</span>")
             for c in sorted(items, key=lambda c: -c["incl"])[:10]:
                 lines.append(f"{fmt(c)} <span style='color:#8A97AA'>· in {c['incl']:.0f}% of lists</span><br>")
-        dialog = QDialog(self)
-        dialog.setWindowTitle(f"Card suggestions · {deck_name}")
-        dialog.setStyleSheet("QDialog { background: #11161F; } QLabel { color: rgba(236,242,252,0.92); font-size: 11px; }")
-        dialog.resize(520, 600)
-        col = QVBoxLayout(dialog)
+        dialog = GlassPanel(self, f"Card suggestions · {deck_name}", size=(520, 600),
+                            pill_text=f"Card suggestions · {deck_name}")
+        dialog.add_style("QLabel { color: rgba(236,242,252,0.92); font-size: 11px; background: transparent; }")
+        col = QVBoxLayout(dialog.content)
+        col.setContentsMargins(14, 12, 14, 14)
         summary = card_usage.summary(compared)
         head = QLabel(f"<b>{entry.get('name')}</b> vs <b>{row['deck']}</b> · {row.get('lists', 0):,} public lists · "
                       f"{card_usage.similarity(row['cards'], mine) * 100:.0f}% like the typical list · "
@@ -5472,9 +5704,9 @@ class StatsWindow(QWidget):
         col.addWidget(scroll, 1)
         more = QPushButton("Full comparison in Meta → Cards")
         more.setObjectName("settingsBtn")
-        more.clicked.connect(lambda: (dialog.accept(), self._open_cards_compare(entry["id"])))
+        more.clicked.connect(lambda: (dialog.close(), self._open_cards_compare(entry["id"])))
         col.addWidget(more)
-        dialog.exec()
+        dialog.open_panel()
 
     def _create_base_archetype_field(self, analysis):
         """'Base archetype' field under the deck title: the Limitless archetype
