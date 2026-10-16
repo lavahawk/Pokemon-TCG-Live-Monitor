@@ -3358,6 +3358,27 @@ class FramelessChrome(QObject):
         return False
 
 
+class MenuRichLabel(QLabel):
+    """A QMenu row with rich text (e.g. a lighter italic "beta"), styled and
+    clickable like a normal item (use it in a QWidgetAction)."""
+
+    clicked = Signal()
+
+    def __init__(self, html, parent=None):
+        super().__init__(html, parent)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setStyleSheet("QLabel { color: #E6ECF5; font-size: 11px; padding: 6px 22px 6px 14px;"
+                           " background: transparent; }"
+                           "QLabel:hover { background: rgba(74,159,216,0.28); }")
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 class GlassPanel(QWidget):
     """A tool window that looks and behaves like the dashboard: the same glass
     surface, stylesheet and opacity slider, frameless, always on top, dragged
@@ -5439,10 +5460,15 @@ class StatsWindow(QWidget):
             self.open_trainerhill_tool(path)
 
         header(entry["name"].upper())
-        menu.addAction("View list", lambda: self._view_decklist(entry))
-        menu.addAction("View as picture", lambda: self._view_decklist_picture(entry))
-        menu.addAction("Print decklist", lambda: self._print_decklist(entry))
-        menu.addAction("Buy on TCGplayer", lambda: self._buy_on_tcgplayer(entry))
+        menu.addAction("View list", lambda: self._view_decklist(entry, deck_name))
+        menu.addAction("View as picture", lambda: self._view_decklist_picture(entry, deck_name))
+        menu.addAction("Print decklist", lambda: self._print_decklist(entry, deck_name))
+        buy = QWidgetAction(menu)
+        buy_label = MenuRichLabel("Buy on TCGplayer <span style='font-style:italic; font-weight:300;"
+                                  " color:rgba(200,212,230,0.55)'>beta</span>")
+        buy_label.clicked.connect(lambda: (menu.close(), self._buy_on_tcgplayer(entry, deck_name)))
+        buy.setDefaultWidget(buy_label)
+        menu.addAction(buy)
         menu.addSeparator()
         menu.addAction("Card suggestions", lambda: self._show_card_suggestions(deck_name, matched_row, entry))
         menu.addAction("Compare with the meta", lambda: self._open_cards_compare(entry["id"]))
@@ -5632,10 +5658,10 @@ class StatsWindow(QWidget):
         dialog.on_close(stop_watching)
         dialog.open_panel()
 
-    def _view_decklist(self, entry):
+    def _view_decklist(self, entry, deck_name=None):
         from PySide6.QtWidgets import QPlainTextEdit
-        dialog = GlassPanel(self, entry.get("name") or "Decklist", size=(420, 620),
-                            pill_text=entry.get("name") or "Decklist")
+        title = deck_name or entry.get("name") or "Decklist"
+        dialog = GlassPanel(self, title, size=(420, 620), pill_text=title)
         dialog.add_style("QPlainTextEdit { background: rgba(255,255,255,0.04); color: #E6ECF5; border: 1px solid "
                          "rgba(255,255,255,0.08); border-radius: 8px; font-family: Consolas; padding: 6px; }")
         col = QVBoxLayout(dialog.content)
@@ -5650,8 +5676,9 @@ class StatsWindow(QWidget):
         dialog.open_panel()
 
     # ── decklist: print / picture / buy ──
-    def _print_decklist(self, entry):
+    def _print_decklist(self, entry, deck_name=None):
         """In Person → Print your decklist (pokedata.ovh sheet), this list picked."""
+        self._print_deck_name = (entry.get("id"), deck_name)
         index = self._main_tab_index("In Person")
         if index < 0:
             return
@@ -5665,7 +5692,7 @@ class StatsWindow(QWidget):
 
     CARD_W, CARD_H, CARD_GAP, CARD_COLS = 126, 176, 8, 10
 
-    def _view_decklist_picture(self, entry):
+    def _view_decklist_picture(self, entry, deck_name=None):
         """The list as one image of its cards (Limitless card scans, cached in
         .card_image_cache/), with copy counts. Save as PNG or copy it."""
         from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
@@ -5677,14 +5704,28 @@ class StatsWindow(QWidget):
         cache_dir = os.path.join(BASE_DIR, ".card_image_cache")
         os.makedirs(cache_dir, exist_ok=True)
         images = {}
-        panel = GlassPanel(self, entry.get("name") or "Decklist", size=(1000, 760),
-                           pill_text=f"{entry.get('name') or 'Decklist'} · picture")
+        title = deck_name or entry.get("name") or "Decklist"
+        entry = dict(entry, name=title)  # the picture's title and file name: your deck's name
+        panel = GlassPanel(self, title, size=(1000, 760), pill_text=f"{title} · picture")
         panel.add_style("QLabel#deckPicture { background: transparent; }"
                         "QLabel#pictureStatus { color: rgba(168,182,204,0.85); font-size: 10px; background: transparent; }")
         col = QVBoxLayout(panel.content)
         col.setContentsMargins(12, 10, 12, 12)
         col.setSpacing(8)
         top = QHBoxLayout()
+        mode_btns = {}
+        for mode, text, tip in (("prints", "Your prints", "The exact printings in your list (card scans from Limitless)."),
+                                ("normalized", "Normalized", "Every card in its regular printing, rendered by Limitless "
+                                                             "ImgGen (limitlesstcg.com/tools/imggen).")):
+            b = QPushButton(text)
+            b.setObjectName("eloScaleBtn")
+            b.setCheckable(True)
+            b.setFixedHeight(28)
+            b.setToolTip(tip)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            top.addWidget(b)
+            mode_btns[mode] = b
+        top.addSpacing(8)
         status = QLabel("Loading card images…")
         status.setObjectName("pictureStatus")
         top.addWidget(status, 1)
@@ -5704,20 +5745,74 @@ class StatsWindow(QWidget):
         label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(label)
         col.addWidget(scroll, 1)
-        state = {"pixmap": None}
+        state = {"pixmap": None, "mode": "prints", "limitless": None, "limitless_error": None, "fetching": False}
 
         def key(card):
             return f"{card['set']}_{card['number']}"
 
-        def render():
-            pixmap = self._render_deck_picture(entry, cards, images)
+        def show(pixmap):
             state["pixmap"] = pixmap
             width = max(200, scroll.viewport().width() - 4)
             label.setPixmap(pixmap.scaledToWidth(min(width, pixmap.width()),
                                                  Qt.TransformationMode.SmoothTransformation))
+
+        def render():
+            for mode, b in mode_btns.items():
+                b.setChecked(mode == state["mode"])
+            total = sum(c["qty"] for c in cards)
+            if state["mode"] == "normalized":
+                if state["limitless"] is not None:
+                    show(state["limitless"])
+                    status.setText(f"{total} cards · normalized by Limitless ImgGen")
+                elif state["limitless_error"]:
+                    status.setText(f"Limitless ImgGen failed: {state['limitless_error']}")
+                else:
+                    status.setText("Generating the normalized picture with Limitless…")
+                return
+            rects = []
+            show(self._render_deck_picture(entry, cards, images, rects))
+            state["rects"] = rects
             loaded = sum(1 for c in cards if key(c) in images)
-            status.setText(f"{sum(c['qty'] for c in cards)} cards · {len(cards)} different"
+            status.setText(f"{total} cards · {len(cards)} different"
                            + ("" if loaded == len(cards) else f" · loading images {loaded}/{len(cards)}…"))
+
+        def fetch_limitless():
+            from decklists import limitless_picture
+            try:
+                state["limitless_bytes"] = limitless_picture(entry.get("text") or "", normalized=True)
+            except Exception as exc:
+                state["limitless_error"] = str(exc) or type(exc).__name__
+            state["fetching"] = False
+
+        limitless_wait = QTimer(panel)
+        limitless_wait.setInterval(200)
+
+        def limitless_ready():
+            if state["fetching"]:
+                return
+            limitless_wait.stop()
+            data = state.pop("limitless_bytes", None)
+            if data:
+                pix = QPixmap()
+                if pix.loadFromData(data):
+                    state["limitless"] = pix
+                else:
+                    state["limitless_error"] = "unreadable image"
+            render()
+        limitless_wait.timeout.connect(limitless_ready)
+
+        def set_mode(mode):
+            state["mode"] = mode
+            getattr(panel, "_hide_card_zoom", lambda: None)()
+            if mode == "normalized" and state["limitless"] is None and not state["fetching"]:
+                state["limitless_error"] = None
+                state["fetching"] = True
+                threading.Thread(target=fetch_limitless, daemon=True).start()
+                limitless_wait.start()
+            render()
+
+        for mode, b in mode_btns.items():
+            b.clicked.connect(lambda _c=False, m=mode: set_mode(m))
 
         debounce = QTimer(panel)
         debounce.setSingleShot(True)
@@ -5756,6 +5851,8 @@ class StatsWindow(QWidget):
             if state["pixmap"] is None:
                 return
             name = re.sub(r'[\\/:*?"<>|]+', "_", entry.get("name") or "decklist")
+            if state["mode"] == "normalized":
+                name += " (normalized)"
             default = os.path.join(os.path.expanduser("~"), "Downloads", f"{name}.png")
             path, _ = QFileDialog.getSaveFileName(panel, "Save decklist picture", default, "PNG image (*.png)")
             if path:
@@ -5771,12 +5868,162 @@ class StatsWindow(QWidget):
         save_btn.clicked.connect(save)
         copy_btn.clicked.connect(copy)
         panel.resized = debounce.start
+        self._attach_card_zoom(panel, label, state, net, cache_dir)
         render()
         panel.open_panel()
         QTimer.singleShot(0, render)
 
-    def _render_deck_picture(self, entry, cards, images):
-        """Paint the list: title, then a grid per section, copy counts as badges."""
+    def _attach_card_zoom(self, panel, label, state, net, cache_dir):
+        """Hover a card in the picture: it pops out bigger, in high resolution
+        (Limitless _LG scan, cached), growing smoothly from where it sits."""
+        from PySide6.QtCore import QVariantAnimation, QEasingCurve
+        from PySide6.QtNetwork import QNetworkRequest
+        from PySide6.QtGui import QPainterPath
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+        from decklists import card_image_url
+
+        pop = QLabel(panel)
+        pop.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        pop.setScaledContents(True)
+        pop.hide()
+        shadow = QGraphicsDropShadowEffect(pop)
+        shadow.setBlurRadius(28)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QColor(0, 0, 0, 170))
+        pop.setGraphicsEffect(shadow)
+        large = {}
+        zoom = {"card": None, "start": None, "end": None}
+        anim = QVariantAnimation(panel)
+        anim.setDuration(170)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def lerp(a, b, t):
+            return QRect(int(a.x() + (b.x() - a.x()) * t), int(a.y() + (b.y() - a.y()) * t),
+                         int(a.width() + (b.width() - a.width()) * t), int(a.height() + (b.height() - a.height()) * t))
+
+        anim.valueChanged.connect(lambda t: zoom["start"] and pop.setGeometry(lerp(zoom["start"], zoom["end"], float(t))))
+
+        def rounded(pix, width, height):
+            out = QPixmap(width, height)
+            out.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(out)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, width, height), width * 0.045, width * 0.045)
+            painter.setClipPath(path)
+            painter.drawPixmap(0, 0, pix.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                                Qt.TransformationMode.SmoothTransformation))
+            painter.end()
+            return out
+
+        def card_key(card):
+            return f"{card['set']}_{card['number']}"
+
+        def set_image(card):
+            k = card_key(card)
+            pix = large.get(k)
+            if pix is None:
+                small = os.path.join(cache_dir, f"{k}.png")
+                pix = QPixmap(small) if os.path.exists(small) else QPixmap()
+                fetch_large(card)
+            if not pix.isNull():
+                pop.setPixmap(rounded(pix, 360, 502))
+
+        def fetch_large(card):
+            k = card_key(card)
+            path = os.path.join(cache_dir, f"{k}_LG.png")
+            if os.path.exists(path):
+                pix = QPixmap(path)
+                if not pix.isNull():
+                    large[k] = pix
+                    return
+            if large.get(k, "") is None or k in zoom.setdefault("loading", set()):
+                return
+            zoom["loading"].add(k)
+            url = card_image_url(card["set"], card["number"]).replace("_SM.png", "_LG.png")
+            reply = net.get(QNetworkRequest(QUrl(url)))
+
+            def done():
+                data = bytes(reply.readAll())
+                reply.deleteLater()
+                zoom["loading"].discard(k)
+                pix = QPixmap()
+                if data and pix.loadFromData(data):
+                    large[k] = pix
+                    try:
+                        with open(path, "wb") as handle:
+                            handle.write(data)
+                    except OSError:
+                        pass
+                    if zoom["card"] is card:
+                        pop.setPixmap(rounded(pix, 360, 502))
+            reply.finished.connect(done)
+
+        def card_at(pos):
+            shown = label.pixmap()
+            full = state.get("pixmap")
+            if state.get("mode") != "prints" or shown is None or shown.isNull() or full is None:
+                return None, None
+            scale = shown.width() / max(1, full.width())
+            offset_x = (label.width() - shown.width()) / 2
+            for rect, card in state.get("rects") or []:
+                r = QRectF(offset_x + rect.x() * scale, rect.y() * scale, rect.width() * scale, rect.height() * scale)
+                if r.contains(QPointF(pos)):
+                    return r, card
+            return None, None
+
+        def show_zoom(rect, card):
+            if zoom["card"] is card:
+                return
+            zoom["card"] = card
+            set_image(card)
+            top_left = label.mapTo(panel, QPoint(int(rect.x()), int(rect.y())))
+            start = QRect(top_left, QSize(int(rect.width()), int(rect.height())))
+            height = min(int(panel.height() * 0.78), 470)
+            width = int(height * 63 / 88)
+            end = QRect(0, 0, width, height)
+            end.moveCenter(start.center())
+            bounds = panel.rect().adjusted(12, 44, -12, -12)
+            end.moveLeft(max(bounds.left(), min(end.left(), bounds.right() - width)))
+            end.moveTop(max(bounds.top(), min(end.top(), bounds.bottom() - height)))
+            zoom["start"], zoom["end"] = start, end
+            pop.setGeometry(start)
+            pop.show()
+            pop.raise_()
+            anim.stop()
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.start()
+
+        def hide_zoom():
+            zoom["card"] = None
+            anim.stop()
+            pop.hide()
+
+        class Hover(QObject):
+            def eventFilter(self, obj, event):
+                et = event.type()
+                if et in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress):
+                    rect, card = card_at(event.position())
+                    if card is None:
+                        hide_zoom()
+                    else:
+                        show_zoom(rect, card)
+                elif et == QEvent.Type.Leave:
+                    hide_zoom()
+                return False
+
+        label.setMouseTracking(True)
+        hover = Hover(label)
+        label.installEventFilter(hover)
+        label._zoom_filter = hover  # keep a reference
+        label.setCursor(Qt.CursorShape.PointingHandCursor)
+        panel._hide_card_zoom = hide_zoom
+
+    def _render_deck_picture(self, entry, cards, images, rects_out=None):
+        """Paint the list: title, then a grid per section, copy counts as badges.
+        rects_out (a list) receives (QRectF in picture pixels, card) per card."""
         from PySide6.QtGui import QFont, QLinearGradient, QPainterPath
         w, h, gap, cols = self.CARD_W, self.CARD_H, self.CARD_GAP, self.CARD_COLS
         margin, head_h, section_h = 22, 54, 30
@@ -5834,6 +6081,8 @@ class StatsWindow(QWidget):
                 x = margin + (i % cols) * (w + gap)
                 cy = y + (i // cols) * (h + gap)
                 rect = QRectF(x, cy, w, h)
+                if rects_out is not None:
+                    rects_out.append((QRectF(rect), card))
                 pix = images.get(f"{card['set']}_{card['number']}")
                 path = QPainterPath()
                 path.addRoundedRect(rect, 6, 6)
@@ -5907,7 +6156,7 @@ class StatsWindow(QWidget):
             self._tcg_profile = profile
         return self._tcg_profile
 
-    def _buy_on_tcgplayer(self, entry):
+    def _buy_on_tcgplayer(self, entry, deck_name=None):
         """TCGplayer Mass Entry with Pokemon picked and the list filled in as
         exact products (qty-productId via tcgcsv); Add to Cart is pressed for
         you. Optimize and check out in the same panel (or your browser)."""
@@ -5918,7 +6167,7 @@ class StatsWindow(QWidget):
             QMessageBox.information(self, "TCGplayer", "This list has no card lines to buy.")
             return
         affiliate = bool(decklists.TCGPLAYER_AFFILIATE_BASE.strip())
-        panel = GlassPanel(self, f"Buy on TCGplayer · {entry.get('name') or 'Decklist'}", size=(1120, 820),
+        panel = GlassPanel(self, f"Buy on TCGplayer · {deck_name or entry.get('name') or 'Decklist'}", size=(1120, 820),
                            pill_text="TCGplayer cart")
         panel.add_style("QLabel#buyStatus { color: rgba(236,242,252,0.88); font-size: 11px; background: transparent; }"
                         "QLabel#buyNote { color: rgba(168,182,204,0.70); font-size: 9px; background: transparent; }")
@@ -7590,6 +7839,19 @@ class StatsWindow(QWidget):
             row.addWidget(btn)
             self._decklist_btns.append(btn)
         row.addStretch()
+        self._print_btns = []
+        for text, tip, slot in (("Save PDF", "Make the PDF (pokedata's Generate PDF) and save it to Downloads",
+                                 lambda: self._generate_decklist_pdf(print_after=False)),
+                                ("Print…", "Make the PDF and open your printer's print dialog",
+                                 lambda: self._generate_decklist_pdf(print_after=True))):
+            btn = QPushButton(text)
+            btn.setObjectName("limitlessBtn")
+            btn.setFixedHeight(32)
+            btn.setToolTip(tip)
+            btn.clicked.connect(slot)
+            btn.setVisible(False)
+            row.addWidget(btn)
+            self._print_btns.append(btn)
         open_ext = QPushButton("Open in browser ↗")
         open_ext.setObjectName("limitlessBtn")
         open_ext.setFixedHeight(32)
@@ -7601,6 +7863,27 @@ class StatsWindow(QWidget):
         self.in_person_status.setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;")
         self.in_person_status.setWordWrap(True)
         vlayout.addWidget(self.in_person_status)
+
+        # Shown once a decklist PDF is saved: print it / open it / show it.
+        self._pdf_bar = QFrame()
+        self._pdf_bar.setStyleSheet("QFrame { background: rgba(102,187,106,0.12); border: 1px solid "
+                                    "rgba(102,187,106,0.35); border-radius: 8px; }"
+                                    "QLabel { background: transparent; border: none; color: #CFEFD2; font-size: 11px; }")
+        bar = QHBoxLayout(self._pdf_bar)
+        bar.setContentsMargins(10, 4, 6, 4)
+        self._pdf_label = QLabel()
+        bar.addWidget(self._pdf_label, 1)
+        for text, slot in (("Print…", lambda: self._print_pdf(self._last_pdf)),
+                           ("Open PDF", lambda: os.startfile(self._last_pdf)),  # type: ignore[attr-defined]
+                           ("Show in folder", lambda: subprocess.Popen(["explorer", f"/select,{os.path.normpath(self._last_pdf)}"]))):
+            btn = QPushButton(text)
+            btn.setObjectName("eloScaleBtn")
+            btn.setFixedHeight(26)
+            btn.clicked.connect(slot)
+            bar.addWidget(btn)
+        self._pdf_bar.setVisible(False)
+        self._last_pdf = None
+        vlayout.addWidget(self._pdf_bar)
 
         self.in_person_view = None
         if WEBENGINE_AVAILABLE:
@@ -7621,6 +7904,10 @@ class StatsWindow(QWidget):
         if not WEBENGINE_AVAILABLE or self.in_person_view is not None:
             return self.in_person_view
         adblock.install()  # default profile
+        profile = QWebEngineProfile.defaultProfile()
+        if not getattr(self, "_in_person_downloads_hooked", False):
+            profile.downloadRequested.connect(self._on_in_person_download)
+            self._in_person_downloads_hooked = True
         self.in_person_view = QWebEngineView()
         self.in_person_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.in_person_view.loadFinished.connect(self._on_in_person_loaded)
@@ -7722,6 +8009,8 @@ class StatsWindow(QWidget):
         self._in_person_current = key
         for k, btn in self._in_person_buttons.items():
             btn.setChecked(k == key)
+        for btn in getattr(self, "_print_btns", []):
+            btn.setVisible(key == "print" and WEBENGINE_AVAILABLE)
         if key == "print":
             self._refresh_decklist_choices()
         self._ensure_in_person_view()
@@ -7752,6 +8041,99 @@ class StatsWindow(QWidget):
         self.in_person_view.page().runJavaScript(
             script, lambda ok: ok or self.in_person_status.setText(
                 "The print page changed and couldn't be filled automatically - use its Paste Decklist button."))
+
+    def _generate_decklist_pdf(self, print_after=False):
+        """Press pokedata's Generate PDF; the download is caught below."""
+        if self.in_person_view is None:
+            return
+        self._print_after_pdf = bool(print_after)
+        self.in_person_status.setText("Making the decklist PDF…")
+        self.in_person_view.page().runJavaScript(
+            "(function(){ if (typeof toPDF !== 'function') return false; toPDF(); return true; })()",
+            lambda ok: ok or self.in_person_status.setText(
+                "The print page changed - use its own Generate PDF button."))
+
+    def _on_in_person_download(self, item):
+        """pokedata's Generate PDF (and any other download in the In Person
+        tab): save to Downloads as "Decklist - <name>.pdf", then offer to print."""
+        folder = os.path.join(os.path.expanduser("~"), "Downloads")
+        try:
+            name = item.downloadFileName() or "download"
+            if name.lower().endswith(".pdf") and getattr(self, "_in_person_current", None) == "print":
+                entry = self._selected_decklist() or {}
+                lid, deck_name = getattr(self, "_print_deck_name", (None, None))
+                shown = deck_name if deck_name and lid == entry.get("id") else entry.get("name")
+                base = re.sub(r'[\\/:*?"<>|]+', "_", f"Decklist - {shown or 'deck'}")
+                name, n = f"{base}.pdf", 2
+                while os.path.exists(os.path.join(folder, name)):
+                    name, n = f"{base} ({n}).pdf", n + 1
+                item.setDownloadFileName(name)
+            item.setDownloadDirectory(folder)
+            item.accept()
+            path = os.path.join(folder, name)
+
+            def finished():
+                if not item.isFinished():
+                    return
+                if item.state() != item.DownloadState.DownloadCompleted:
+                    self.in_person_status.setText(f"Couldn't save {name}.")
+                    return
+                self._last_pdf = path
+                self._pdf_label.setText(f"✓ Saved {name} to Downloads")
+                self._pdf_bar.setVisible(True)
+                if getattr(self, "_print_after_pdf", False):
+                    self._print_after_pdf = False
+                    QTimer.singleShot(150, lambda: self._print_pdf(path))
+            item.isFinishedChanged.connect(finished)
+        except Exception as exc:
+            self.in_person_status.setText(f"Download failed: {exc}")
+
+    def _print_pdf(self, path):
+        """Windows' print dialog for a PDF; the pages are rendered with QtPdf."""
+        if not path or not os.path.exists(path):
+            return
+        try:
+            from PySide6.QtPdf import QPdfDocument
+            from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+        except Exception:
+            os.startfile(path, "print")  # type: ignore[attr-defined]
+            return
+        doc = QPdfDocument(self)
+        doc.load(path)
+        if doc.pageCount() <= 0:
+            os.startfile(path)  # type: ignore[attr-defined]
+            return
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setDocName(os.path.basename(path))
+        dialog = QPrintDialog(printer, self)
+        dialog.setWindowTitle("Print decklist")
+        self.begin_protected_interaction()
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self.end_protected_interaction()
+        if not accepted:
+            return
+        painter = QPainter()
+        if not painter.begin(printer):
+            self.in_person_status.setText("Couldn't start the printer.")
+            return
+        try:
+            first = max(0, printer.fromPage() - 1) if printer.fromPage() else 0
+            last = (printer.toPage() - 1) if printer.toPage() else doc.pageCount() - 1
+            for index in range(first, min(last, doc.pageCount() - 1) + 1):
+                if index > first:
+                    printer.newPage()
+                target = printer.pageRect(QPrinter.Unit.DevicePixel)
+                size = doc.pagePointSize(index)
+                scale = min(target.width() / max(1.0, size.width()), target.height() / max(1.0, size.height()))
+                image = doc.render(index, QSize(int(size.width() * scale), int(size.height() * scale)))
+                x = target.x() + (target.width() - image.width()) / 2
+                y = target.y() + (target.height() - image.height()) / 2
+                painter.drawImage(int(x), int(y), image)
+        finally:
+            painter.end()
+        self.in_person_status.setText(f"Sent {os.path.basename(path)} to the printer.")
 
     # ── Meta tab: unified, preference-weighted analysis ───────────────────
     def create_meta_tab(self):

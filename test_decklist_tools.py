@@ -98,6 +98,26 @@ def test_offline_uses_stale_cache():
     assert ids[("TWM", "128")] == 550172
 
 
+def test_set_codes_starting_with_a_digit():
+    cards = D.list_lines("Pok\u00e9mon: 1\n3 Gengar ex 30C 90\n")
+    assert len(cards) == 1 and cards[0]["set"] == "30C" and cards[0]["qty"] == 3
+
+
+def test_limitless_picture_posts_and_caches():
+    D.BASE_DIR = TMP  # the picture cache goes under BASE_DIR
+    calls = []
+    png = b"\x89PNG" + b"0" * 2000
+
+    def post(url, fields):
+        calls.append((url, dict(fields)))
+        if url.endswith("imggen"):
+            return '<input type="hidden" name="data" value="4:TWM-128~int*en">'
+        return png
+    assert D.limitless_picture(LIST, normalized=True, post=post) == png
+    assert calls[0][1].get("standardize") == "on" and calls[1][1]["data"] == "4:TWM-128~int*en"
+    assert D.limitless_picture(LIST, normalized=True, post=post) == png and len(calls) == 2  # cached
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

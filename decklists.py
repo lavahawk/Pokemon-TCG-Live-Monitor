@@ -312,7 +312,7 @@ def capture_from_games(deck_name, username, db_path=None, rows=None, store=True)
 
 
 # ── list lines: card pictures, TCGplayer mass entry ──────────────────────
-_LINE = re.compile(r"^\s*(\d+)\s+(.+?)\s+([A-Za-z][A-Za-z0-9-]{1,6})\s+(\d+[A-Za-z]?)\s*$")
+_LINE = re.compile(r"^\s*(\d+)\s+(.+?)\s+([A-Za-z0-9][A-Za-z0-9-]{1,6})\s+(\d+[A-Za-z]?)\s*$")
 _ENERGY_SYMBOLS = {"G": "Grass", "R": "Fire", "W": "Water", "L": "Lightning", "P": "Psychic",
                    "F": "Fighting", "D": "Darkness", "M": "Metal", "Y": "Fairy", "N": "Dragon", "C": "Colorless"}
 
@@ -457,3 +457,50 @@ def tcgplayer_url(text, product_ids=None, affiliate=None):
     if base:
         url = f"{base}{'&' if '?' in base else '?'}u={quote(url, safe='')}"
     return url
+
+
+# ── Limitless ImgGen (limitlesstcg.com/tools/imggen) ────────────────────
+LIMITLESS_IMGGEN = "https://limitlesstcg.com/tools/imggen"
+LIMITLESS_PNGGEN = "https://limitlesstcg.com/tools/pnggen"
+
+
+def limitless_picture(text, normalized=True, post=None):
+    """The list as Limitless renders it (PNG bytes), cached by list + mode.
+    normalized: "Reset cards to regular versions" (every card in its regular
+    printing). post(url, fields) -> response text/bytes can be passed in (tests).
+    Raises on failure."""
+    import hashlib
+    key = hashlib.sha1(f"{int(bool(normalized))}|{text}".encode("utf-8")).hexdigest()[:16]
+    folder = os.path.join(BASE_DIR, ".card_image_cache")
+    os.makedirs(folder, exist_ok=True)
+    cache = os.path.join(folder, f"limitless_{key}.png")
+    if os.path.exists(cache) and os.path.getsize(cache) > 1000:
+        with open(cache, "rb") as handle:
+            return handle.read()
+
+    def default_post(url, fields):
+        from urllib.parse import urlencode
+        from urllib.request import Request, urlopen
+        req = Request(url, data=urlencode(fields).encode("utf-8"),
+                      headers={"User-Agent": "Mozilla/5.0 PTCGL-Monitor",
+                               "Content-Type": "application/x-www-form-urlencoded"})
+        with urlopen(req, timeout=60) as resp:
+            return resp.read()
+
+    post = post or default_post
+    fields = {"_token": "", "input": text, "sort": "on"}
+    if normalized:
+        fields["standardize"] = "on"
+    page = post(LIMITLESS_IMGGEN, fields)
+    page = page.decode("utf-8", "replace") if isinstance(page, bytes) else page
+    import html as _html
+    match = re.search(r'name="data" value="([^"]+)"', page)
+    if not match:
+        raise RuntimeError("Limitless didn't return a card list for this decklist")
+    png = post(LIMITLESS_PNGGEN, {"_token": "", "data": _html.unescape(match.group(1)), "game": "PTCG"})
+    if not isinstance(png, bytes) or not png.startswith(b"\x89PNG"):
+        raise RuntimeError("Limitless didn't return an image")
+    with open(cache + ".tmp", "wb") as handle:
+        handle.write(png)
+    os.replace(cache + ".tmp", cache)
+    return png
