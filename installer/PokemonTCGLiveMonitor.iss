@@ -49,9 +49,7 @@ WizardStyle=modern
 WizardSizePercent=110
 WizardImageFile={#ArtDir}\wizard-large-100.bmp,{#ArtDir}\wizard-large-200.bmp
 WizardSmallImageFile={#ArtDir}\wizard-small-100.bmp,{#ArtDir}\wizard-small-200.bmp
-; lzma2/ultra64 made Setup die right after start on some PCs (exit -1, nothing
-; installed; found 2026-10-16). max is ~2% bigger and installs everywhere.
-Compression=lzma2/max
+Compression=lzma2/ultra64
 SolidCompression=yes
 LZMAUseSeparateProcess=yes
 ; Running copies are stopped by [Code] (Python processes ignore Restart Manager).
@@ -133,6 +131,9 @@ var
 
 // Stop every process running from the install folder (monitor, overlay,
 // blocker, dashboard and Qt WebEngine helpers) so files can be replaced.
+// Only Python / Qt processes: this Setup's own command line can contain the
+// folder (/DIR=, /LOG=) and "TCGLiveMonitor" (its file name) - matching it
+// made Setup kill itself (exit -1, found 2026-10-16).
 procedure StopRunningCopies(Dir: String);
 var
   ResultCode: Integer;
@@ -141,7 +142,8 @@ begin
   StringChangeEx(Dir, '''', '''''', True);
   Cmd := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' +
     '$d = ''' + Dir + '''; ' +
-    'Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and (' +
+    'Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and ' +
+    '$_.Name -match ''^(python|pythonw|QtWebEngineProcess|tesseract)\.exe$'' -and (' +
     '($_.ExecutablePath -and $_.ExecutablePath.StartsWith($d + ''\'', [StringComparison]::OrdinalIgnoreCase)) -or ' +
     '($_.CommandLine -and $_.CommandLine.IndexOf($d, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and ' +
     '$_.CommandLine -match ''TCGLiveMonitor|OverlayUI|ContinueBlocker|StatsUI'')) } | ' +

@@ -148,7 +148,9 @@ def launch_installer(path, base_dir=BASE_DIR):
         backup_now("pre-update", base_dir)
     except Exception:
         pass  # a failed safety copy must not block the update
-    log = os.path.join(base_dir, "Logs", "update_install.log")
+    # Log outside the app folder: the installer stops processes whose command
+    # line mentions the app folder.
+    log = os.path.join(tempfile.gettempdir(), "PTCGLMonitorUpdate", "install.log")
     args = [path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1", f"/LOG={log}"]
     flags = 0
     if sys.platform == "win32":
