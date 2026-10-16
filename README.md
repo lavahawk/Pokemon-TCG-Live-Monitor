@@ -38,8 +38,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer\build_installer.ps
 ```
 The version comes from `version.py` and the files that ship are listed in `release_manifest.txt`.
 
-Developer notes on how everything fits together are in `DevVault/`. Open it as an Obsidian vault and start with `00 Start Here.md`.
-
 ## Requirements
 
 - Windows 10 or 11 (64-bit)
