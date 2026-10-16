@@ -40,6 +40,7 @@ Link a list to a deck (Deck page → **+ Import decklist**), then open the **Dec
 - There's a short note on what is sent where, and an option (on by default) to hide both usernames from OpenAI.
 
 ## Fixes
+- **Important:** installing a new version over an older one (2.4 to 2.6 installers) could replace your battle history with an empty database. The 2.7 installer never touches your data, so installing it over any older version is safe. If you lost games after an earlier upgrade, check for a copy you might have backed up yourself; the app now makes its own backups before every update.
 - A win could be saved as a loss when your username was the end of your opponent's name.
 - Opponent names, deck guesses and accented names (Flabébé) are read more reliably.
 - Cards from sets whose code starts with a number (30th Celebration) were missing from decklists.
