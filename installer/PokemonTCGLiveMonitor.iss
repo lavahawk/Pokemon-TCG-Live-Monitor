@@ -86,7 +86,9 @@ Type: files; Name: "{app}\SetupStartup.exe"
 Type: files; Name: "{app}\button_templates\scale_cache.json"
 
 [Files]
-Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: "\screen_regions.json,\button_templates\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Never ship user data, whatever ends up in the stage (an empty tcg_battles.db
+; from the build's smoke test overwrote users' battles on upgrade, v2.4-2.6).
+Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: "\screen_regions.json,\button_templates\*,\*.db,\*.db-journal,\.*,\Logs\*,\Backups\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; User-calibrated files: install defaults only on first install.
 Source: "{#StageDir}\screen_regions.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
 Source: "{#StageDir}\button_templates\*"; DestDir: "{app}\button_templates"; Flags: onlyifdoesntexist skipifsourcedoesntexist

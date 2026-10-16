@@ -203,6 +203,22 @@ if ($SkipSmokeTest) {
 # Bytecode written by the smoke test is per-machine cache; don't ship it.
 Get-ChildItem $Stage -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+# Importing the app modules creates user data (tcg_battles.db, settings,
+# caches, Logs\). Shipping those would overwrite a user's battle history on
+# every upgrade (it did, v2.4.0-v2.6.0). Remove everything the app generates.
+$generated = @("tcg_battles.db", "*.db-journal", ".app_settings.json", ".user_config", ".openai_key",
+    ".openai_key.dpapi", ".decklists.json", ".deck_archetypes.json", ".pet_state.json",
+    ".stats_window_geometry.json", ".last_deck", ".monitor_pid", ".monitor_lock", ".local_model_cache.json",
+    ".meta_cache_*.json", ".chat_capture.json", ".overlay_debug.log*", ".game_session")
+foreach ($pattern in $generated) {
+    Get-ChildItem -Path $Stage -Filter $pattern -Force -File -ErrorAction SilentlyContinue | Remove-Item -Force
+}
+foreach ($dir in @("Logs", "Backups", ".card_image_cache", ".tcgcsv_cache", ".meta_icon_cache",
+                   ".limitless_web_profile", ".trainerhill_web_profile", ".tcgplayer_web_profile")) {
+    Remove-Item (Join-Path $Stage $dir) -Recurse -Force -ErrorAction SilentlyContinue
+}
+$leftover = Get-ChildItem $Stage -Force -File | Where-Object { $_.Name -like "*.db" -or $_.Name -like ".*" }
+if ($leftover) { throw "User data in the staged bundle (would overwrite users' data): $($leftover.Name -join ', ')" }
 
 # ── 5. Wizard artwork ────────────────────────────────────────────────────
 Step "Wizard artwork"
