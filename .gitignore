@@ -146,3 +146,4 @@ installer/Output/
 # Generated UI images (spin box / combo arrows)
 .ui_cache/
 .pet_state.json
+.local_model_cache.json

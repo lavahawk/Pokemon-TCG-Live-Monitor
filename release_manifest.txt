@@ -16,6 +16,7 @@ SetupAutoClicker.py
 RankDetector.py
 game_window.py
 leagues.py
+local_model.py
 app_settings.py
 startup_utils.py
 qt_dialogs.py

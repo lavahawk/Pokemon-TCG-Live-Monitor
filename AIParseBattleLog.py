@@ -460,6 +460,27 @@ def _console_available():
         return False
 
 
+def local_model_ranking(battlelog, username, evidence):
+    """The card matcher re-ranked with your own games (local_model.py): your
+    ladder's deck frequencies, decks only you have met, the opponent's last
+    deck. [(deck, probability)] best first, [] when it can't run."""
+    try:
+        import card_usage
+        import local_model
+
+        def extract(path):
+            log = read_battlelog_file(path)
+            opponent = parse_opponent_from_log(log, username)
+            return opponent, card_usage.log_card_counts(log, opponent, username)
+
+        history = local_model.history_from_db(db, extract, exclude_hash=log_hash(battlelog))
+        model = local_model.LocalModel(load_meta_rows(), history)
+        return model.predict(evidence.get("copies") or {}, parse_opponent_from_log(battlelog, username))
+    except Exception as exc:
+        print(f"[Local model] skipped: {exc}")
+        return []
+
+
 def local_fallback_parse(battlelog, username):
     my_deck = load_last_deck()
     if not my_deck and _console_available():
@@ -472,7 +493,10 @@ def local_fallback_parse(battlelog, username):
     # after saving (deck_confirm.py); store the best guess until then. The
     # cards they revealed vs public decklists beat "first Pokemon played".
     evidence = card_evidence(battlelog, username)
-    card_pick = evidence["ranked"][0] if evidence["ranked"] else None
+    # Nothing revealed (early concede): the model's prior still offers the
+    # decks you most likely met; a weak pick never becomes the stored guess.
+    ranked = local_model_ranking(battlelog, username, evidence) or evidence["ranked"]
+    card_pick = ranked[0] if ranked else None
     if card_pick and card_pick[1] >= 0.5:
         print(f"[Cards] {card_pick[0]} ({card_pick[1] * 100:.0f}%) from {len(evidence['cards'])} revealed cards")
         # A clear pick is shown as CARDS; a close call is a GUESS the overlay asks you to confirm.
@@ -504,7 +528,7 @@ def local_fallback_parse(battlelog, username):
         "Win_or_Loss": (win_or_loss or "").strip().title(),
         "Confidence": confidence,
         "deck_source": source if inferred else "none",
-        "Candidates": merge_candidates(inferred, confidence / 100.0 if inferred else None, [], evidence["ranked"]),
+        "Candidates": merge_candidates(inferred, confidence / 100.0 if inferred else None, [], ranked),
     }
 
 
