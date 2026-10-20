@@ -242,7 +242,9 @@ def classify(cards_seen, rows, top=3, floor=0.004):
     # more often). Probabilities stay as computed; only the order changes.
     if ranked[0][1] < CLOSE_CALL:
         contenders = [x for x in ranked if x[1] >= CLOSE_CONTENDER]
-        best_pop = max(contenders, key=lambda x: popularity(x[0]))
+        # No contender at all (top pick under CLOSE_CONTENDER): keep the order.
+        # max() of an empty list raised here and the parser lost the evidence.
+        best_pop = max(contenders, key=lambda x: popularity(x[0])) if contenders else ranked[0]
         if best_pop is not ranked[0]:
             ranked.remove(best_pop)
             ranked.insert(0, best_pop)

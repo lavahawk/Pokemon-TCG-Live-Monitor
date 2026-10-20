@@ -166,6 +166,15 @@ def test_close_calls_go_to_the_popular_deck():
     assert C.classify({"Duskull": 1, "Dusknoir": 1, "Lunatone": 1}, clear)[0][0]["deck"] == "Rare"
 
 
+def test_flat_evidence_does_not_crash():
+    # Ten look-alike decks: the top pick is under CLOSE_CONTENDER, so no
+    # contender qualifies (max() of an empty list used to raise).
+    rows = [{"deck": f"Deck {i}", "share_recent": 1.0, "share_en": 1.0, "lists": 100,
+             "cards": [{"name": "Duskull", "cat": "P", "incl": 100, "avg": 2}]} for i in range(10)]
+    ranked = C.classify({"Duskull": 1}, rows)
+    assert len(ranked) == 3 and ranked[0][1] < C.CLOSE_CONTENDER
+
+
 def test_counts_cut_targets():
     C.set_known_cards(["Munkidori", "Fezandipiti ex", "Mega Gengar ex", "Dreepy"])
     log = ("opp played Dreepy to the Bench.\nopp played Dreepy to the Bench.\n"

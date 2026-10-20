@@ -337,8 +337,10 @@ def bayesian_binomial_summary(wins, losses, ties=0.0, *, alpha=2.0, beta=2.0, z=
     ties = max(0.0, float(ties or 0))
     total = wins + losses + ties
     raw_observed = (wins / total) if total else 0.0
-    effective_wins = wins + (TIE_WIN_WEIGHT * ties)
-    observed = (effective_wins / total) if total else 0.0
+    # The user's tie rule (it was a fixed third here, whatever the setting).
+    tie_wins, tie_losses = tie_split(ties)
+    decided = wins + losses + tie_wins + tie_losses
+    observed = ((wins + tie_wins) / decided) if decided else 0.0
 
     post = win_rate_posterior(wins, losses, ties, prior_mean=alpha / (alpha + beta),
                               prior_strength=alpha + beta, level=0.95)
