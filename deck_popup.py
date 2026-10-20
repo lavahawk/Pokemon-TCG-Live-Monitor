@@ -39,6 +39,8 @@ CARD_W = 250
 MIN_VISIBLE_S = 4.0     # an AI pick stays at least this long
 FADE_AFTER_MENU_S = 2.5  # ...and fades this long after the main menu is seen
 MAX_SHOW_S = 90.0       # fallback when the menu is never reported
+NO_HOVER_S = 20.0       # a sure pick nobody hovered fades after this, menu seen or not
+SURE_CONFIDENCE = 90    # at or above: show only the pick; the choices appear on hover
 LOW_CONFIDENCE = 50     # below this the card asks instead of fading on the menu
 ICON_PX = 18
 
@@ -338,6 +340,8 @@ class DeckConfirmPopup(QWidget):
         self._load_suggestions()
         self._fade_deadline = None
         self._leaving = False
+        self._hovered_once = False
+        self._compact = self._sure()
         self._outro.stop()
         if request.get("manual"):
             # No AI: always ask; the local guesses sit above the field as choices.
@@ -372,6 +376,9 @@ class DeckConfirmPopup(QWidget):
         if self.underMouse():
             self._fade_deadline = None
             return
+        if (self._fade_deadline is None and not getattr(self, "_hovered_once", False)
+                and not self._low_confidence() and now - self._shown_at > NO_HOVER_S):
+            self._fade_deadline = now  # next game started before the menu OCR caught up
         if self._fade_deadline is None:
             if menu_seen > float(self.request.get("created") or 0) and not self._low_confidence():
                 self._fade_deadline = max(now + FADE_AFTER_MENU_S, self._shown_at + MIN_VISIBLE_S)
@@ -386,7 +393,7 @@ class DeckConfirmPopup(QWidget):
         result = (self.request or {}).get("result", "").upper()
         source = (self.request or {}).get("source")
         manual = (self.request or {}).get("manual")
-        has_choices = mode == "show" and bool(self._candidates())
+        has_choices = mode == "show" and bool(self._candidates()) and not getattr(self, "_compact", False)
         manual_choices = mode == "edit" and bool(manual) and bool(self._candidates())
         self.name.setVisible(mode == "done" or (mode == "show" and not has_choices))
         self.choices_box.setVisible(has_choices or manual_choices)
@@ -481,6 +488,24 @@ class DeckConfirmPopup(QWidget):
         if (self.request or {}).get("manual"):
             return out[:3]  # manual mode: even one guess is worth a one-click button
         return out[:3] if len(out) > 1 else []
+
+    def _sure(self):
+        confidence = (self.request or {}).get("confidence")
+        return confidence is not None and int(confidence) >= SURE_CONFIDENCE
+
+    def enterEvent(self, event):
+        # A sure pick shows only the deck; hovering reveals the choices.
+        self._hovered_once = True
+        if self.mode == "show" and getattr(self, "_compact", False):
+            self._compact = False
+            self._set_mode("show")
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if self.mode == "show" and self._sure() and not getattr(self, "_compact", False):
+            self._compact = True
+            self._set_mode("show")
+        super().leaveEvent(event)
 
     def _low_confidence(self):
         confidence = (self.request or {}).get("confidence")
