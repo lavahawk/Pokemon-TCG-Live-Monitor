@@ -4390,8 +4390,7 @@ class StatsWindow(QWidget):
         if dialog.reset_requested:
             self.deck_icon_overrides.pop(deck_name, None)
             self._save_deck_icon_overrides()
-            self._refresh_deck_dashboards()
-            self.update_deck_usage(self.deck_analyses)
+            self._apply_deck_icon_change(deck_name, default_icons)
             return
         if result != QDialog.DialogCode.Accepted:
             return
@@ -4412,6 +4411,15 @@ class StatsWindow(QWidget):
         else:
             self.deck_icon_overrides[deck_name] = chosen
         self._save_deck_icon_overrides()
+        self._apply_deck_icon_change(deck_name, default_icons)
+
+    def _apply_deck_icon_change(self, deck_name, default_icons):
+        # Each analysis caches its icons when the dashboard loads; update it
+        # so the deck tab, deck page and usage list redraw with the new icons.
+        icons = self._resolved_deck_icons(deck_name, default_icons)
+        for analysis in self.deck_analyses or []:
+            if analysis.get("deck_name") == deck_name:
+                analysis["deck_icons"] = list(icons)
         self._refresh_deck_dashboards()
         self.update_deck_usage(self.deck_analyses)
 
