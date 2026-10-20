@@ -189,12 +189,26 @@ def beta_ppf(q, a, b):
 CREDIBLE_LEVEL = 0.90  # "likely range" shown in the UI: 90% of the posterior
 
 
-def win_rate_posterior(wins, losses, ties=0.0, *, prior_mean=None, prior_strength=4.0, level=CREDIBLE_LEVEL):
+def prior_games_for_spread(sd, mean=0.5):
+    """How many games a Beta prior with this spread is worth:
+    n0 = m(1 - m) / sd^2 - 1."""
+    return max(1.0, mean * (1.0 - mean) / max(sd * sd, 1e-9) - 1.0)
+
+
+# Prior for a personal win rate. True results spread by pilot skill (sd ~9.4
+# pts on Limitless) and deck strength (~6.3 pts, the Score fit), together
+# ~11.3 pts, which a prior is worth ~18.5 games. It used to be 4, so a 3-0
+# start read 71% "Leaning favored" and 4-0 "Favored".
+PILOT_SD, DECK_SD = 0.094, 0.063
+PERSONAL_PRIOR_GAMES = prior_games_for_spread((PILOT_SD ** 2 + DECK_SD ** 2) ** 0.5)
+
+
+def win_rate_posterior(wins, losses, ties=0.0, *, prior_mean=None, prior_strength=None, level=CREDIBLE_LEVEL):
     """Beta posterior for a win rate.
 
     prior_mean/prior_strength: the prior is worth `prior_strength` games
-    centred on `prior_mean` (default: par, i.e. 50% unless ties count as
-    losses - see tie_par). Matchups use the deck's own win rate as
+    (default PERSONAL_PRIOR_GAMES) centred on `prior_mean` (default: par,
+    i.e. 50% unless ties count as losses - see tie_par). Matchups use the deck's own win rate as
     prior_mean (partial pooling).
     Returns mean, sd, equal-tailed `level` range, par and exact P(WR > par)
     ("p_above_even": better than an even contest).
@@ -202,6 +216,8 @@ def win_rate_posterior(wins, losses, ties=0.0, *, prior_mean=None, prior_strengt
     par = record_par(wins, losses, ties)
     if prior_mean is None:
         prior_mean = par
+    if prior_strength is None:
+        prior_strength = PERSONAL_PRIOR_GAMES
     wins = max(0.0, float(wins or 0))
     losses = max(0.0, float(losses or 0))
     ties = max(0.0, float(ties or 0))

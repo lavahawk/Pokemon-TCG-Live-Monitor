@@ -279,6 +279,15 @@ def compute_scores(meta_rows, my_decks=(), *, pilot_sd=None, min_meta_games=0,
         s = scale_of(r)
         overall = _wl((r.get("wins"), r.get("losses"), r.get("ties")), s)
         matchups = {k: _wl(v, s) for k, v in (r.get("matchups") or {}).items()}
+        # Strength evidence = the pairing results (every opponent but the
+        # mirror). The standings record also holds ~30k results with no
+        # pairing (no-shows, drops, double losses; ~91% losses) and mirror
+        # games (50% by construction): counted as games they pulled every
+        # deck's strength ~8 pts down. Standings only when there are no pairings.
+        paired = [v for k, v in matchups.items() if k != r["id"]]
+        pair_w, pair_l = sum(v[0] for v in paired), sum(v[1] for v in paired)
+        if pair_w + pair_l > 0:
+            overall = (pair_w, pair_l)
         prepared[r["id"]] = (r, overall, matchups)
 
     # Hyperparameters from the archetypes with real data.
@@ -342,21 +351,30 @@ def compute_scores(meta_rows, my_decks=(), *, pilot_sd=None, min_meta_games=0,
                    and overall[0] + overall[1] >= n_needed)
         results[key] = res
 
-    # Your decks: a VERSION of the archetype they match. Prior mean = that
-    # archetype's measured strength; prior spread = its remaining uncertainty
-    # + how much decks differ from each other (the fitted deck spread, ~4 pts).
-    # Pilot skill (tau, ~13 pts online) is deliberately NOT added: the Score
+    # Your decks: a VERSION of the archetype they match. Prior = that
+    # archetype's Score (see below); prior spread = its remaining uncertainty
+    # + how much decks differ from each other (the fitted deck spread).
+    # Pilot skill (tau, ~9-13 pts online) is deliberately NOT added: the Score
     # compares decks, and 10-20 ladder games must not outweigh thousands of
-    # tournament games. Unmatched decks start from the average deck.
+    # tournament games. Unmatched decks start at par.
     tau = float(pilot_sd if pilot_sd else DEFAULT_PILOT_SD)
     deck_var = mu * (1.0 - mu) / (k_s + 1.0)
+    # Where your decks start. theta is a strength against the average
+    # ARCHETYPE (many weak rogue rows), not against the field you meet, so
+    # neither theta nor mu is the right start: mu made unmatched decks start
+    # ~5 pts low, a matched theta can sit ~4 pts above the archetype's Score.
+    # A version of an archetype starts where that archetype's Score is (with
+    # 0 games it scores exactly the same); anything else starts at par.
+    shares = dict(field)
     for d in my_decks:
         mirror = d.get("mirror_id")
         if mirror in results:
-            m0 = results[mirror]["strength"]
-            var0 = results[mirror]["strength_sd"] ** 2 + deck_var
+            # Score(0 games) = theta x (1 - mirror share) + par x mirror share
+            s_m = min(0.9, shares.get(mirror, 0.0))
+            m0 = (results[mirror]["score"] - par * s_m) / (1.0 - s_m)
+            var0 = (results[mirror]["sd"] / (1.0 - s_m)) ** 2 + deck_var
         else:
-            m0, var0 = mu, deck_var
+            m0, var0 = par, deck_var
         pa, pb = _beta_from_moments(m0, var0)
         # Opponent strength: ladder games -> tournament-equivalent evidence.
         aw, al, at, adj = adjust_personal((d.get("wins"), d.get("losses"), d.get("ties")),
@@ -373,9 +391,9 @@ def compute_scores(meta_rows, my_decks=(), *, pilot_sd=None, min_meta_games=0,
         # from Limitless. Prior = the typical deck with the spread of real
         # results (deck spread + pilot spread), so it measures YOUR results
         # with this deck, still adjusted for sample size.
-        own_a, own_b = _beta_from_moments(mu, tau * tau + deck_var)
+        own_a, own_b = _beta_from_moments(par, tau * tau + deck_var)
         own = score_deck(own_a, own_b, matchups, overall, field, mirror, k_m, level, par=par)
-        own.update(prior_mean=mu, prior_sd=math.sqrt(tau * tau + deck_var))
+        own.update(prior_mean=par, prior_sd=math.sqrt(tau * tau + deck_var))
         res["own"] = own
         results[d["id"]] = res
 

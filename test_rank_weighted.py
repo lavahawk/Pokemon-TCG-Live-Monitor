@@ -69,6 +69,13 @@ def test_summary_observed_follows_the_tie_mode():
         deck_analytics.tie_mode = old
 
 
+def test_personal_prior_is_about_19_games():
+    # The prior used to be worth 4 games: a 4-0 start read "Favored".
+    assert 17 <= deck_analytics.PERSONAL_PRIOR_GAMES <= 21
+    post = deck_analytics.win_rate_posterior(4, 0)
+    assert post["p_above_even"] < 0.9 and post["mean"] < 0.62
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

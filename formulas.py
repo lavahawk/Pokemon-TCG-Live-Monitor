@@ -27,14 +27,18 @@ def estimate(post, weighted=True):
     a, b = post["alpha"], post["beta"]
     level = int(round(post.get("level", 0.9) * 100))
     tail = (100 - level) // 2
+    n0 = max(0.0, a + b - float(post.get("games") or 0))  # the prior's worth in games
     lines = [
-        f"{F}Estimate = (W + 2) / (W + L + 4) = {a:.1f} / {a + b:.1f} = {_pct(a / (a + b))}{END}",
+        f"{F}Estimate = (W + n₀ × par) / (W + L + n₀) = {a:.1f} / {a + b:.1f} = {_pct(a / (a + b))}{END}",
+        f"{F}n₀ = {n0:.0f}{END}  {DIM}= m(1 − m) / sd² − 1 with sd = how much real win rates "
+        f"spread (pilot skill + deck strength, measured on Limitless){END}",
         f"{F}Range = {tail}th–{100 - tail}th percentile of Beta({a:.1f}, {b:.1f}){END}",
         f"{F}Chance > par = P(Beta({a:.1f}, {b:.1f}) > {post.get('par', 0.5):.3f}) = {_pct(post['p_above_even'])}{END}",
         f"{F}par = (1 − T) / 2 + T × tie share = {_pct(post.get('par', 0.5))}{END}  "
         f"{DIM}(an even contest under your tie rule; T = tie rate, shrunk toward 12%){END}",
         f"{DIM}W, L = wins and losses{' after weighting' if weighted else ''}; ties split by your tie rule. "
-        f"The +2 / +4 is a mild prior (like starting at 2-2 around par) that keeps tiny samples near par.{END}",
+        f"The prior is like starting {n0 / 2:.0f}-{n0 / 2:.0f} at par: "
+        f"a 3-0 start isn't proof of a great deck; past ~{n0:.0f} games your results outweigh it.{END}",
     ]
     if weighted:
         lines.append(game_weights())
@@ -88,8 +92,9 @@ def score(res, info, is_mine=False, names=None, archetype=None):
         f"{F}matchup estimate = (k·θ + wins) / (k + games),  k = {k_m:.0f}{END}",
         f"{F}θ (deck strength) = {_pct(res.get('strength', 0))} ± {res.get('strength_sd', 0) * 100:.1f}{END}  "
         f"{DIM}from all its matchups, starting at "
-        + (f"{archetype}'s measured strength ({_pct(res.get('prior_mean', mu))})" if is_mine and archetype else
-           f"the typical deck ({_pct(mu)}, worth {k_s:.0f} games)") + END,
+        + (f"{archetype}'s Score ({_pct(res.get('prior_mean', mu))} as strength)" if is_mine and archetype else
+           f"par ({_pct(res.get('prior_mean', info.get('par', 0.5)))})" if is_mine else
+           f"the typical archetype ({_pct(mu)}, worth {k_s:.0f} games)") + END,
     ]
     if res.get("in_person") and info.get("beta_link"):
         lines.append(f"{F}+ in-person: logit(Top 32 rate) = logit({info.get('q0', 0) * 100:.1f}%) + "
@@ -135,7 +140,7 @@ CONVERTS = (f"{F}Converts = (weighted share of Top 32 spots) ÷ (weighted share 
 def own_score(own, info):
     m, sd = own.get("prior_mean", 0.5), max(own.get("prior_sd", 0.1), 1e-6)
     worth = max(m * (1 - m) / (sd * sd) - 1, 0)
-    return (f"{F}same Score formula; θ starts at the typical deck {_pct(m)} ± {sd * 100:.1f} "
+    return (f"{F}same Score formula; θ starts at par {_pct(m)} ± {sd * 100:.1f} "
             f"(worth ≈ {worth:.0f} games){END}<br>"
             f"{DIM}Own games only: nothing borrowed from the Limitless archetype. The ± is how much real results "
             f"spread (deck differences + player skill, both measured on Limitless). Your games outweigh that "
