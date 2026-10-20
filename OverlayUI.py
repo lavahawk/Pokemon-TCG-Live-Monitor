@@ -196,8 +196,7 @@ class LimitlessChatWindow(QWidget):
     HOVER_DWELL_MS = 300
 
     STYLE = """
-        QFrame#chatPanel { background: rgba(12,16,22,0.66); border: 1px solid rgba(255,255,255,0.10);
-                           border-radius: 9px; }
+        QFrame#chatPanel { background: transparent; border: none; }
         QLabel#chatTitle { color: rgba(236,242,252,0.78); font-family: 'Segoe UI', Arial; font-size: 9px;
                            font-weight: 700; letter-spacing: 0.6px; background: transparent; }
         QToolButton#chatFold { background: transparent; border: none; color: rgba(236,242,252,0.70);
@@ -259,6 +258,14 @@ class LimitlessChatWindow(QWidget):
         self.body.viewport().setAutoFillBackground(False)
         self.body.document().setDocumentMargin(2)
         col.addWidget(self.body)
+        # No background over the game: a soft dark shadow keeps text readable.
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+        for widget in (self.panel,):
+            shadow = QGraphicsDropShadowEffect(widget)
+            shadow.setBlurRadius(4)
+            shadow.setOffset(0, 0)
+            shadow.setColor(QColor(0, 0, 0, 255))
+            widget.setGraphicsEffect(shadow)
         self.setStyleSheet(self.STYLE)
         self.setWindowOpacity(self.IDLE_OPACITY)
 
