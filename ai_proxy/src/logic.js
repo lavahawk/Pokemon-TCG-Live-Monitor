@@ -15,10 +15,8 @@ export const PRICES = {
 const FALLBACK_PRICE = [0.40, 0.10, 1.60];
 
 export const LIMITS = {
-  maxBodyBytes: 200_000,
-  maxSystemChars: 1_000,
-  maxUserChars: 90_000,        // ~22k tokens; a long game's prompt is ~25k chars
-  maxCompletionTokens: 4_000,  // reasoning tokens count here
+  maxBodyBytes: 250_000,
+  maxCompletionTokens: 2_000,  // the reply is ~150 tokens; reasoning tokens count here too
 };
 
 const enc = new TextEncoder();
@@ -77,35 +75,6 @@ export function callCost(model, usage) {
   const hit = Math.min(prompt, Math.max(0, Number(usage?.prompt_tokens_details?.cached_tokens) || 0));
   const output = Math.max(0, Number(usage?.completion_tokens) || 0);
   return ((prompt - hit) * inp + hit * cached + output * out) / 1_000_000;
-}
-
-// The only request the proxy forwards: the app's battle-log prompt. Anything
-// else (other models, tools, images, streaming, huge prompts) is refused, so
-// a leaked token can't turn the proxy into a general-purpose OpenAI key.
-// Returns {body} or {error}.
-export function sanitizeRequest(body, { light = false } = {}) {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "body must be a JSON object" };
-  const model = String(body.model || "");
-  if (!MODEL_ORDER.includes(model)) return { error: "model not allowed" };
-  const msgs = body.messages;
-  if (!Array.isArray(msgs) || msgs.length !== 2) return { error: "expected a system and a user message" };
-  const [sys, user] = msgs;
-  if (sys?.role !== "system" || typeof sys.content !== "string" || sys.content.length > LIMITS.maxSystemChars)
-    return { error: "bad system message" };
-  if (user?.role !== "user" || typeof user.content !== "string" || !user.content.trim()
-      || user.content.length > LIMITS.maxUserChars)
-    return { error: "bad user message" };
-  if (body.stream) return { error: "streaming not allowed" };
-  return {
-    body: {
-      // After the daily allowance the light model leads (as in ai_usage.py).
-      model: light && model === PRIMARY_MODEL ? LIGHT_MODEL : model,
-      messages: [{ role: "system", content: sys.content }, { role: "user", content: user.content }],
-      response_format: { type: "json_object" },
-      max_completion_tokens: LIMITS.maxCompletionTokens,
-      store: false,
-    },
-  };
 }
 
 export function monthKey(now) { return now.toISOString().slice(0, 7); }

@@ -2,22 +2,26 @@
 //
 // The OpenAI key lives only here, as an encrypted Worker secret. The app
 // talks to this worker over HTTPS with a per-install token; the worker checks
-// the token, refuses anything but the app's battle-log prompt, enforces the
-// per-install and global limits, and forwards the call to OpenAI.
+// the token, accepts nothing but a Pokémon TCG Live battle log (prompt.js
+// builds the prompt itself and returns only the deck fields), enforces the
+// per-install and global limits, and calls OpenAI.
 //
-// Routes (OpenAI-compatible where the app's SDK expects it):
-//   POST /v1/register          -> {token}            (rate-limited per IP)
-//   POST /v1/chat/completions  Authorization: Bearer <token>
-//   GET  /v1/status            Authorization: Bearer <token> -> {budget_left, reset}
+// Routes:
+//   POST /v1/register  -> {token}                                  (rate-limited per IP)
+//   POST /v1/parse     Authorization: Bearer <token>
+//                      {model, battlelog, decks, explain, username, anonymized}
+//                      -> {result: {My_deck, OpponentsDeck, Win_or_Loss, Confidence, Candidates}, model, usage}
+//   GET  /v1/status    Authorization: Bearer <token> -> {budget_left, reset}
 //
 // Secrets: OPENAI_API_KEY, TOKEN_SECRET (wrangler secret put ...).
 // Vars (wrangler.toml): limits and the AI_ENABLED kill switch.
 
 import { DurableObject } from "cloudflare:workers";
 import {
-  LIMITS, callCost, globalReserve, globalSettle, newInstallId, nextMonthStart, registerAllowed,
-  reserve, sanitizeRequest, settle, sha256Hex, signToken, verifyToken,
+  LIGHT_MODEL, LIMITS, MODEL_ORDER, PRIMARY_MODEL, callCost, globalReserve, globalSettle, newInstallId,
+  nextMonthStart, registerAllowed, reserve, settle, sha256Hex, signToken, verifyToken,
 } from "./logic.js";
+import { SYSTEM_PROMPT, checkParseRequest, renderPrompt, sanitizeResult } from "./prompt.js";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -77,13 +81,14 @@ async function status(installId, env) {
   return json(200, info);
 }
 
-async function complete(request, env, installId) {
+async function parse(request, env, installId) {
   const { body, tooBig } = await readJson(request);
   if (tooBig) return fail(413, "too_large", "Request too large.");
   const lim = limits(env);
   // Validate before counting a game against the install.
-  const probe = sanitizeRequest(body);
-  if (probe.error) return fail(400, "bad_request", probe.error);
+  const checked = checkParseRequest(body, MODEL_ORDER);
+  if (checked.error) return fail(400, "bad_request", checked.error);
+  const fields = checked.fields;
 
   const world = counter(env, "global");
   const g = await world.globalCheck(lim);
@@ -96,7 +101,14 @@ async function complete(request, env, installId) {
     return fail(429, r.code, msg, r.reset ? { "x-ai-reset": r.reset } : {});
   }
 
-  const { body: upstream } = sanitizeRequest(body, { light: r.light });
+  const upstream = {
+    // After the daily allowance the light model leads (as in ai_usage.py).
+    model: r.light && fields.model === PRIMARY_MODEL ? LIGHT_MODEL : fields.model,
+    messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: renderPrompt(fields) }],
+    response_format: { type: "json_object" },
+    max_completion_tokens: LIMITS.maxCompletionTokens,
+    store: false,
+  };
   upstream.safety_identifier = (await sha256Hex(`sid:${installId}`)).slice(0, 32);
   let res;
   try {
@@ -118,11 +130,22 @@ async function complete(request, env, installId) {
     return fail(status, "upstream_error", `AI model ${upstream.model} failed (${res.status}).`);
   }
   let data;
-  try { data = JSON.parse(text); } catch { return fail(502, "upstream_error", "Bad AI response."); }
-  const cost = callCost(data.model || upstream.model, data.usage);
+  try { data = JSON.parse(text); } catch { data = null; }
+  const cost = callCost(data?.model || upstream.model, data?.usage);
   const after = await quota.settle(cost);
   await world.globalAdd(cost);
-  return json(200, data, { "x-ai-budget-left": String(Math.max(0, lim.monthlyUsd - after.spent).toFixed(4)) });
+  const result = sanitizeResult(data?.choices?.[0]?.message?.content);
+  if (!result) return fail(502, "upstream_error", `AI model ${upstream.model} gave no usable answer.`);
+  const u = data.usage || {};
+  return json(200, {
+    result,
+    model: String(data.model || upstream.model),
+    usage: {
+      prompt_tokens: Number(u.prompt_tokens) || 0,
+      completion_tokens: Number(u.completion_tokens) || 0,
+      prompt_tokens_details: { cached_tokens: Number(u.prompt_tokens_details?.cached_tokens) || 0 },
+    },
+  }, { "x-ai-budget-left": String(Math.max(0, lim.monthlyUsd - after.spent).toFixed(4)) });
 }
 
 export default {
@@ -134,12 +157,11 @@ export default {
     if (!env.OPENAI_API_KEY || !env.TOKEN_SECRET) return fail(503, "not_configured", "Proxy not configured.");
     try {
       if (path === "/v1/register" && request.method === "POST") return await register(request, env);
-      if (path === "/v1/chat/completions" || path === "/v1/status") {
+      if (path === "/v1/parse" || path === "/v1/status") {
         const installId = await authed(request, env);
         if (!installId) return fail(401, "invalid_token", "Unknown install.");
         if (path === "/v1/status" && request.method === "GET") return await status(installId, env);
-        if (path === "/v1/chat/completions" && request.method === "POST")
-          return await complete(request, env, installId);
+        if (path === "/v1/parse" && request.method === "POST") return await parse(request, env, installId);
       }
       return fail(404, "not_found", "Not found.");
     } catch (err) {

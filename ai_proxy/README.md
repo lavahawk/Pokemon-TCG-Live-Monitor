@@ -11,13 +11,13 @@ app ──HTTPS (TLS 1.2+, cert verified)──> Worker ──HTTPS──> OpenA
 
 - **Key:** the key is only a Worker secret. It is never sent to the app, never logged, and OpenAI error bodies are not passed back.
 - **Install token:** on first use the app gets a per-install token, `v1.<id>.<HMAC>`, signed with `TOKEN_SECRET`. The app keeps it DPAPI-encrypted in `.ai_install.dpapi`. Rotating `TOKEN_SECRET` revokes every token, and apps re-register on their own.
-- **Request shape:** only the app's battle-log prompt is accepted:
-  - exactly one system and one user message, plain text, with size caps
-  - the three app models only
-  - no tools, images or streaming
-  - `max_completion_tokens` capped, `store: false`
-  
-  A stolen token cannot be used as a general OpenAI key.
+- **Battle logs only:** the app never sends a prompt. `POST /v1/parse` takes the battle log plus a few typed fields (deck names, card evidence, username, model). The worker:
+  - checks the log is a Pokémon TCG Live log (opening lines, at least 80% of lines name a player or are detail lines, line and size caps, no control characters or `<<<` markers); every saved real log passes, prose does not
+  - builds the prompt itself from a fixed template (`src/prompt.js`, kept identical to the app's by a test), with the log inserted last and marked as data
+  - returns only five short typed fields (deck names cut to 60 characters, result, confidence, 3 candidates); everything else the model wrote is dropped
+  - caps `max_completion_tokens`, forces JSON mode and `store: false`
+
+  So a stolen token cannot run other prompts, and a request smuggled into a "log" gets back at most a few deck-name-sized strings.
 - **Limits:** enforced by Durable Objects, so the counters are exact.
 
   | Scope | Limit |

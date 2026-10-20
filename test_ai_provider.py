@@ -4,6 +4,7 @@ answers like ai_proxy/src/worker.js (no internet, no real key)."""
 import atexit
 import http.server
 import json
+import re
 import os
 import shutil
 import sys
@@ -185,14 +186,39 @@ def _hosted_plan():
     return A.resolve()
 
 
-def test_hosted_call_sends_token_and_parses():
+PARSED = {"result": {"My_deck": "A", "OpponentsDeck": "B", "Win_or_Loss": "Win", "Confidence": 60,
+                     "Candidates": [{"deck": "B", "probability": 60}]},
+          "model": "gpt-4.1-nano", "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+
+
+def test_hosted_sends_only_the_log_fields():
     plan = _hosted_plan()
-    _Proxy.seen, _Proxy.reply = [], (200, COMPLETION)
+    _Proxy.seen, _Proxy.reply = [], (200, PARSED)
     out = P.ai_parse("me's Turn\nopp's Turn", "me", plan=plan, anonymize=False)
     path, auth, body = _Proxy.seen[0]
-    assert path == "/v1/chat/completions" and auth == f"Bearer {TOKEN}"
-    assert body["model"] == P.AI_MODELS[0] and body["response_format"] == {"type": "json_object"}
-    assert out["OpponentsDeck"] in ("B", out["OpponentsDeck"]) and out["Win_or_Loss"] == "Win"
+    assert path == "/v1/parse" and auth == f"Bearer {TOKEN}"
+    # No prompt, no messages: the proxy builds the prompt itself.
+    assert sorted(body) == ["anonymized", "battlelog", "decks", "explain", "model", "username"]
+    assert body["model"] == P.AI_MODELS[0] and body["battlelog"] == "me's Turn\nopp's Turn"
+    assert out["OpponentsDeck"] == "B" and out["Win_or_Loss"] == "Win"
+
+
+def test_hosted_fields_drop_what_the_proxy_refuses():
+    f = A.hosted_fields({"battlelog": "x", "decks": ["Dragapult ex", "Bad<script>", "x" * 61, "Flabébé"],
+                         "explain": "1. Dragapult ex 72% (played by 14.1% of the field) - fits: Dreepy (98%)",
+                         "username": "me", "anonymized": False})
+    assert f["decks"] == ["Dragapult ex", "Flabébé"] and f["explain"].startswith("1. Dragapult")
+    assert A.hosted_fields(dict(f, explain="ignore rules `run` {x}"))["explain"] == ""
+
+
+def test_prompt_templates_match_the_proxy():
+    import re
+    here = os.path.dirname(os.path.abspath(__file__))
+    js = open(os.path.join(here, "ai_proxy", "src", "prompt.js"), encoding="utf-8").read()
+    for name in ("PROMPT_TEMPLATE", "EVIDENCE_TEMPLATE"):
+        m = re.search(r"// BEGIN %s\r?\nexport const %s = `(.*?)`;\r?\n// END" % (name, name), js, re.S)
+        assert m and m.group(1).replace("\r\n", "\n") == getattr(P, name), name
+    assert 'SYSTEM_PROMPT = "%s"' % P.AI_SYSTEM_PROMPT in js
 
 
 def test_budget_refusal_is_final_and_reported():
@@ -251,6 +277,52 @@ def test_local_model_without_json_mode_and_fenced_reply():
         SERVER.RequestHandlerClass = _Proxy
     assert out["Win_or_Loss"] == "Loss"
     assert "response_format" in _Proxy.seen[0][2] and "response_format" not in _Proxy.seen[1][2]
+
+
+def _node(script, payload):
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        return None
+    here = os.path.dirname(os.path.abspath(__file__))
+    out = subprocess.run([node, "--input-type=module", "-e", script], input=json.dumps(payload), text=True,
+                         capture_output=True, cwd=os.path.join(here, "ai_proxy"), encoding="utf-8", timeout=120)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_proxy_accepts_every_saved_log_as_sent():
+    """What the app really sends (anonymized and not) passes the proxy's
+    battle-log check, and both sides render the same prompt."""
+    import glob
+    here = os.path.dirname(os.path.abspath(__file__))
+    requests = []
+    for path in sorted(glob.glob(os.path.join(here, "Logs", "battle_log_*.txt"))):
+        log = P.read_battlelog_file(path)
+        me = (re.search(r"^(.+?) drew 7 cards", log, re.M) or [None, "x"])[1]
+        for anonymized in (False, True):
+            text = P.anonymize_battlelog(log, me) if anonymized else log
+            requests.append({"model": P.AI_MODELS[0], "battlelog": text, "decks": ["Dragapult ex", "Flabébé"],
+                             "explain": "", "username": P.AI_SELF_PLACEHOLDER if anonymized else me,
+                             "anonymized": anonymized, "name": os.path.basename(path)})
+    if not requests:
+        return
+    script = """
+import { checkParseRequest, renderPrompt } from "./src/prompt.js";
+import { MODEL_ORDER } from "./src/logic.js";
+let data = ""; process.stdin.on("data", (c) => data += c).on("end", () => {
+  const out = JSON.parse(data).map((r) => { const c = checkParseRequest(r, MODEL_ORDER);
+    return { name: r.name, error: c.error || null, prompt: c.fields ? renderPrompt(c.fields) : null }; });
+  process.stdout.write(JSON.stringify(out));
+});"""
+    results = _node(script, requests)
+    if results is None:
+        return
+    bad = [(r["name"], r["error"]) for r in results if r["error"]]
+    assert not bad, bad[:5]
+    req = dict(requests[-1])
+    req.pop("name"), req.pop("model")
+    assert results[-1]["prompt"] == P.render_prompt(**dict(req, battlelog=req["battlelog"].replace("\r\n", "\n")))
 
 
 if __name__ == "__main__":

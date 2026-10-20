@@ -21,6 +21,7 @@ import os
 import re
 import ssl
 import sys
+import types
 import urllib.error
 import urllib.request
 
@@ -44,7 +45,11 @@ LABELS = {
 }
 # Proxy refusals that won't change by trying another model.
 FINAL_CODES = {"ai_budget", "daily_limit", "rate_limited", "service_busy", "invalid_token",
-               "register_limit", "not_configured"}
+               "register_limit", "not_configured", "bad_request", "too_large"}
+# What the proxy accepts in names and the card-evidence text (prompt.js
+# NAME_RE / EXPLAIN_RE): letters and digits of any script plus these.
+NAME_PUNCT = set("_ .,'’&:()/+-!?")
+EXPLAIN_PUNCT = NAME_PUNCT | set(";#%=*×[]\"\n")
 TIMEOUT = 45.0
 
 
@@ -200,6 +205,64 @@ def install_token(register=True):
     return token
 
 
+def _allowed(text, punct):
+    return all(ch.isalnum() or ch in punct for ch in text)
+
+
+def hosted_fields(fields):
+    """The parse request as the proxy will accept it: deck names it would
+    refuse are left out and odd card-evidence text is dropped, so one strange
+    name never costs the game its AI answer."""
+    decks = [d for d in fields["decks"] if 0 < len(d) <= 60 and _allowed(d, NAME_PUNCT)][:60]
+    explain = fields.get("explain") or ""
+    if len(explain) > 3000 or explain.count("\n") >= 20 or not _allowed(explain, EXPLAIN_PUNCT):
+        explain = ""
+    return dict(fields, decks=decks, explain=explain)
+
+
+class HostedError(Exception):
+    def __init__(self, status, code, message):
+        super().__init__(f"Error code: {status} - {code}: {message}")
+        self.status_code, self.code = status, code
+
+
+class HostedClient:
+    """POST /v1/parse: the battle log and its fields go up, only the parsed
+    deck fields come back (the proxy builds the prompt)."""
+
+    def __init__(self, base_url, token):
+        self.url = base_url.rstrip("/") + "/parse"
+        self.token = token
+
+    def parse(self, model, fields):
+        """-> (payload dict, completion-like object with .usage)"""
+        body = json.dumps(dict(hosted_fields(fields), model=model)).encode("utf-8")
+        request = urllib.request.Request(self.url, data=body, method="POST", headers={
+            "authorization": f"Bearer {self.token}", "content-type": "application/json",
+            "user-agent": _user_agent()})
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT, context=ssl.create_default_context()) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                err = json.loads(exc.read().decode("utf-8")).get("error") or {}
+            except Exception:
+                err = {}
+            raise HostedError(exc.code, err.get("code") or "http_error", err.get("message") or exc.reason) from None
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise HostedError(0, "unreachable", str(exc)) from None
+        result = data.get("result") if isinstance(data, dict) else None
+        if not isinstance(result, dict):
+            raise HostedError(200, "bad_response", "no result")
+        usage = data.get("usage") or {}
+        completion = types.SimpleNamespace(model=data.get("model"), usage=types.SimpleNamespace(
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=int(usage.get("completion_tokens") or 0),
+            prompt_tokens_details=types.SimpleNamespace(
+                cached_tokens=int((usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0))))
+        return result, completion
+
+
 def _openai_client(**kwargs):
     from openai import OpenAI
     return OpenAI(timeout=TIMEOUT, **kwargs)
@@ -232,10 +295,8 @@ def resolve(settings=None):
     except Exception as exc:
         print(f"[AI] Built-in AI unavailable: {exc}")
         return Plan("hosted", reason="ai_failed")
-    client = _openai_client(api_key=token, base_url=edition.HOSTED_AI_URL.rstrip("/"), max_retries=0,
-                            default_headers={"user-agent": _user_agent()})
     # The server enforces the limits and the light-model switch.
-    return Plan("hosted", client, ai_usage.MODEL_ORDER)
+    return Plan("hosted", HostedClient(edition.HOSTED_AI_URL, token), ai_usage.MODEL_ORDER)
 
 
 def error_code(exc):
