@@ -2591,7 +2591,7 @@ class DeckIconPickerDialog(QDialog):
         self.results.setObjectName("deckIconResults")
         self.results.setViewMode(QListView.ViewMode.IconMode)
         self.results.setIconSize(QSize(40, 40))
-        self.results.setGridSize(QSize(108, 80))
+        self.results.setGridSize(QSize(108, 94))  # room for a two-line name
         self.results.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.results.setResizeMode(QListView.ResizeMode.Adjust)
         self.results.setMovement(QListView.Movement.Static)
@@ -2684,7 +2684,11 @@ class DeckIconPickerDialog(QDialog):
     # ── helpers ──
     @staticmethod
     def _display(name):
-        return (name or "").replace("-", " ").replace("/", " ").title()
+        words = (name or "").replace("/", " ").replace("-", " ").split()
+        if "mega" in words[1:]:  # absol-mega -> Mega Absol, charizard-mega-x -> Mega Charizard X
+            words.remove("mega")
+            words.insert(0, "mega")
+        return " ".join(words).title()
 
     def _pixmap(self, name, size):
         pixmap = self.owner._load_sprite_pixmap(name, size) if name else None
@@ -3458,6 +3462,10 @@ class GlassPanel(QWidget):
         expand.setToolTip("Open")
         expand.clicked.connect(self.expand)
         pill_row.addWidget(expand)
+        pill_close = TitleBarButton("close")
+        pill_close.setToolTip("Close")
+        pill_close.clicked.connect(self.close)
+        pill_row.addWidget(pill_close)
         self.pill.hide()
         for widget in (self.pill, self.pill_dot, self.pill_label):
             widget.installEventFilter(self)
@@ -3498,16 +3506,33 @@ class GlassPanel(QWidget):
 
     # ── show / position ──
     def open_panel(self):
-        owner = self.owner
-        if owner is not None and owner.isVisible():
-            area = owner.geometry()
-        else:
-            screen = QGuiApplication.primaryScreen()
-            area = screen.availableGeometry() if screen else QRect(0, 0, 1280, 800)
-        self.move(area.x() + (area.width() - self.width()) // 2, area.y() + (area.height() - self.height()) // 2)
+        self.open_panel_geometry()
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def open_as_toast(self, text):
+        """Start as the pill in the screen's bottom-right corner, without
+        taking focus from the game; click it to open the panel."""
+        self.open_panel_geometry()
+        self.set_pill_text(text)
+        self.collapse()
+        area = self._screen_area()
+        margin = 16
+        self.move(area.right() - self.width() - margin + 1, area.bottom() - self.height() - margin + 1)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.show()
+        self.raise_()
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+
+    def open_panel_geometry(self):
+        owner = self.owner
+        area = owner.geometry() if owner is not None and owner.isVisible() else self._screen_area()
+        self.move(area.x() + (area.width() - self.width()) // 2, area.y() + (area.height() - self.height()) // 2)
+
+    def _screen_area(self):
+        screen = QGuiApplication.screenAt(self.geometry().center()) or QGuiApplication.primaryScreen()
+        return screen.availableGeometry() if screen else QRect(0, 0, 1280, 800)
 
     def on_close(self, callback):
         self._closing_callbacks.append(callback)
@@ -3516,6 +3541,17 @@ class GlassPanel(QWidget):
         self.pill_label.setText(text)
         self._pill_found = bool(found)
         self._pulse_dot(force_on=True)
+        if self._collapsed:
+            right = self.geometry().right()
+            width = self._pill_width()
+            self.setMinimumSize(width, self.PILL_H)
+            self.setGeometry(right - width + 1, self.y(), width, self.PILL_H)
+            self.pill.setGeometry(0, 0, width, self.PILL_H)
+
+    def _pill_width(self):
+        # Fit the text (it was a fixed 280 px and long texts were cut off).
+        text_w = self.pill_label.fontMetrics().horizontalAdvance(self.pill_label.text())
+        return max(280, min(560, text_w + 110))
 
     # ── collapse to a pill ──
     def collapse(self):
@@ -3526,7 +3562,7 @@ class GlassPanel(QWidget):
         self._full_geometry = QRect(self.geometry())
         self.container.hide()
         self.pill.show()
-        width = 280
+        width = self._pill_width()
         self.setMinimumSize(width, self.PILL_H)
         self.setGeometry(self._full_geometry.right() - width + 1, self._full_geometry.top(), width, self.PILL_H)
         self.pill.setGeometry(0, 0, width, self.PILL_H)
@@ -3545,6 +3581,11 @@ class GlassPanel(QWidget):
             # Open where the pill now is (it may have been dragged).
             full = QRect(self._full_geometry)
             full.moveTopRight(self.geometry().topRight())
+            # Keep it on screen (a pill in the bottom corner opens upward).
+            area = self._screen_area()
+            full.moveBottom(min(full.bottom(), area.bottom()))
+            full.moveLeft(max(full.left(), area.left()))
+            full.moveTop(max(full.top(), area.top()))
             self.setGeometry(full)
         self.raise_()
         self.activateWindow()
@@ -4266,7 +4307,16 @@ class StatsWindow(QWidget):
         self.hide()
         if self.parent_overlay:
             self.parent_overlay.arrow_label.setText("▲")  # Flip arrow back up
-    
+
+    def _restore_dashboard(self):
+        """Undo minimize_to_overlay (e.g. once a decklist export is linked)."""
+        self.is_minimized = False
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if self.parent_overlay:
+            self.parent_overlay.arrow_label.setText("▼")
+
     def create_stats_tab(self):
         """Create stats tab with all statistics"""
         scroll = self._create_standard_scroll_area()
@@ -5530,6 +5580,17 @@ class StatsWindow(QWidget):
             flag_row.addWidget(flag_btn)
         hero_top.addWidget(flag_group)
         hero_top.addWidget(self._create_decklist_button(flag_deck, matched_row))
+        from decklists import decklist_for_deck
+        list_entry = decklist_for_deck(flag_deck)
+        if list_entry is not None:
+            picture_btn = QPushButton("Picture")
+            picture_btn.setObjectName("limitlessBtn")
+            picture_btn.setFixedHeight(30)
+            picture_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            picture_btn.setToolTip("The list as a picture, every card in its regular printing (Limitless ImgGen)")
+            picture_btn.clicked.connect(lambda checked=False, e=list_entry, name=flag_deck:
+                                        self._view_decklist_picture(e, name, mode="normalized"))
+            hero_top.addWidget(picture_btn)
 
         if matched_row.get("deck_url"):
             open_btn = QPushButton("Limitless ↗")
@@ -5785,6 +5846,9 @@ class StatsWindow(QWidget):
             self._deck_dashboards_dirty = True
             QTimer.singleShot(0, self._refresh_deck_dashboards)
             dialog.close()
+            if getattr(self, "_decklist_hid_dashboard", False):
+                self._decklist_hid_dashboard = False
+                self._restore_dashboard()
 
         set_status()
         clipboard = QApplication.clipboard()
@@ -5804,7 +5868,17 @@ class StatsWindow(QWidget):
             except (RuntimeError, TypeError):
                 pass
         dialog.on_close(stop_watching)
-        dialog.open_panel()
+        if is_ptcgl_decklist((clipboard.text() or "").strip()):
+            dialog.open_panel()
+            return
+        # Nothing to link yet: a corner toast instead of a panel, and the
+        # dashboard steps aside so the game is free for the export.
+        dialog.open_as_toast("Please export your decklist in Pokémon TCG Live")
+        dialog.pill.setToolTip("Decks → this deck → Export → Copy to clipboard. The list opens here by itself."
+                               "\nClick to pick a saved list or paste one instead.")
+        self._decklist_hid_dashboard = self.isVisible()
+        if self._decklist_hid_dashboard:
+            self.minimize_to_overlay()
 
     def _view_decklist(self, entry, deck_name=None):
         from PySide6.QtWidgets import QPlainTextEdit
@@ -5840,7 +5914,7 @@ class StatsWindow(QWidget):
 
     CARD_W, CARD_H, CARD_GAP, CARD_COLS = 126, 176, 8, 10
 
-    def _view_decklist_picture(self, entry, deck_name=None):
+    def _view_decklist_picture(self, entry, deck_name=None, mode="prints"):
         """The list as one image of its cards (Limitless card scans, cached in
         .card_image_cache/), with copy counts. Save as PNG or copy it."""
         from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
@@ -6017,7 +6091,10 @@ class StatsWindow(QWidget):
         copy_btn.clicked.connect(copy)
         panel.resized = debounce.start
         self._attach_card_zoom(panel, label, state, net, cache_dir)
-        render()
+        if mode == "normalized":
+            set_mode("normalized")
+        else:
+            render()
         panel.open_panel()
         QTimer.singleShot(0, render)
 
