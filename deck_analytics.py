@@ -300,30 +300,43 @@ def meta_adjusted_winrate(deck_posterior, field, *, pool_strength=6.0, level=CRE
     """
     total_share = sum(max(0.0, float(f.get("share") or 0)) for f in field)
     m = deck_posterior["mean"]
-    sd_m = deck_posterior["sd"]
+    var_m = deck_posterior["sd"] ** 2
+    par = deck_posterior.get("par", 0.5)
     if total_share <= 0 or not field:
         return None
-    mean = sd_sum = coverage = 0.0
+    # Deck posterior Beta(a_d, b_d): removing a cell's own games gives the
+    # leave-one-cell-out pooling target, so a cell never shrinks toward a mean
+    # that already contains it. (No Beta parameters -> pool toward m.)
+    a_d, b_d = deck_posterior.get("alpha"), deck_posterior.get("beta")
+    mean = coverage = var_cells = lam_sum = 0.0
     rows = []
     for f in field:
         w = max(0.0, float(f.get("share") or 0)) / total_share
         games = float(f.get("wins") or 0) + float(f.get("losses") or 0) + float(f.get("ties") or 0)
         if games > 0:
+            target = m
+            if a_d is not None and b_d is not None:
+                tw, tl = tie_split(max(0.0, float(f.get("ties") or 0)))
+                a_rem = max(0.0, a_d - float(f.get("wins") or 0) - tw)
+                b_rem = max(0.0, b_d - float(f.get("losses") or 0) - tl)
+                if a_rem + b_rem > 0:
+                    target = a_rem / (a_rem + b_rem)
             post = win_rate_posterior(f.get("wins"), f.get("losses"), f.get("ties"),
-                                      prior_mean=m, prior_strength=pool_strength, level=level)
-            p, sd = post["mean"], post["sd"]
+                                      prior_mean=target, prior_strength=pool_strength, level=level)
+            p = post["mean"]
+            lam = pool_strength / (pool_strength + post["games"])
+            var_cells += w * w * post["sd"] ** 2
             coverage += w * min(1.0, games)  # a split game (label_dist) covers only its share
         else:
-            post, p, sd = None, m, sd_m
+            post, p, lam = None, m, 1.0   # unseen: exactly the deck estimate
         mean += w * p
-        sd_sum += w * sd
+        lam_sum += w * lam
         rows.append({**f, "weight": w, "posterior": post, "estimate": p,
                      "impact": w * (p - m) * 100.0})
-    # Every matchup estimate is anchored on the same (uncertain) deck win
-    # rate, so their errors move together. Treat them as fully correlated:
-    # sd = sum of weighted sds. This is the honest upper bound - assuming
-    # independence made the meta range narrower than the deck's own range.
-    sd = max(sd_sum, 1e-6)
+    # Cells share the (uncertain) deck rate m, each leaning on it by
+    # lam_j = n0/(n0+n_j), and otherwise vary independently given m:
+    # Var = Var(m) * (sum w_j lam_j)^2 + sum w_j^2 Var(p_j | m).
+    sd = max(math.sqrt(var_m * lam_sum ** 2 + var_cells), 1e-6)
     # Moment-matched Beta (same mean and sd): stays inside 0-100% and is
     # properly skewed near the edges, unlike a normal curve.
     mean_c = min(0.999, max(0.001, mean))
@@ -336,7 +349,8 @@ def meta_adjusted_winrate(deck_posterior, field, *, pool_strength=6.0, level=CRE
         "low": beta_ppf(tail, a, b),
         "high": beta_ppf(1.0 - tail, a, b),
         "level": level,
-        "p_above_even": 1.0 - beta_cdf(0.5, a, b),
+        "par": par,
+        "p_above_even": 1.0 - beta_cdf(par, a, b),
         "coverage": coverage,
         "rows": rows,
     }

@@ -67,6 +67,41 @@ def _save_cache(stamp, ranked):
         pass
 
 
+def kish_scale(weights):
+    """One scale for a whole deck: Kish's effective sample / total weight.
+
+    Kish n = (sum w)^2 / sum w^2 is sub-additive, so rescaling each matchup
+    cell by its own Kish n lets the cells claim more evidence than the deck.
+    Multiply every cell's weighted counts by this one factor instead; the
+    cells then add up to the deck's effective sample."""
+    ws = [float(w) for w in weights if w and w > 0]
+    total = sum(ws)
+    sq = sum(w * w for w in ws)
+    return total / sq if sq > 0 else 0.0
+
+
+def scaled_cells(cells, deck_weights):
+    """{key: [(weight, frac, outcome)]} -> {key: (wins, losses, ties)}, each
+    game counting weight * frac, all cells scaled by kish_scale(deck_weights)."""
+    s = kish_scale(deck_weights)
+    out = {}
+    for key, games in cells.items():
+        wins = losses = ties = 0.0
+        for w, frac, outcome in games:
+            if w <= 0:
+                continue
+            counted = w * frac * s
+            outcome = str(outcome or "").strip().lower()
+            if outcome == "win":
+                wins += counted
+            elif outcome in ("tie", "draw"):
+                ties += counted
+            else:
+                losses += counted
+        out[key] = (wins, losses, ties)
+    return out
+
+
 def fill_card_ranked(battles, meta_rows, stamp=""):
     """Give every battle without a stored card ranking one from its log
     (in place). meta_rows need card data; stamp identifies the sheet."""

@@ -5122,8 +5122,9 @@ class StatsWindow(QWidget):
                 if label_index[deck] is None:
                     label_index[deck] = other_index
             return label_index[deck]
-        for idx, group in self._split_by_archetype(detailed, meta_rows, field_key).items():
-            for k, v in zip(("wins", "losses", "ties"), weighted_record(group, expansions)):
+        groups = self._split_by_archetype(detailed, meta_rows, field_key)
+        for idx, rec in self._scaled_group_records(detailed, groups, expansions).items():
+            for k, v in zip(("wins", "losses", "ties"), rec):
                 field[idx][k] += v
         meta_adjusted = meta_adjusted_winrate(posterior, field) if field and games else None
         # Matchup estimates pooled toward the deck's own win rate.
@@ -8683,6 +8684,16 @@ class StatsWindow(QWidget):
                     groups.setdefault(key, []).append(dict(b, frac=share))
         return groups
 
+    @staticmethod
+    def _scaled_group_records(detailed, groups, expansions):
+        """{key: (wins, losses, ties)} for the split groups, all cells on the
+        deck's one Kish scale (label_dist.kish_scale), so they sum to its
+        effective sample instead of each claiming its own."""
+        import label_dist
+        cells = {k: [(battle_weight(b, expansions), b.get("frac", 1.0), b.get("result")) for b in g]
+                 for k, g in groups.items()}
+        return label_dist.scaled_cells(cells, [battle_weight(b, expansions) for b in detailed])
+
     def _my_deck_meta_rows(self, meta_rows, starred_only=True, use_weights=True):
         """Your decks as meta rows: weighted record + matchups vs meta archetypes
         (opponents mapped to Limitless archetypes; unmatched -> 'Other').
@@ -8730,7 +8741,8 @@ class StatsWindow(QWidget):
             mine.append({
                 "id": f"you:{deck_name}", "deck": deck_name, "icons": icons_by_deck.get(deck_name, []),
                 "is_mine": True, "wins": ww, "losses": wl, "ties": wt, "raw_games": games,
-                "matchups": {k: list(record(v)) for k, v in groups.items()},
+                "matchups": ({k: list(v) for k, v in self._scaled_group_records(detailed, groups, expansions).items()}
+                             if use_weights else {k: list(record(v)) for k, v in groups.items()}),
                 "ladder_frac": ladder_frac(detailed),
                 "matchup_ladder_frac": {k: ladder_frac(v) for k, v in groups.items()},
                 "sources": {"you": games}, "deck_url": None,
@@ -11357,7 +11369,9 @@ class StatsWindow(QWidget):
         _title, value, sub = cards["rank"]
         if ranks:
             current = ranks[-1][1]
-            peak = max(r for _t, r in ranks)
+            peak = self.db.get_max_rank()  # spike-guarded, not the raw maximum
+            if peak is None:
+                peak = max(r for _t, r in ranks)
             value.setText(f"{current:,}")
             parts = [league_name(current)]
             parts.append("at peak" if current >= peak else f"peak {peak:,}")

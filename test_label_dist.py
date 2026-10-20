@@ -49,6 +49,17 @@ def test_half_games_count_half_in_a_record():
     assert (w, l) == (1.0, 1.0)
 
 
+def test_cells_share_one_kish_scale():
+    ws = [1.0] * 10 + [0.25] * 10
+    assert abs(L.kish_scale(ws) * sum(ws) - 14.7059) < 1e-3
+    cells = {"a": [(w, 1.0, "win" if i % 2 else "loss") for i, w in enumerate(ws[:10])],
+             "b": [(w, 1.0, "tie" if i == 0 else "win") for i, w in enumerate(ws[10:])]}
+    out = L.scaled_cells(cells, ws)
+    assert abs(sum(sum(v) for v in out.values()) - 14.7059) < 1e-3
+    half = L.scaled_cells({"a": [(1.0, 0.5, "win")]}, [1.0])
+    assert abs(half["a"][0] - 0.5) < 1e-9
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):
