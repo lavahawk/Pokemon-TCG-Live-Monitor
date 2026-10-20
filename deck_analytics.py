@@ -134,8 +134,11 @@ def wilson_interval(wins, total, z=1.96):
 # comes from the exact posterior, so the estimate, its range and the
 # probabilities always agree.
 
-def _betacf(a, b, x, max_iter=200, eps=3e-14):
-    """Continued fraction for the incomplete beta function (Lentz)."""
+def _betacf(a, b, x, max_iter=None, eps=3e-14):
+    """Continued fraction for the incomplete beta function (Lentz). It needs
+    about sqrt(max(a, b)) terms, so the cap grows with the counts."""
+    if max_iter is None:
+        max_iter = int(200 + 8 * math.sqrt(max(a, b)))
     qab, qap, qam = a + b, a + 1.0, a - 1.0
     c, d = 1.0, 1.0 - qab * x / qap
     d = 1.0 / (d if abs(d) > 1e-300 else 1e-300)
@@ -164,6 +167,12 @@ def beta_cdf(x, a, b):
         return 0.0
     if x >= 1.0:
         return 1.0
+    if not (a > 0.0 and b > 0.0):
+        return 1.0 if x >= 0.5 else 0.0
+    if a + b > 1e8:  # astronomically many games: the posterior is a spike
+        mean = a / (a + b)
+        sd = math.sqrt(mean * (1.0 - mean) / (a + b + 1.0))
+        return min(1.0, max(0.0, 0.5 * math.erfc(-(x - mean) / (sd * math.sqrt(2.0)))))
     log_bt = (math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
               + a * math.log(x) + b * math.log(1.0 - x))
     bt = math.exp(log_bt)
@@ -274,8 +283,10 @@ def confidence_tier(low, high):
     or any interval at CREDIBLE_LEVEL). Unusable ends mean Low.
     """
     try:
-        half = (float(high) - float(low)) / 2.0
+        half = abs(float(high) - float(low)) / 2.0
     except (TypeError, ValueError):
+        return "low", "Low"
+    if half != half:  # NaN
         return "low", "Low"
     if half <= CONFIDENCE_HIGH_HALF_WIDTH + 1e-9:
         return "high", "High"
@@ -291,7 +302,12 @@ def confidence_text(low, high, games):
     tier = confidence_tier(low, high)[0]
     n = f"{games:.0f}" if abs(games - round(games)) < 0.05 else f"{games:.1f}"
     s = "" if n == "1" else "s"
-    half = (float(high) - float(low)) * 50.0
+    try:
+        half = abs(float(high) - float(low)) * 50.0
+    except (TypeError, ValueError):
+        half = 50.0
+    if half != half:
+        half = 50.0
     if tier == "low":
         return f"{n} game{s} (range +/-{half:.0f} pts) - wide; treat it as a hint."
     if tier == "medium":
@@ -377,14 +393,16 @@ def meta_adjusted_winrate(deck_posterior, field, *, pool_strength=6.0, level=CRE
     k = max(mean_c * (1.0 - mean_c) / (sd * sd) - 1.0, 0.5)
     a, b = mean_c * k, (1.0 - mean_c) * k
     tail = (1.0 - level) / 2.0
+    low = min(beta_ppf(tail, a, b), mean)  # the range always holds the mean
+    high = max(beta_ppf(1.0 - tail, a, b), mean)
     return {
         "mean": mean,
         "sd": sd,
-        "low": beta_ppf(tail, a, b),
-        "high": beta_ppf(1.0 - tail, a, b),
+        "low": low,
+        "high": high,
         "level": level,
         "par": par,
-        "p_above_even": 1.0 - beta_cdf(par, a, b),
+        "p_above_even": min(1.0, max(0.0, 1.0 - beta_cdf(par, a, b))),
         "coverage": coverage,
         "rows": rows,
     }

@@ -84,54 +84,93 @@ export function nextMonthStart(now) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
 }
 
-// Per-install quota state machine (kept in a Durable Object, so updates are
-// serialized). state: {month, spent, day, games, recent: [ms]}.
-// limits: {monthlyUsd, dailyFullGames, dailyMaxGames, perMinute}.
-export function reserve(state, limits, now) {
-  const s = { month: "", spent: 0, day: "", games: 0, recent: [], ...state };
-  const month = monthKey(now), day = dayKey(now), ms = now.getTime();
-  if (s.month !== month) { s.month = month; s.spent = 0; }
-  if (s.day !== day) { s.day = day; s.games = 0; }
-  s.recent = s.recent.filter((t) => ms - t < 60_000);
-  if (s.spent >= limits.monthlyUsd)
-    return { state: s, ok: false, code: "ai_budget", reset: nextMonthStart(now) };
-  if (s.games >= limits.dailyMaxGames) return { state: s, ok: false, code: "daily_limit" };
-  if (s.recent.length >= limits.perMinute) return { state: s, ok: false, code: "rate_limited" };
-  s.games += 1;
-  s.recent.push(ms);
-  return { state: s, ok: true, light: s.games > limits.dailyFullGames, left: limits.monthlyUsd - s.spent };
+// Spend counters. Every call is PRE-CHARGED with its worst-case cost
+// (estimateCost) before OpenAI is called, so parallel requests or a client
+// that hangs up can't push spend past a limit; the difference to the real
+// cost is settled afterwards. Each counter lives in its own Durable Object,
+// so its updates are serialized.
+
+// Worst case for one call: ASCII at ~3 characters a token (real text is ~4),
+// anything else (accents, other scripts) at 1 token a character, plus the
+// full completion allowance.
+export function estimateCost(model, prompt) {
+  const text = String(prompt || "");
+  const ascii = text.replace(/[^\x00-\x7f]/g, "").length;
+  const tokens = Math.ceil(ascii / 3) + (text.length - ascii);
+  return callCost(model, { prompt_tokens: tokens, completion_tokens: LIMITS.maxCompletionTokens });
 }
 
-export function settle(state, cost, now) {
-  const s = { month: "", spent: 0, ...state };
+function rolled(state, now) {
+  const s = { month: "", spent: 0, day: "", daySpent: 0, games: 0, recent: [], hits: [], ...state };
   if (s.month !== monthKey(now)) { s.month = monthKey(now); s.spent = 0; }
-  s.spent += Math.max(0, Number(cost) || 0);
+  if (s.day !== dayKey(now)) { s.day = dayKey(now); s.daySpent = 0; s.games = 0; }
+  const ms = now.getTime();
+  s.recent = s.recent.filter((t) => ms - t < 60_000);
+  s.hits = s.hits.filter((t) => ms - t < 60_000);
   return s;
 }
 
-// Spend ceiling across every install (kill switch against abuse).
-export function globalReserve(state, limits, now) {
-  const s = { day: "", spent: 0, month: "", monthSpent: 0, ...state };
-  if (s.day !== dayKey(now)) { s.day = dayKey(now); s.spent = 0; }
-  if (s.month !== monthKey(now)) { s.month = monthKey(now); s.monthSpent = 0; }
-  const ok = s.spent < limits.globalDailyUsd && s.monthSpent < limits.globalMonthlyUsd;
-  return { state: s, ok, code: ok ? undefined : "service_busy" };
+// Any request from an install, valid or not, before the body is even read:
+// bounds the CPU an install can spend on validation.
+export function touch(state, perMinute, now) {
+  const s = rolled(state, now);
+  if (s.hits.length >= perMinute) return { state: s, ok: false, code: "rate_limited" };
+  s.hits.push(now.getTime());
+  return { state: s, ok: true };
 }
 
-export function globalSettle(state, cost, now) {
-  const s = globalReserve(state, { globalDailyUsd: Infinity, globalMonthlyUsd: Infinity }, now).state;
-  const c = Math.max(0, Number(cost) || 0);
-  s.spent += c;
-  s.monthSpent += c;
+// Pre-charge `estimate` against {dailyUsd, monthlyUsd}; for an install also
+// count the game ({dailyMaxGames, perMinute, dailyFullGames}).
+export function reserve(state, limits, now, estimate, isGame = false) {
+  const s = rolled(state, now);
+  const est = Math.max(0, Number(estimate) || 0);
+  if (s.spent + est > limits.monthlyUsd)
+    return { state: s, ok: false, code: limits.overCode || "ai_budget", reset: nextMonthStart(now) };
+  if (s.daySpent + est > limits.dailyUsd) return { state: s, ok: false, code: limits.dayCode || "daily_limit" };
+  if (isGame) {
+    if (s.games >= limits.dailyMaxGames) return { state: s, ok: false, code: "daily_limit" };
+    if (s.recent.length >= limits.perMinute) return { state: s, ok: false, code: "rate_limited" };
+    s.games += 1;
+    s.recent.push(now.getTime());
+  }
+  s.spent += est;
+  s.daySpent += est;
+  return { state: s, ok: true, light: isGame && s.games > limits.dailyFullGames };
+}
+
+// Add `delta` (real cost - estimate, or -estimate to release a failed call).
+export function settle(state, delta, now, ungame = false) {
+  const s = rolled(state, now);
+  const d = Number(delta) || 0;
+  s.spent = Math.max(0, s.spent + d);
+  s.daySpent = Math.max(0, s.daySpent + d);
+  if (ungame && s.games > 0) s.games -= 1;
   return s;
 }
 
-// New installs per IP per day (anonymous registration is the weak spot:
-// each install gets its own monthly allowance).
+// New installs per network per day (anonymous registration is the weak
+// spot: each install gets its own allowance).
 export function registerAllowed(state, limit, now) {
   const s = { day: "", count: 0, ...state };
   if (s.day !== dayKey(now)) { s.day = dayKey(now); s.count = 0; }
   if (s.count >= limit) return { state: s, ok: false };
   s.count += 1;
   return { state: s, ok: true };
+}
+
+// The counter name for a client address: IPv6 by its /64 (one household or
+// server gets a whole /64), IPv4 as is. null when there is no address.
+export function networkKey(ip) {
+  let a = String(ip || "").trim().toLowerCase();
+  if (!a) return null;
+  // IPv4-mapped IPv6 ("::ffff:1.2.3.4") is the IPv4 address.
+  const mapped = /^(?:0{0,4}:){0,5}:?ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(a);
+  if (mapped) a = mapped[1];
+  if (!a.includes(":")) return /^\d{1,3}(\.\d{1,3}){3}$/.test(a) ? a : null;
+  const [head, tail] = a.split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail !== undefined && tail ? tail.split(":") : [];
+  const groups = tail !== undefined ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right] : left;
+  if (groups.length < 4 || !groups.slice(0, 4).every((g) => /^[0-9a-f]{1,4}$/.test(g))) return null;
+  return groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":") + "::/64";
 }

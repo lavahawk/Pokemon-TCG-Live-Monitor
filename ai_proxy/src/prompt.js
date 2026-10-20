@@ -62,92 +62,151 @@ export const OPPONENT_PLACEHOLDER = "Opponent";
 export const YOU_NOTE = `Player names are anonymized: "${SELF_PLACEHOLDER}" (also "You" in the log) is me, `
   + `"${OPPONENT_PLACEHOLDER}" is the opponent.\n`;
 
+// Real logs (113 saved games): at most ~15k characters, 220-character lines.
 export const PARSE_LIMITS = {
-  maxLogChars: 120_000,
-  maxLogLines: 3_000,
-  minLogLines: 3,
-  maxLineChars: 400,
-  maxBulletLineChars: 4_000,   // "• card, card, ..." lists (a whole deck can be listed)
+  maxLogChars: 40_000,
+  maxLogLines: 1_500,
+  minLogLines: 4,
+  maxLineChars: 300,
+  maxBulletLineChars: 1_500,   // "• card, card, ..." (a whole hand or prize set)
+  maxUnknownShare: 0.03,       // lines no rule knows (new game messages), each short
+  maxUnknownChars: 120,
   maxDecks: 60,
-  maxDeckChars: 60,
-  maxExplainChars: 3_000,
-  maxExplainLines: 20,
-  maxUsernameChars: 40,
+  maxRanked: 3,
+  maxRevealed: 25,
   maxResultChars: 60,
 };
 
-// Card / deck / player names: letters (any script), digits, spaces and the
-// punctuation real names use. No quotes-then-instructions, no markup.
-const NAME_RE = /^[\p{L}\p{N}_ .,'’&:()\/+\-!?]+$/u;
-const EXPLAIN_RE = /^[\p{L}\p{N}_ .,;#'’&:()\/+\-!?%=*×\[\]"\n]+$/u;
+// A card or deck name: 1-6 words of letters/digits with the punctuation real
+// names use ("N's Zoroark ex", "Ting-Lu", "Mega Gengar ex"). No sentences.
+const NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N}'’.\-]*(?: [\p{L}\p{N}][\p{L}\p{N}'’.\-]*){0,5}$/u;
+const isName = (s, max = 40) => typeof s === "string" && s.length <= max && NAME_RE.test(s);
 
-export function renderPrompt({ battlelog, decks, explain, username, anonymized }) {
-  const evidence = explain
-    ? EVIDENCE_TEMPLATE.replace("<<EXPLAIN>>", explain).replaceAll("<<USERNAME>>", username)
+// Pokémon TCG Live log grammar (anonymized: the two players are Player and
+// Opponent). P = a player.
+const P = "(?:Player|Opponent)";
+const ACT = "(?:played|drew|attached|evolved|took|ended|retreated|won|decided|chose|conceded|flipped|put|"
+  + "didn't|did not|was|is|used|moved|shuffled|discarded|returned|switched|healed|revealed|searched|looked|"
+  + "has|had|received|devolved|cannot|can't|couldn't|mulliganed|placed|removed|knocked|lost|got|gained|"
+  + "declared|selected|skipped|started|activated|kept|turned|took|added|stopped|recovered|became)";
+const PLAIN_RULES = [
+  /^Setup$/,
+  /^Pok.mon Checkup$/u,
+  new RegExp(`^(?:Turn # \\d+ - )?${P}'s Turn$`),
+  new RegExp(`^${P} ${ACT}\\b`),
+  new RegExp(`^${P}'s [^.]{1,60}? ${ACT}\\b`),
+  new RegExp(`^[^.]{1,60}? (?:was|were) (?:added to|discarded from|activated|put|returned|shuffled|moved|placed|removed)\\b`),
+  new RegExp(`^\\d+ damage counters? (?:was|were) placed on ${P}'s `),
+  new RegExp(`^A card was added to ${P}'s hand\\.$`),
+  new RegExp(`^[\\p{L} .'’]{1,60}\\. ${P} wins\\.$`, "u"),
+  new RegExp(`^You ${ACT}\\b`),
+];
+const DETAIL_RULES = [
+  new RegExp(`^- ${P}(?:'s)? `),
+  /^- \d+ /,
+  /^- Damage breakdown:$/,
+  /^- Cards revealed from Mulligan \d+$/,
+  /^- Effects of [^.]{1,60} did not affect /,
+  /^- [^.]{1,60}? (?:was|were) /,
+];
+
+// "• Basic Fire Energy, Nest Ball, N's Zoroark ex", "• Technical Machine: Evolution",
+// damage breakdowns "• (Ability) Curly Wall: -60 damage", "• 6 selected Energy: 300 damage".
+const CARD_ITEM_RE = /^(?:\([\p{L} ]{1,20}\) )?(?:Technical Machine: )?(.{1,45}?)(?:: -?\d{1,4} damage)?$/u;
+function isCardList(text) {
+  return text.split(/, ?/).every((item) => {
+    const m = CARD_ITEM_RE.exec(item.trim());
+    return m && isName(m[1], 45);
+  });
+}
+
+// Why `log` is not an anonymized Pokémon TCG Live battle log (null if it is).
+export function checkBattleLog(log) {
+  if (typeof log !== "string") return "battle log must be text";
+  if (log.length > PARSE_LIMITS.maxLogChars) return "battle log too long";
+  if (log.includes("<<") || log.includes(">>")) return "battle log contains reserved markers";
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(log)) return "battle log contains control characters";
+  const lines = log.split("\n");
+  if (lines.length > PARSE_LIMITS.maxLogLines * 2) return "battle log has too many lines";
+  if (!new RegExp(`^${P} drew 7 cards for the opening hand\\.\\r?$`, "m").test(log))
+    return "not a Pokémon TCG Live battle log (no opening hand)";
+  let counted = 0, unknown = 0;
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line) continue;
+    counted += 1;
+    if (counted > PARSE_LIMITS.maxLogLines) return "battle log has too many lines";
+    const t = line.trimStart();
+    // Card lists: "   • a, b, c" (some exports lose the bullet: indented only).
+    if (/^[•·�]/.test(t) || (t !== line && !t.startsWith("- "))) {
+      if (line.length > PARSE_LIMITS.maxBulletLineChars) return "battle log line too long";
+      if (!isCardList(t.replace(/^[•·�]\s*/, ""))) return "battle log has a card list that isn't one";
+      continue;
+    }
+    if (line.length > PARSE_LIMITS.maxLineChars) return "battle log line too long";
+    const known = t.startsWith("- ") ? DETAIL_RULES.some((r) => r.test(t)) : PLAIN_RULES.some((r) => r.test(t));
+    if (!known) {
+      unknown += 1;
+      if (t.length > PARSE_LIMITS.maxUnknownChars) return "battle log has an unrecognised line";
+    }
+  }
+  if (counted < PARSE_LIMITS.minLogLines) return "battle log too short";
+  if (unknown > Math.max(1, counted * PARSE_LIMITS.maxUnknownShare))
+    return "not a Pokémon TCG Live battle log (unrecognised lines)";
+  return null;
+}
+
+// "1. Dragapult ex 72%" lines + revealed cards, from the structured evidence.
+export function renderEvidence(evidence) {
+  if (!evidence) return "";
+  const revealed = evidence.revealed.map(([card, n]) => `${card} x${n}`).join(", ");
+  const ranked = evidence.ranked.map(([deck, p], i) => `${i + 1}. ${deck} ${p}%`);
+  return [revealed && `Opponent revealed (copies seen): ${revealed}`, ...ranked].filter(Boolean).join("\n");
+}
+
+export function renderPrompt({ battlelog, decks, evidence }) {
+  const explain = renderEvidence(evidence);
+  const block = explain
+    ? EVIDENCE_TEMPLATE.replace("<<EXPLAIN>>", () => explain).replaceAll("<<USERNAME>>", SELF_PLACEHOLDER)
     : "";
   return PROMPT_TEMPLATE
-    .replace("<<DECKS>>", decks.map((d) => `- ${d}`).join("\n"))
-    .replaceAll("<<USERNAME>>", username)
-    .replace("<<EVIDENCE>>", evidence)
-    .replace("<<YOU_NOTE>>", anonymized ? YOU_NOTE : "")
+    .replace("<<DECKS>>", () => decks.map((d) => `- ${d}`).join("\n"))
+    .replaceAll("<<USERNAME>>", SELF_PLACEHOLDER)
+    .replace("<<EVIDENCE>>", () => block)
+    .replace("<<YOU_NOTE>>", () => YOU_NOTE)
     // Last, so nothing inside the log is ever treated as a placeholder.
     .replace("<<BATTLELOG>>", () => battlelog);
 }
 
-// A Pokémon TCG Live battle log, or the reason it isn't one. Real logs open
-// with the coin flip / opening hands, and nearly every line names a player or
-// is an indented detail line. Checked against every saved log (test).
-export function checkBattleLog(log, username) {
-  if (typeof log !== "string") return "battle log must be text";
-  if (log.length > PARSE_LIMITS.maxLogChars) return "battle log too long";
-  if (log.includes("<<<") || log.includes(">>>")) return "battle log contains reserved markers";
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(log)) return "battle log contains control characters";
-  const lines = log.split(/\r?\n/).map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim());
-  if (lines.length < PARSE_LIMITS.minLogLines) return "battle log too short";
-  if (lines.length > PARSE_LIMITS.maxLogLines) return "battle log has too many lines";
-  if (!/(drew 7 cards for the opening hand|won the coin toss|for the opening coin flip)/.test(log))
-    return "not a Pokémon TCG Live battle log (no opening)";
-  // Player names from the opening lines.
-  const names = new Set([username]);
-  for (const m of log.matchAll(/^(.{1,40}?) (?:drew 7 cards for the opening hand|won the coin toss|chose (?:heads|tails))/gm))
-    names.add(m[1].trim());
-  let plain = 0, tied = 0;
-  for (const line of lines) {
-    const t = line.trimStart();
-    const bullet = /^[•·\-*]|^[�?]\s/.test(t) || line.startsWith("   ");
-    if (line.length > (bullet ? PARSE_LIMITS.maxBulletLineChars : PARSE_LIMITS.maxLineChars))
-      return "battle log line too long";
-    if (bullet) continue;
-    plain += 1;
-    if ([...names].some((n) => n && t.includes(n)) || /^(Setup|Turn # \d+|Pok.mon Checkup|You |A card |Opponent |All Prize|Knocked Out)/.test(t)
-        || / was (activated|added to|discarded|put|shuffled|returned|moved)/.test(t) || /damage counters? (was|were) placed/.test(t))
-      tied += 1;
-  }
-  if (plain && tied / plain < 0.8) return "not a Pokémon TCG Live battle log (unrecognised lines)";
-  return null;
+function checkEvidence(ev) {
+  if (ev == null) return { evidence: null };
+  if (typeof ev !== "object" || Array.isArray(ev)) return { error: "bad card evidence" };
+  const ranked = Array.isArray(ev.ranked) ? ev.ranked : [];
+  const revealed = Array.isArray(ev.revealed) ? ev.revealed : [];
+  if (ranked.length > PARSE_LIMITS.maxRanked || revealed.length > PARSE_LIMITS.maxRevealed)
+    return { error: "bad card evidence" };
+  const pair = (x, max) => Array.isArray(x) && x.length === 2 && isName(x[0])
+    && Number.isInteger(x[1]) && x[1] >= 0 && x[1] <= max;
+  if (!ranked.every((x) => pair(x, 100)) || !revealed.every((x) => pair(x, 60)))
+    return { error: "bad card evidence" };
+  return { evidence: { ranked, revealed } };
 }
 
-// Validated parse request -> {fields} or {error}.
+// Validated parse request -> {fields} or {error}. Only anonymized logs.
 export function checkParseRequest(body, models) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "body must be a JSON object" };
   const model = String(body.model || "");
   if (!models.includes(model)) return { error: "model not allowed" };
-  const anonymized = body.anonymized === true;
-  const username = anonymized ? SELF_PLACEHOLDER : String(body.username || "");
-  if (!username || username.length > PARSE_LIMITS.maxUsernameChars || !NAME_RE.test(username))
-    return { error: "bad username" };
+  if (body.anonymized !== true) return { error: "battle log must be anonymized" };
   const decks = Array.isArray(body.decks) ? body.decks : null;
-  if (!decks || decks.length > PARSE_LIMITS.maxDecks
-      || !decks.every((d) => typeof d === "string" && d.length && d.length <= PARSE_LIMITS.maxDeckChars && NAME_RE.test(d)))
+  if (!decks || decks.length > PARSE_LIMITS.maxDecks || !decks.every((d) => isName(d)))
     return { error: "bad deck list" };
-  const explain = body.explain == null ? "" : body.explain;
-  if (typeof explain !== "string" || explain.length > PARSE_LIMITS.maxExplainChars
-      || explain.split("\n").length > PARSE_LIMITS.maxExplainLines || (explain && !EXPLAIN_RE.test(explain)))
-    return { error: "bad card evidence" };
+  const ev = checkEvidence(body.evidence);
+  if (ev.error) return { error: ev.error };
   const battlelog = typeof body.battlelog === "string" ? body.battlelog.replace(/\r\n/g, "\n") : body.battlelog;
-  const why = checkBattleLog(battlelog, username);
+  const why = checkBattleLog(battlelog);
   if (why) return { error: why };
-  return { fields: { model, battlelog, decks, explain, username, anonymized } };
+  return { fields: { model, battlelog, decks, evidence: ev.evidence } };
 }
 
 function shortText(value) {
@@ -161,6 +220,12 @@ function percent(value) {
   return Math.max(0, Math.min(100, Math.round(n <= 1 && /\./.test(m?.[0] || "") ? n * 100 : n)));
 }
 
+// A deck name the model gave: must read like one (1-6 words), else dropped.
+function deckName(value) {
+  const s = String(value ?? "").replace(/\s+/g, " ").trim();
+  return isName(s, PARSE_LIMITS.maxResultChars) ? s : "";
+}
+
 // The model's reply reduced to the five fields the app uses, each short and
 // typed. Everything else the model wrote is dropped.
 export function sanitizeResult(content) {
@@ -170,14 +235,14 @@ export function sanitizeResult(content) {
   const result = String(data.Win_or_Loss ?? data.Result ?? "").trim().toLowerCase();
   const candidates = Array.isArray(data.Candidates) ? data.Candidates.slice(0, 3) : [];
   return {
-    My_deck: shortText(data.My_deck ?? data.MyDeck),
-    OpponentsDeck: shortText(data.OpponentsDeck ?? data.OpponentDeck),
+    My_deck: deckName(data.My_deck ?? data.MyDeck),
+    OpponentsDeck: deckName(data.OpponentsDeck ?? data.OpponentDeck),
     Win_or_Loss: result.startsWith("w") ? "Win" : result.startsWith("t") || result.startsWith("d") ? "Tie"
       : result.startsWith("l") ? "Loss" : "",
     Confidence: percent(data.Confidence),
     Candidates: candidates
       .filter((c) => c && typeof c === "object")
-      .map((c) => ({ deck: shortText(c.deck ?? c.name), probability: percent(c.probability ?? c.p) }))
+      .map((c) => ({ deck: deckName(c.deck ?? c.name), probability: percent(c.probability ?? c.p) }))
       .filter((c) => c.deck),
   };
 }

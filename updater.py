@@ -132,7 +132,11 @@ def download(release, progress=None, cancelled=None, opener=None):
     folder = os.path.join(tempfile.gettempdir(), "PTCGLMonitorUpdate")
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, os.path.basename(installer["name"]))
-    expected = _expected_sha256(release["sha256_url"], opener) if release.get("sha256_url") else None
+    if not release.get("sha256_url"):
+        raise RuntimeError("This release has no checksum file, so the download can't be verified - nothing was installed.")
+    expected = _expected_sha256(release["sha256_url"], opener)
+    if not expected:
+        raise RuntimeError("The release checksum file has no valid SHA-256 digest - nothing was installed.")
     req = Request(installer["url"], headers={"User-Agent": "PTCGL-Monitor-Updater"})
     digest = hashlib.sha256()
     with (opener or urlopen)(req, timeout=60) as resp, open(path + ".part", "wb") as out:
@@ -149,7 +153,7 @@ def download(release, progress=None, cancelled=None, opener=None):
             done += len(chunk)
             if progress is not None:
                 progress(done, total)
-    if expected and digest.hexdigest().lower() != expected:
+    if digest.hexdigest().lower() != expected:
         os.remove(path + ".part")
         raise RuntimeError("The download didn't match the release checksum - nothing was installed.")
     os.replace(path + ".part", path)

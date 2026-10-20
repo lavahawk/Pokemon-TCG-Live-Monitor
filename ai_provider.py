@@ -48,8 +48,9 @@ FINAL_CODES = {"ai_budget", "daily_limit", "rate_limited", "service_busy", "inva
                "register_limit", "not_configured", "bad_request", "too_large"}
 # What the proxy accepts in names and the card-evidence text (prompt.js
 # NAME_RE / EXPLAIN_RE): letters and digits of any script plus these.
-NAME_PUNCT = set("_ .,'’&:()/+-!?")
-EXPLAIN_PUNCT = NAME_PUNCT | set(";#%=*×[]\"\n")
+# A card or deck name as the proxy accepts it (prompt.js NAME_RE): 1-6 words
+# of letters/digits and ' ’ . - , each word starting with a letter or digit.
+NAME_WORD = re.compile(r"^[^\W_][\w'\u2019.\-]*$")
 TIMEOUT = 45.0
 
 
@@ -172,12 +173,40 @@ def ai_ready(settings=None):
 
 # ── hosted proxy ──────────────────────────────────────────────────────────
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """The proxy never redirects: a redirect is refused (an HTTPError), so the
+    install token is never re-sent to another host or over plain http."""
+
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+def _open(request, timeout):
+    # Default context: TLS 1.2+, certificate and host name verified.
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(
+        context=ssl.create_default_context()))
+    return opener.open(request, timeout=timeout)
+
+
+def is_local_url(url):
+    """http:// is only for a model on this PC or the home network."""
+    import ipaddress
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
 def _post_json(url, payload, timeout=20.0):
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="POST", headers={
         "content-type": "application/json", "user-agent": _user_agent()})
-    # Default context: TLS 1.2+, certificate and host name verified.
-    with urllib.request.urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
+    with _open(request, timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -205,19 +234,24 @@ def install_token(register=True):
     return token
 
 
-def _allowed(text, punct):
-    return all(ch.isalnum() or ch in punct for ch in text)
+def is_name(text, limit=40):
+    words = str(text).split(" ")
+    return (0 < len(text) <= limit and len(words) <= 6 and "_" not in text
+            and all(NAME_WORD.match(w) for w in words))
 
 
-def hosted_fields(fields):
-    """The parse request as the proxy will accept it: deck names it would
-    refuse are left out and odd card-evidence text is dropped, so one strange
-    name never costs the game its AI answer."""
-    decks = [d for d in fields["decks"] if 0 < len(d) <= 60 and _allowed(d, NAME_PUNCT)][:60]
-    explain = fields.get("explain") or ""
-    if len(explain) > 3000 or explain.count("\n") >= 20 or not _allowed(explain, EXPLAIN_PUNCT):
-        explain = ""
-    return dict(fields, decks=decks, explain=explain)
+def hosted_fields(fields, evidence=None):
+    """The /v1/parse body as the proxy will accept it: an anonymized log,
+    deck names and evidence as data. Names it would refuse are left out, so
+    one strange name never costs the game its AI answer."""
+    if not fields.get("anonymized"):
+        raise ValueError("the built-in AI only takes anonymized logs")
+    evidence = evidence or {}
+    ranked = [[d, max(0, min(100, int(p)))] for d, p in evidence.get("ranked") or [] if is_name(d)][:3]
+    revealed = [[c, max(0, min(60, int(n)))] for c, n in evidence.get("revealed") or [] if is_name(c)][:25]
+    return {"battlelog": fields["battlelog"], "anonymized": True,
+            "decks": [d for d in fields["decks"] if is_name(d)][:60],
+            "evidence": {"ranked": ranked, "revealed": revealed} if ranked or revealed else None}
 
 
 class HostedError(Exception):
@@ -234,14 +268,14 @@ class HostedClient:
         self.url = base_url.rstrip("/") + "/parse"
         self.token = token
 
-    def parse(self, model, fields):
+    def parse(self, model, fields, evidence=None):
         """-> (payload dict, completion-like object with .usage)"""
-        body = json.dumps(dict(hosted_fields(fields), model=model)).encode("utf-8")
+        body = json.dumps(dict(hosted_fields(fields, evidence), model=model)).encode("utf-8")
         request = urllib.request.Request(self.url, data=body, method="POST", headers={
             "authorization": f"Bearer {self.token}", "content-type": "application/json",
             "user-agent": _user_agent()})
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT, context=ssl.create_default_context()) as response:
+            with _open(request, TIMEOUT) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             try:
@@ -288,6 +322,10 @@ def resolve(settings=None):
         base, model = (settings.get("ai_base_url") or "").strip(), (settings.get("ai_model") or "").strip()
         if not base or not model:
             return Plan("compatible", reason="no_key")
+        if not base.lower().startswith("https://") and not is_local_url(base):
+            # The key (and the battle logs) would cross the internet unencrypted.
+            print(f"[AI] Refusing {base}: use https:// for a server outside this PC / home network.")
+            return Plan("compatible", reason="ai_failed")
         return Plan("compatible", _openai_client(api_key=load_compat_key() or "not-needed", base_url=base,
                                                  max_retries=0), [model])
     try:
@@ -332,7 +370,7 @@ def hosted_status():
     request = urllib.request.Request(f"{edition.HOSTED_AI_URL.rstrip('/')}/status", headers={
         "authorization": f"Bearer {token}", "user-agent": _user_agent()})
     try:
-        with urllib.request.urlopen(request, timeout=10, context=ssl.create_default_context()) as response:
+        with _open(request, 10) as response:
             return json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError):
         return None

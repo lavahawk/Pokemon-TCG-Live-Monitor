@@ -210,9 +210,15 @@ begin
 end;
 
 function JsonString(Value: String): String;
+var
+  I: Integer;
 begin
   StringChangeEx(Value, '\', '\\', True);
   StringChangeEx(Value, '"', '\"', True);
+  // Control characters (tabs, line breaks...) are invalid raw in JSON: \u-escape them.
+  for I := 0 to 31 do
+    StringChangeEx(Value, Chr(I), '\u00' + Copy('0123456789abcdef', (I div 16) + 1, 1) +
+      Copy('0123456789abcdef', (I mod 16) + 1, 1), True);
   Result := '"' + Value + '"';
 end;
 
@@ -322,6 +328,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Dir, User, Key, Provider, Choice: String;
+  ResultCode: Integer;
 begin
   if CurStep <> ssPostInstall then
     Exit;
@@ -351,6 +358,14 @@ begin
         SaveStringToFile(Dir + '\.ai_compat_key', Key, False);
     end;
     SaveStringToFile(Dir + '\.ai_provider_install.json', Choice + '}', False);
+    // Encrypt (DPAPI) and delete the plain-text keys right away instead of at
+    // the app's first start: both loaders migrate on read (no DB is created).
+    // The app folder comes from the working directory, so no path is quoted.
+    if FileExists(Dir + '\.openai_key') or FileExists(Dir + '\.ai_compat_key') then
+      Exec(Dir + '\runtime\python.exe',
+        '-I -c "import os, sys; sys.path.insert(0, os.getcwd()); import app_settings, ai_provider; ' +
+        'app_settings.load_api_key(); ai_provider.load_compat_key()"',
+        Dir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
   // Unticked on this run: remove an earlier auto-start entry of THIS install
   // (never one that launches another copy, e.g. a dev checkout).

@@ -777,6 +777,8 @@ def ai_parse(battlelog, username, api_key=None, anonymize=None, client=None, pla
     evidence = card_evidence(battlelog, username)
     if anonymize is None:
         anonymize = is_ai_anonymize_names()
+    if plan is not None and plan.provider == "hosted":
+        anonymize = True  # the built-in AI only accepts anonymized logs
     if anonymize:
         # SEC-09: neither username leaves the machine. "Player" is the user,
         # so My_deck / Win_or_Loss keep their meaning in the reply.
@@ -791,6 +793,10 @@ def ai_parse(battlelog, username, api_key=None, anonymize=None, client=None, pla
     fields = {"battlelog": battlelog, "decks": [str(d) for d in possible_decks], "explain": explain,
               "username": username, "anonymized": bool(anonymize)}
     prompt = render_prompt(**fields)
+    # The built-in AI takes the evidence as data (names and numbers), not text.
+    evidence_data = {"ranked": [(str(d), int(round(p * 100))) for d, p in evidence["ranked"][:3]],
+                     "revealed": sorted(((str(c), int(n)) for c, n in (evidence.get("copies") or {}).items()
+                                         if c in evidence["pokemon"]), key=lambda x: -x[1])[:25]}
 
     messages = [
         {"role": "system", "content": AI_SYSTEM_PROMPT},
@@ -803,7 +809,7 @@ def ai_parse(battlelog, username, api_key=None, anonymize=None, client=None, pla
             if hosted:
                 # The proxy builds the same prompt itself from these fields
                 # and answers with the parsed fields only.
-                payload, completion = client.parse(model, fields)
+                payload, completion = client.parse(model, fields, evidence_data)
             else:
                 try:
                     kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}

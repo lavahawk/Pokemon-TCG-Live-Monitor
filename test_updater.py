@@ -95,6 +95,19 @@ def test_download_verifies_checksum():
         assert "checksum" in str(exc)
 
 
+def test_download_refuses_unverifiable_updates():
+    no_sum = U.latest_release(fetch=lambda url: release_json(with_sum=False))
+    rel = U.latest_release(fetch=lambda url: release_json())
+    for r, text in ((no_sum, SHA), (rel, "no digest here"), (rel, "abc123"), (rel, "")):
+        try:
+            U.download(r, opener=opener_for(PAYLOAD, text))
+            raise AssertionError("an unverifiable update must fail")
+        except RuntimeError as exc:
+            assert "checksum" in str(exc).lower() or "sha-256" in str(exc).lower()
+    assert not os.path.exists(os.path.join(TMP, "PTCGLMonitorUpdate",
+                                           "PokemonTCGLiveMonitor-9.1.0-Setup.exe.part"))
+
+
 def test_installer_matches_edition():
     assets = [{"name": "PokemonTCGLiveMonitor-2.8.0-Free-Setup.exe"}, {"name": "PokemonTCGLiveMonitor-2.8.0-Setup.exe"},
               {"name": "PokemonTCGLiveMonitor-2.8.0-Setup.exe.sha256"}]

@@ -8,12 +8,15 @@ workers_dev = true
 [vars]
 AI_ENABLED = "true"            # "false" = kill switch: every install falls back to manual mode
 MONTHLY_BUDGET_USD = "2.5"     # per install
+DAILY_BUDGET_USD = "0.25"      # per install (a normal day of 40 games costs ~$0.05)
 DAILY_FULL_GAMES = "40"        # per install per day on the primary model, then the light model
 DAILY_MAX_GAMES = "150"        # per install per day, hard stop
-PER_MINUTE = "6"               # per install
+PER_MINUTE = "6"               # AI calls per install
+REQUESTS_PER_MINUTE = "12"     # any request per install, checked before the body is read
+NETWORK_DAILY_USD = "1"        # per IPv4 address / IPv6 /64, all its installs together
 GLOBAL_DAILY_USD = "10"        # all installs together
 GLOBAL_MONTHLY_USD = "150"
-REGISTER_PER_IP_PER_DAY = "5"
+REGISTER_PER_IP_PER_DAY = "5"  # new installs per IPv4 address / IPv6 /64
 
 [[durable_objects.bindings]]
 name = "QUOTA"

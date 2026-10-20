@@ -84,6 +84,22 @@ def test_posterior_games_leave_ties_out_in_ignore_mode():
     finally:
         deck_analytics.tie_mode = old
 
+def test_stats_edge_cases():
+    da = deck_analytics
+    # huge counts: a monotone CDF centred where it should be
+    assert abs(da.beta_cdf(0.5, 2e6, 2e6) - 0.5) < 1e-3
+    assert da.beta_cdf(0.49, 2e6, 2e6) < 1e-6 and da.beta_cdf(0.51, 2e6, 2e6) > 1 - 1e-6
+    assert abs(da.beta_cdf(0.5, 1e9, 1e9) - 0.5) < 1e-6
+    # zero-spread deck, no seen cells: probabilities valid, range holds the mean
+    r = da.meta_adjusted_winrate({"mean": 0.5, "sd": 0.0}, [{"key": "a", "share": 100}])
+    assert 0.0 <= r["p_above_even"] <= 1.0 and r["low"] <= r["mean"] <= r["high"]
+    # reversed / missing ranges
+    assert da.confidence_tier(0.6, 0.4) == da.confidence_tier(0.4, 0.6)
+    assert da.confidence_tier(float("nan"), 0.5)[0] == "low"
+    assert isinstance(da.confidence_text(None, None, 5), str)
+    assert da.confidence_text(0.6, 0.4, 5) == da.confidence_text(0.4, 0.6, 5)
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):
