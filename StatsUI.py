@@ -1102,6 +1102,14 @@ class LimitlessDashboardManager(QObject):
             except Exception:
                 pass
 
+        # An empty dashboard (logged in, no active match, nothing to check in
+        # to) means the tournament is over. Two scans in a row, so a page
+        # caught mid-reload doesn't end it.
+        idle = bool(result.get("loggedIn")) and not active_match_url and not result.get("candidates")
+        self._idle_scans = getattr(self, "_idle_scans", 0) + 1 if idle else 0
+        if self._idle_scans >= 2 and self.chat_target_url:
+            self._end_tournament()
+
         if not self.authenticated:
             self.last_checkin = None
             self.last_status = "Limitless dashboard is waiting for login."
@@ -1144,11 +1152,23 @@ class LimitlessDashboardManager(QObject):
                 self.alert.position_near_overlay(overlay)
                 self.alert.show_message(context)
 
+    def _end_tournament(self):
+        """Stop following the last match: hide the chat, clear the flag."""
+        self.chat_target_url = ""
+        self.chat_poll_timer.stop()
+        try:
+            if self.chat_page is not None:
+                self.chat_page.load(QUrl("about:blank"))
+        except Exception:
+            pass
+        self._chat_seen = {}
+        self._publish_chat_state({})
+
     def _handle_alert_dismissed(self):
         pass
 
     def _on_chat_page_load_finished(self, ok):
-        if ok and not self.chat_poll_timer.isActive():
+        if ok and self.chat_target_url and not self.chat_poll_timer.isActive():
             self.chat_poll_timer.start()
 
     def _chat_extract_js(self):
@@ -1485,6 +1505,11 @@ class LimitlessDashboardManager(QObject):
         # {text, type}. Normalize to dicts and attach a received timestamp so
         # the overlay can fade messages out over time.
         now_iso = datetime.now().isoformat(timespec="seconds")
+        # First-seen time per message: re-stamping every message on each
+        # change made old ones light up again whenever a new one arrived.
+        seen = getattr(self, "_chat_seen", None)
+        if seen is None or not state.get("messages"):
+            seen = self._chat_seen = {}
         normalized_messages = []
         for msg in (state.get("messages") or []):
             if isinstance(msg, dict):
@@ -1497,7 +1522,8 @@ class LimitlessDashboardManager(QObject):
                 sender = ""
             if not text:
                 continue
-            normalized_messages.append({"text": text, "type": mtype, "sender": sender, "ts": now_iso})
+            ts = seen.setdefault(f"{sender}|{text}", now_iso)
+            normalized_messages.append({"text": text, "type": mtype, "sender": sender, "ts": ts})
         normalized = {
             "url": state.get("url") or "",
             "title": state.get("title") or "",
@@ -4342,10 +4368,6 @@ class StatsWindow(QWidget):
         # Recent battles
         self.recent_battles_widget = self.create_battles_section()
         content_layout.addWidget(self.recent_battles_widget)
-        
-        # Limitless integration
-        limitless_section = self.create_limitless_section()
-        content_layout.addWidget(limitless_section)
         
         content_layout.addStretch()
         
@@ -11386,38 +11408,6 @@ class StatsWindow(QWidget):
         layout.addLayout(self.battles_list_layout)
         
         return card
-    
-    def create_limitless_section(self):
-        """Create Limitless integration section"""
-        card = QFrame()
-        card.setObjectName("limitlessCard")
-        
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
-        
-        # Header
-        header = QLabel("LIMITLESS TCG")
-        header.setObjectName("sectionHeader")
-        layout.addWidget(header)
-        
-        # Button
-        btn = QPushButton("Open Limitless TCG")
-        btn.setObjectName("limitlessBtn")
-        btn.setFixedHeight(36)
-        btn.clicked.connect(self.open_limitless)
-        layout.addWidget(btn)
-        
-        # Placeholder
-        placeholder = QLabel("Chat relay feature coming soon")
-        placeholder.setObjectName("placeholder")
-        layout.addWidget(placeholder)
-        
-        return card
-    
-    def open_limitless(self):
-        """Open Limitless TCG website"""
-        webbrowser.open("https://play.limitlesstcg.com/")
     
     def _refresh_if_changed(self):
         """15 s timer: reload only when the database actually changed.

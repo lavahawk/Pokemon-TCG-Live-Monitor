@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton
 )
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize, QRectF
-from PySide6.QtGui import QPixmap, QPainter, QColor, QFont
+from PySide6.QtGui import QPixmap, QPainter, QColor
 from BattleDatabase import BattleDatabase
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -177,171 +177,276 @@ def get_league_from_elo(elo):
 
 
 class LimitlessChatWindow(QWidget):
-    """Standalone floating chat window for Limitless match chat.
+    """Floating Limitless match chat above the mini GUI.
 
-    Completely transparent and click-through (WS_EX_TRANSPARENT |
-    WS_EX_LAYERED), positioned above the mini stats GUI. Messages are painted
-    directly (no child widgets) so there is no opaque box. Text fades:
-      - with HEIGHT: messages higher up (older) are dimmer
-      - with TIME: messages older than 10s fade to invisible over 5s
-    Action/system messages (check-ins, game reports) are italicized.
+    Semi-transparent and click-through over the game. Rest the mouse on it
+    (HOVER_DWELL_MS) and it gets more visible and takes the mouse: scroll,
+    select and copy text (Ctrl+C or right-click). Moving the mouse across it
+    to click the game still passes through. ▾ folds it to its header bar.
+    It hides itself LINGER_S after the newest message unless hovered.
     """
 
-    FADE_AFTER_S = 25.0    # full visibility for this long
-    FADE_DURATION_S = 10.0   # then fade out over this many seconds
-    MAX_MESSAGES = 8
     WIDTH = 300
+    MAX_BODY_H = 170
+    MAX_MESSAGES = 30
+    LINGER_S = 45.0          # hide this long after the newest message
+    FADE_S = 3.0             # ...fading out over the last few seconds
+    IDLE_OPACITY = 0.62
+    HOVER_OPACITY = 0.94
+    HOVER_DWELL_MS = 300
+
+    STYLE = """
+        QFrame#chatPanel { background: rgba(12,16,22,0.66); border: 1px solid rgba(255,255,255,0.10);
+                           border-radius: 9px; }
+        QLabel#chatTitle { color: rgba(236,242,252,0.78); font-family: 'Segoe UI', Arial; font-size: 9px;
+                           font-weight: 700; letter-spacing: 0.6px; background: transparent; }
+        QToolButton#chatFold { background: transparent; border: none; color: rgba(236,242,252,0.70);
+                               font-size: 10px; padding: 0 3px; }
+        QToolButton#chatFold:hover { color: #FFFFFF; }
+        QTextBrowser { background: transparent; border: none; color: #E4EEF5;
+                       font-family: 'Segoe UI', Arial; font-size: 11px; }
+        QScrollBar:vertical { background: transparent; width: 5px; margin: 0; }
+        QScrollBar::handle:vertical { background: rgba(255,255,255,0.22); border-radius: 2px; min-height: 18px; }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+    """
 
     def __init__(self):
         super().__init__()
+        from PySide6.QtWidgets import QTextBrowser, QToolButton
         self.setWindowTitle("LimitlessChat")
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowTransparentForInput
-        )
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                            | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.messages = []  # [{text, type, ts(datetime)}]
+        self.setFixedWidth(self.WIDTH)
+        self.messages = []
+        self.own_name = ""
+        self.folded = False
         self._hovered = False
-        # Repaint regularly so time-based fading animates smoothly.
-        self._fade_timer = QTimer(self)
-        self._fade_timer.setInterval(100)
-        self._fade_timer.timeout.connect(self.update)
-        self._fade_timer.start()
+        self._hover_since = None
+        self._click_through = None
+        self._newest = None
 
-    # --- click-through -----------------------------------------------------
-    def showEvent(self, event):
-        super().showEvent(event)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.panel = QFrame()
+        self.panel.setObjectName("chatPanel")
+        outer.addWidget(self.panel)
+        col = QVBoxLayout(self.panel)
+        col.setContentsMargins(9, 4, 5, 6)
+        col.setSpacing(2)
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        self.title = QLabel("LIMITLESS CHAT")
+        self.title.setObjectName("chatTitle")
+        head.addWidget(self.title, 1)
+        self.fold_btn = QToolButton()
+        self.fold_btn.setObjectName("chatFold")
+        self.fold_btn.setText("▾")
+        self.fold_btn.setToolTip("Minimize the chat")
+        self.fold_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fold_btn.clicked.connect(lambda: self.set_folded(not self.folded))
+        head.addWidget(self.fold_btn)
+        col.addLayout(head)
+        self.body = QTextBrowser()
+        self.body.setOpenLinks(False)
+        self.body.setReadOnly(True)
+        self.body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                          | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.body.viewport().setAutoFillBackground(False)
+        self.body.document().setDocumentMargin(2)
+        col.addWidget(self.body)
+        self.setStyleSheet(self.STYLE)
+        self.setWindowOpacity(self.IDLE_OPACITY)
+
+        self._tick = QTimer(self)
+        self._tick.setInterval(80)
+        self._tick.timeout.connect(self._on_tick)
+
+    # --- click-through (WS_EX_TRANSPARENT) ------------------------------------
+    def _set_click_through(self, on):
+        if on == self._click_through:
+            return
+        self._click_through = on
         try:
-            import win32con, win32api
+            import win32api
             hwnd = int(self.winId())
-            style = win32api.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            win32api.SetWindowLong(
-                hwnd, win32con.GWL_EXSTYLE,
-                style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT,
-            )
+            style = win32api.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) | win32con.WS_EX_LAYERED
+            style = (style | win32con.WS_EX_TRANSPARENT) if on else (style & ~win32con.WS_EX_TRANSPARENT)
+            win32api.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, style)
         except Exception:
             pass
 
-    # --- data --------------------------------------------------------------
-    def set_messages(self, messages, own_name=""):
-        """Replace the message list.
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._click_through = None
+        self._set_click_through(True)
+        self._tick.start()
 
-        Each item: {text, type, sender, ts(ISO str)}. Messages whose sender
-        matches own_name are right-aligned (yours); others left-aligned
-        (opponent's); actions centered.
-        """
-        now = datetime.now()
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._tick.stop()
+
+    def _on_tick(self):
+        from PySide6.QtGui import QCursor
+        inside = self.frameGeometry().contains(QCursor.pos())
+        now = time.monotonic()
+        if inside:
+            if self._hover_since is None:
+                self._hover_since = now
+            hovered = (now - self._hover_since) * 1000 >= self.HOVER_DWELL_MS
+        else:
+            self._hover_since = None
+            hovered = False
+        if hovered != self._hovered:
+            self._hovered = hovered
+            self._set_click_through(not hovered)
+            self.body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Opacity: brighter while hovered; fade out once the chat is stale.
+        opacity = self.HOVER_OPACITY if hovered else self.IDLE_OPACITY
+        if not hovered and self._newest is not None:
+            left = self.LINGER_S - (datetime.now() - self._newest).total_seconds()
+            if left <= 0:
+                self.hide()
+                return
+            if left < self.FADE_S:
+                opacity *= left / self.FADE_S
+        if abs(self.windowOpacity() - opacity) > 0.01:
+            self.setWindowOpacity(opacity)
+
+    # --- data -------------------------------------------------------------------
+    def set_messages(self, messages, own_name="", title=""):
+        """messages: [{text, type, sender, ts(ISO)}]. Returns True if the
+        newest message is newer than what was shown before."""
         self.own_name = (own_name or "").strip().lower()
-        self.messages = []
+        self.title.setText((title or "Limitless chat").upper())
+        parsed = []
         for msg in messages[-self.MAX_MESSAGES:]:
             text = str(msg.get("text") or "").strip()
             if not text:
                 continue
-            mtype = str(msg.get("type") or "chat")
-            sender = str(msg.get("sender") or "").strip()
             try:
                 ts = datetime.fromisoformat(str(msg.get("ts") or ""))
             except Exception:
-                ts = now
-            self.messages.append({"text": text, "type": mtype, "sender": sender, "ts": ts})
-        self._relayout()
-        if self.messages:
-            self.show()
-        else:
+                ts = datetime.now()
+            parsed.append({"text": text, "type": str(msg.get("type") or "chat"),
+                           "sender": str(msg.get("sender") or "").strip(), "ts": ts})
+        if not parsed:
+            self.messages = []
             self.hide()
+            return False
+        before = {(m["sender"], m["text"]) for m in self.messages}
+        is_new = any((m["sender"], m["text"]) not in before for m in parsed)
+        self.messages = parsed
+        if is_new or self._newest is None:
+            self._newest = datetime.now()  # the linger clock restarts on news
+        self._render()
+        if is_new:
+            self.show()
+            self.raise_()
+        return is_new
 
     def _is_own(self, msg):
-        """True if the message was sent by the player (right-aligned)."""
         sender = (msg.get("sender") or "").strip().lower()
         return bool(sender) and bool(self.own_name) and sender == self.own_name
 
-    def _relayout(self):
-        """Compute required height from wrapped text and resize the window."""
-        if not self.messages:
-            self.hide()
-            return
-        fm = self.fontMetrics()
-        font = self.font()
-        line_h = fm.height() + 2
-        total_h = 0
+    def _render(self):
+        import html
+        bar = self.body.verticalScrollBar()
+        at_bottom = bar.value() >= bar.maximum() - 4
+        rows = []
         for msg in self.messages:
-            f = QFont(font)
-            f.setItalic(msg["type"] == "action")
-            lines = 0
-            remaining = msg["text"]
-            # Simple greedy word-wrap to count lines.
-            words = remaining.split()
-            cur = ""
-            for word in words:
-                trial = (cur + " " + word).strip()
-                if fm.horizontalAdvance(trial) > self.WIDTH - 16 and cur:
-                    lines += 1
-                    cur = word
-                else:
-                    cur = trial
-            lines += 1
-            msg["lines"] = lines
-            total_h += lines * line_h + 4
-        self.setFixedSize(self.WIDTH, total_h + 8)
+            text = html.escape(msg["text"])
+            if msg["type"] == "action":
+                rows.append(f"<p align='center' style='margin:2px 0; color:#9AA4B1;'><i>{text}</i></p>")
+            elif self._is_own(msg):
+                rows.append(f"<p align='right' style='margin:3px 0; color:#BED6FF;'>{text}</p>")
+            else:
+                who = html.escape(msg["sender"])
+                name = f"<span style='color:#F0C674; font-weight:600;'>{who}</span>&nbsp; " if who else ""
+                rows.append(f"<p align='left' style='margin:3px 0;'>{name}{text}</p>")
+        self.body.setHtml("".join(rows))
+        self._fit()
+        if at_bottom or not self._hovered:
+            bar.setValue(bar.maximum())
+
+    def _fit(self):
+        self.body.setVisible(not self.folded)
+        if self.folded:
+            body_h = 0
+        else:
+            doc = self.body.document()
+            doc.setTextWidth(self.WIDTH - 20)
+            body_h = min(self.MAX_BODY_H, int(doc.size().height()) + 4)
+            self.body.setFixedHeight(body_h)
+        self.setFixedHeight(body_h + 26)
+        overlay = getattr(self, "on_resized", None)
+        if overlay:
+            overlay()
+
+    def set_folded(self, folded):
+        self.folded = bool(folded)
+        self.fold_btn.setText("▴" if self.folded else "▾")
+        self.fold_btn.setToolTip("Show the chat" if self.folded else "Minimize the chat")
+        self._fit()
+        if not self.folded:
+            self.body.verticalScrollBar().setValue(self.body.verticalScrollBar().maximum())
+
+
+class ChatPingGlow(QWidget):
+    """A soft yellow glow that pulses just above the mini GUI when a new
+    Limitless chat message arrives. Click-through, never takes focus."""
+
+    def __init__(self):
+        super().__init__()
+        from PySide6.QtCore import QVariantAnimation
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                            | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self._level = 0.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(1300)
+        self._anim.setStartValue(0.0)
+        self._anim.setKeyValueAt(0.35, 1.0)
+        self._anim.setEndValue(0.0)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._anim.setLoopCount(2)
+        self._anim.valueChanged.connect(self._set_level)
+        self._anim.finished.connect(self.hide)
+
+    def _set_level(self, value):
+        self._level = float(value)
         self.update()
 
-    # --- painting ----------------------------------------------------------
+    def ping(self, hud_geometry):
+        self.setGeometry(hud_geometry.x() - 16, hud_geometry.y() - 22, hud_geometry.width() + 32, 30)
+        self.show()
+        self.raise_()
+        self._anim.stop()
+        self._anim.start()
+
     def paintEvent(self, event):
-        if not self.messages:
+        from PySide6.QtGui import QRadialGradient
+        if self._level <= 0.01:
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        font = self.font()
-        base_font_size = 9
-        line_h = base_font_size + 6
-        now = datetime.now()
-        total = len(self.messages)
-        y = 4.0
-        for index, msg in enumerate(self.messages):
-            # Height fade: newest (bottom) = 1.0, oldest (top) = 0.35.
-            height_alpha = 1.0 - (index / max(1, total)) * 0.65
-            # Time fade: full for 10s, then fade out over 5s.
-            age = (now - msg["ts"]).total_seconds()
-            if age <= self.FADE_AFTER_S:
-                time_alpha = 1.0
-            else:
-                time_alpha = max(0.0, 1.0 - (age - self.FADE_AFTER_S) / self.FADE_DURATION_S)
-            alpha = height_alpha * time_alpha
-            lines = msg.get("lines", 1)
-            if alpha <= 0.01:
-                y += lines * line_h + 4
-                continue
-            f = QFont(font)
-            f.setPixelSize(base_font_size)
-            f.setItalic(msg["type"] == "action")
-            painter.setFont(f)
-            # Conversation alignment: yours right, opponent's left,
-            # actions centered — like a normal chat.
-            if msg["type"] == "action":
-                align = Qt.AlignmentFlag.AlignHCenter
-                x = 4
-            elif self._is_own(msg):
-                align = Qt.AlignmentFlag.AlignRight
-                x = 4
-            else:
-                align = Qt.AlignmentFlag.AlignLeft
-                x = 4
-            # Slight color tint for your own messages.
-            if self._is_own(msg):
-                color = QColor(190, 214, 255, int(255 * alpha))
-            else:
-                color = QColor(228, 238, 245, int(255 * alpha))
-            painter.setPen(color)
-            rect = QRectF(x, y, self.WIDTH - 8, lines * line_h)
-            painter.drawText(
-                rect,
-                int(align | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
-                msg["text"],
-            )
-            y += lines * line_h + 4
+        w, h = self.width(), self.height()
+        # A flat glow centred on the mini GUI's top edge (unit circle, scaled).
+        painter.translate(w / 2, h)
+        painter.scale(w / 2, h)
+        gradient = QRadialGradient(0, 0, 1)
+        alpha = int(120 * self._level)
+        gradient.setColorAt(0.0, QColor(255, 214, 90, alpha))
+        gradient.setColorAt(0.55, QColor(255, 200, 60, int(alpha * 0.35)))
+        gradient.setColorAt(1.0, QColor(255, 200, 60, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(gradient)
+        painter.drawEllipse(QRectF(-1, -1, 2, 2))
         painter.end()
 
 
@@ -1233,6 +1338,7 @@ class MinimalOverlay(QWidget):
             # directly above this mini GUI.
             if self.chat_window is None:
                 self.chat_window = LimitlessChatWindow()
+                self.chat_window.on_resized = self._position_chat_window
             # Pass the player's username so their own messages are
             # right-aligned like a normal conversation.
             try:
@@ -1240,10 +1346,46 @@ class MinimalOverlay(QWidget):
                 own_name = load_username() or ""
             except Exception:
                 own_name = ""
-            self.chat_window.set_messages(messages, own_name=own_name)
+            title = " · ".join(t for t in (state.get("subtitle") or "",
+                                            f"vs {state['opponent']}" if state.get("opponent") else "") if t)
+            is_new = self.chat_window.set_messages(messages, own_name=own_name,
+                                                   title=title or "Limitless chat")
             self._position_chat_window()
+            latest = messages[-1]
+            if is_new and not self.chat_window._is_own(latest):
+                self._ping_new_chat()
         except Exception as exc:
             _dbg(f"update_limitless_chat error: {exc}")
+
+    def _ping_new_chat(self):
+        """New Limitless chat message: a faint yellow glow above the mini GUI
+        and the arrow gives a tiny bounce."""
+        if not self.isVisible():
+            return
+        try:
+            from PySide6.QtCore import QVariantAnimation
+            import math
+            if getattr(self, "_chat_glow", None) is None:
+                self._chat_glow = ChatPingGlow()
+            self._chat_glow.ping(self.geometry())
+            anim = getattr(self, "_arrow_bounce", None)
+            if anim is None:
+                anim = self._arrow_bounce = QVariantAnimation(self)
+                anim.setDuration(1100)
+                anim.setStartValue(0.0)
+                anim.setEndValue(1.0)
+
+                def nudge(t):
+                    # Three small hops that die out; 1 px = "ever so slightly".
+                    t = float(t)
+                    shift = round(math.sin(t * math.pi * 6) * 1.4 * (1.0 - t))
+                    self.arrow_label.setContentsMargins(0, max(0, -shift) * 2, 0, max(0, shift) * 2)
+                anim.valueChanged.connect(nudge)
+                anim.finished.connect(lambda: self.arrow_label.setContentsMargins(0, 0, 0, 0))
+            anim.stop()
+            anim.start()
+        except Exception as exc:
+            _dbg(f"chat ping error: {exc}")
 
     def _position_chat_window(self):
         """Place the chat window above the mini stats GUI, right-aligned.
