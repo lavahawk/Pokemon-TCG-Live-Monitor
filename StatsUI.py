@@ -1217,7 +1217,7 @@ class LimitlessDashboardManager(QObject):
                 // is a plain styled element (no button/role semantics), so we
                 // scan ALL elements and match the text loosely.
                 let checkin = false;
-                const checkinRe = /^\\s*check[\\s-]?in\\s*$/i;
+                const checkinRe = /^\s*check[\s-]?in\s*$/i;
                 const checkinEl = Array.from(document.querySelectorAll('*')).find(el => {
                     // Only leaf-ish elements so we don't match a huge container.
                     if (el.children.length > 2) return false;
@@ -1249,13 +1249,19 @@ class LimitlessDashboardManager(QObject):
                 }
 
                 if (best) {
-                    const headerNode = best.node.closest('main, article, section, div')?.querySelector('h1, h2, h3');
+                    // The match header sits outside the chat box (closest('div')
+                    // was the chat box itself), so read it from the page.
+                    const scope = document.querySelector('main') || document.body;
+                    const headerNode = scope.querySelector('h1, h2, h3');
                     header = clean(headerNode ? headerNode.innerText : document.title || 'Limitless Match');
 
                     // Extract the opponent username from the match header
                     // ("Round 2 vs OpponentName" or "You are playing against").
-                    const headerText = clean(best.node.closest('main, article, section, div')?.innerText || '');
-                    const vsMatch = headerText.match(/\bvs\.?\s+([A-Za-z0-9_\- ]+)/i);
+                    const headerRaw = scope.innerText || '';
+                    const headerText = clean(headerRaw);
+                    // The name ends at its line: the collapsed text would run on
+                    // into the next element ("vs Bob Game 1 ...").
+                    const vsMatch = headerRaw.match(/\bvs\.?(?=\s)[ \t]*(?:\r?\n[ \t]*)?([^\n\r]{1,40})/i);
                     if (vsMatch && vsMatch[1]) {
                         opponent = clean(vsMatch[1]);
                     }
@@ -1268,7 +1274,7 @@ class LimitlessDashboardManager(QObject):
                     // containing a timestamp like "08:31:35 PM". We extract
                     // each message element individually so messages stay
                     // separate instead of being concatenated into one blob.
-                    const timeRe = /\\b\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:AM|PM)/i;
+                    const timeRe = /\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)/i;
                     const rawMessages = [];
                     // Collect ALL descendant elements that contain a timestamp
                     // (message rows). We then keep only the deepest ones so a
@@ -1305,7 +1311,7 @@ class LimitlessDashboardManager(QObject):
                     if (rawMessages.length <= 1) {
                         rawMessages.length = 0;
                         const blob = clean(best.node.innerText || '');
-                        const parts = blob.split(/(?<=\\s)(?=\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:AM|PM))/i);
+                        const parts = blob.split(/(?<=\s)(?=\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM))/i);
                         for (const part of parts) {
                             const cleaned = clean(part);
                             if (cleaned) rawMessages.push(cleaned);
@@ -1326,7 +1332,7 @@ class LimitlessDashboardManager(QObject):
                         let text = '';
                         let trailingSender = '';
                         // Shape 1: leading sender before the timestamp.
-                        const lead = raw.match(/^([A-Za-z0-9_\\- ]{1,30}?)\\s+\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:AM|PM)\\s+(.+)$/i);
+                        const lead = raw.match(/^([A-Za-z0-9_\- ]{1,30}?)\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)\s+(.+)$/i);
                         if (lead) {
                             sender = clean(lead[1]);
                             text = clean(lead[2]);
@@ -1334,8 +1340,8 @@ class LimitlessDashboardManager(QObject):
                             // Shape 2: timestamp first, possible trailing
                             // sender (the NEXT message's sender).
                             let t = raw.replace(timeRe, '').trim();
-                            t = t.replace(/^(Send|Request a judge|Match chat)\\b/i, '').trim();
-                            t = t.replace(/\\s*send$/i, '').trim();
+                            t = t.replace(/^(Send|Request a judge|Match chat)\b/i, '').trim();
+                            t = t.replace(/\s*send$/i, '').trim();
                             // If the text ends with a known player name, that
                             // name is the NEXT message's sender.
                             for (const name of knownNames) {
