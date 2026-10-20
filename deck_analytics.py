@@ -611,7 +611,15 @@ def battle_weight(battle, expansions=None):
         era_w = eras[era] if era < len(eras) else 0.0
     if battle.get("weight") is not None:  # imported results carry their own weight
         return era_w * max(0.0, float(battle["weight"]))
-    return era_w * rank_weight(battle.get("my_rank"), is_tournament=bool(battle.get("is_tournament")))
+    return era_w * rank_weight(game_rank(battle), is_tournament=bool(battle.get("is_tournament")))
+
+
+def game_rank(battle):
+    """The rank a game was played AT: the stored my_rank is mostly read after
+    the result (a win already added), so prefer rank_before (the previous
+    battle's rank) when the database supplies it."""
+    before = battle.get("rank_before")
+    return before if before is not None else battle.get("my_rank")
 
 
 def weighted_record(battles, expansions=None):

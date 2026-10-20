@@ -36,6 +36,7 @@ from deck_analytics import (
     CREDIBLE_LEVEL,
     TIE_MODES,
     battle_weight,
+    game_rank,
     result_rate,
     tie_mode,
     weighted_record,
@@ -8678,11 +8679,15 @@ class StatsWindow(QWidget):
                 continue
 
             def ladder_frac(battles):
-                """Share of the (weighted) games that were ladder, not Limitless tournament."""
-                ws = [(battle_weight(b, expansions) if use_weights else 1.0, bool(b.get("is_tournament")))
+                """Share of the (weighted) games that were ladder, not Limitless tournament.
+                Arceus League games at a high Elo count as tournament-like
+                (leagues.elo_tournament_share: 0 at 1500, 1 from 1650)."""
+                from leagues import elo_tournament_share
+                ws = [(battle_weight(b, expansions) if use_weights else 1.0,
+                       1.0 if b.get("is_tournament") else elo_tournament_share(game_rank(b)))
                       for b in battles]
                 total = sum(w for w, _t in ws)
-                return sum(w for w, tour in ws if not tour) / total if total > 0 else 1.0
+                return sum(w * (1.0 - tour) for w, tour in ws) / total if total > 0 else 1.0
             def key_of(opp):
                 opp = opp or ""
                 if opp not in match_cache:

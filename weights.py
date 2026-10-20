@@ -37,6 +37,7 @@ DEFAULT_WEIGHTS = {
         "great": 0.70,
         "ultra": 0.85,
         "master": 1.00,
+        "arceus_low": 0.92,
         "tournament": 3.0,
         "unranked": 0.5,
     },
@@ -62,7 +63,10 @@ LABELS = {
     },
     "ladder": {
         "tournament": ("Limitless tournament", "Your games detected as Limitless tournament matches."),
-        "master": ("Master Ball", "Your ranked games at Master Ball and above."),
+        "master": ("Master Ball", "Your ranked games at Master Ball, and Arceus League at 1500 Elo. Arceus League "
+                                  "games climb from here to the tournament weight at 1650+ Elo."),
+        "arceus_low": ("Arceus ≤ 1400", "Arceus League games at 1400 Elo or below (low skill): less than a normal "
+                                        "Master game, more than Ultra Ball. 1400-1500 blends to Master."),
         "ultra": ("Ultra Ball", None),
         "great": ("Great Ball", None),
         "poke": ("Poké Ball", None),

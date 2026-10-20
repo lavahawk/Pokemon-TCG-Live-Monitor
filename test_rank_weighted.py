@@ -76,6 +76,20 @@ def test_personal_prior_is_about_19_games():
     assert post["p_above_even"] < 0.9 and post["mean"] < 0.62
 
 
+def test_arceus_league_elo_weights():
+    # Arceus League Elo: <=1400 low (between Ultra and Master), 1500 = Master, 1650+ = a tournament game.
+    from leagues import elo_tournament_share
+    ultra, master = weights.DEFAULT_WEIGHTS["ladder"]["ultra"], weights.DEFAULT_WEIGHTS["ladder"]["master"]
+    low = rank_weight(1350)
+    assert ultra < low < master and rank_weight(1400) == low
+    assert rank_weight(1500) == master
+    assert master < rank_weight(1600) < TOURNAMENT_WEIGHT
+    assert rank_weight(1650) == rank_weight(1800) == TOURNAMENT_WEIGHT
+    ladder = [rank_weight(r) for r in (1300, 1400, 1450, 1500, 1550, 1600, 1650, 1700)]
+    assert ladder == sorted(ladder)
+    assert elo_tournament_share(1500) == 0 and elo_tournament_share(1650) == 1 and elo_tournament_share(300) == 0
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

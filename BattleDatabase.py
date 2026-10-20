@@ -580,16 +580,22 @@ class BattleDatabase:
         """Every game with this deck: result, rank, tournament flag, date, opponent."""
         rows = self._fetchall(
             "SELECT result, my_rank, is_tournament, timestamp, opponent_deck, weight, deck_source, "
-            "log_file, log_hash, card_ranked FROM battles WHERE my_deck = ? ORDER BY timestamp ASC", (deck_name,))
+            "log_file, log_hash, card_ranked, "
+            # rank going INTO the game: the previous battle's (any deck) rank
+            "(SELECT p.my_rank FROM battles p WHERE p.my_rank IS NOT NULL AND "
+            " (p.timestamp < b.timestamp OR (p.timestamp = b.timestamp AND p.id < b.id)) "
+            " ORDER BY p.timestamp DESC, p.id DESC LIMIT 1) "
+            "FROM battles b WHERE my_deck = ? ORDER BY timestamp ASC", (deck_name,))
         out = []
-        for r, rank, t, ts, opp, w, src, log_file, lh, ranked in rows:
+        for r, rank, t, ts, opp, w, src, log_file, lh, ranked, before in rows:
             try:
                 ranked = [(str(d), float(p)) for d, p in json.loads(ranked)] if ranked else None
             except (ValueError, TypeError):
                 ranked = None
             out.append({"result": str(r or "").strip(), "my_rank": rank, "is_tournament": bool(t),
                         "timestamp": ts, "opponent": opp, "weight": w, "imported": src == "Import",
-                        "source": src or "", "log_file": log_file, "log_hash": lh, "card_ranked": ranked})
+                        "source": src or "", "log_file": log_file, "log_hash": lh, "card_ranked": ranked,
+                        "rank_before": before})
         return out
 
     def get_battle_timeline(self):
