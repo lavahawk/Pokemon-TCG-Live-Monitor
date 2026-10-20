@@ -4544,6 +4544,8 @@ class StatsWindow(QWidget):
     # One colour rule for the whole deck page, based on how sure we are the
     # deck wins more than it loses (P(win rate > 50%)) - not on raw cut-offs.
     WINNING, UNCLEAR, LOSING, NEUTRAL = "#66BB6A", "#F9A825", "#EF5350", "#6BB6E8"
+    VERDICT_GAMES = 15           # deck verdict: effective games (or a range clear of par)
+    MATCHUP_VERDICT_GAMES = 10   # matchup verdict: games (or a range clear of par)
 
     def _confidence_accent(self, p_above_even):
         if p_above_even is None:
@@ -4574,8 +4576,14 @@ class StatsWindow(QWidget):
         tag_html = f" <span style='font-size:10px; font-weight:500; color:#8A97AA'>{tag}</span>" if tag else ""
         layout.addWidget(self._card_label(f"{headline}{tag_html}", f"color: {accent}; font-size: 24px; font-weight: 700;"))
         if mid is not None:
+            # One axis on every deck card (20-80%, wider only if a range needs
+            # it): an auto-zoomed axis per card made bars incomparable.
+            span = [v for v in (low, high, benchmark) if v is not None]
+            domain = (min([0.2] + [math.floor((v - 0.02) * 20) / 20 for v in span]),
+                      max([0.8] + [math.ceil((v + 0.02) * 20) / 20 for v in span]))
             layout.addWidget(RangeBar(low, mid, high, accent, benchmark=benchmark, show_scale=True,
-                                      benchmark_label=benchmark_label, par=par, domain="auto"))
+                                      benchmark_label=benchmark_label, par=par,
+                                      domain=(max(0.0, domain[0]), min(1.0, domain[1]))))
         if caption:
             layout.addWidget(self._card_label(caption, "color: rgba(200,212,228,0.72); font-size: 10px;"))
         layout.addStretch()
@@ -4676,6 +4684,13 @@ class StatsWindow(QWidget):
         # 3. Verdict
         p_even = post.get("p_above_even", 0.5)
         verdict = verdict_from_probability(p_even) if games else "No games"
+        # A verdict needs enough games or a range that already excludes par;
+        # before that the words over-read noise (Stats Review §3.8).
+        n_eff = post.get("games", 0) or 0
+        decided = post.get("low", 0) > post.get("par", 0.5) or post.get("high", 1) < post.get("par", 0.5)
+        early = bool(games) and n_eff < self.VERDICT_GAMES and not decided
+        if early:
+            verdict = "Too early"
         tip = (f"<b>{p_even * 100:.0f}% chance</b> this deck does better than an even contest "
                f"({_par_text(post.get('par', 0.5))}).<br>"
                f"<span style='color:#8A97AA'>{analysis.get('confidence_note', '')}</span><br>"
@@ -4683,9 +4698,14 @@ class StatsWindow(QWidget):
         if analysis.get("p_beats_limitless") is not None:
             tip += (f"<br>{analysis['p_beats_limitless'] * 100:.0f}% chance you beat the Limitless average "
                     f"({limitless_wr * 100:.1f}%).")
+        if early:
+            tip = (f"<b>Too early for a verdict:</b> {n_eff:.0f} effective games, and the likely range still "
+                   f"includes {_par_text(post.get('par', 0.5))}. Verdicts start at {self.VERDICT_GAMES} games "
+                   f"(or sooner once the range clears it).<br>" + tip)
         top.addWidget(self._create_estimate_card(
-            "VERDICT", verdict, self._confidence_accent(p_even if games else None), 0, None, 0,
-            f"{p_even * 100:.0f}% chance it's above {_par_text(post.get('par', 0.5))}" if games else "", tip), 0, 2)
+            "VERDICT", verdict, self._confidence_accent(p_even if games and not early else None), 0, None, 0,
+            (f"~{self.VERDICT_GAMES - n_eff:.0f} more games for a verdict" if early else
+             f"{p_even * 100:.0f}% chance it's above {_par_text(post.get('par', 0.5))}") if games else "", tip), 0, 2)
         for col in range(3):
             top.setColumnStretch(col, 1)
 
@@ -4726,9 +4746,17 @@ class StatsWindow(QWidget):
             extra_widget=strip), 0, 1)
         if limitless_wr is not None:
             edge = est - limitless_wr * 100.0
+            p_beat = analysis.get("p_beats_limitless")
+            lo_edge = (post.get("low", 0) - limitless_wr) * 100.0
+            hi_edge = (post.get("high", 0) - limitless_wr) * 100.0
+            # Coloured only when the difference is likely real (P >= 70% / <= 30%).
             adv.addWidget(self._create_mini_stat(
-                "VS LIMITLESS", f"{edge:+.0f} pts", self._delta_accent(edge),
-                f"Your estimate ({est:.0f}%) vs this archetype's Limitless average ({limitless_wr * 100:.1f}%)."), 0, 2)
+                "VS LIMITLESS", f"{edge:+.0f} pts", self._confidence_accent(p_beat),
+                f"Your estimate ({est:.0f}%) vs this archetype's Limitless average ({limitless_wr * 100:.1f}%).<br>"
+                f"Likely range {lo_edge:+.0f} to {hi_edge:+.0f} pts"
+                + (f" · {p_beat * 100:.0f}% chance you're above it." if p_beat is not None else ".")
+                + "<br><span style='color:#8A97AA'>Limitless records are mostly best-of-three match results, "
+                  "your ladder games best-of-one, so treat small differences as noise.</span>"), 0, 2)
         else:
             adv.addWidget(self._create_mini_stat("VS LIMITLESS", "--", "#AAB7CB",
                                                  "No Limitless archetype matched this deck name."), 0, 2)
@@ -4955,15 +4983,6 @@ class StatsWindow(QWidget):
         if pct >= 50:
             return "#4A9FD8"
         return "#EF5350"
-
-    def _delta_accent(self, delta):
-        if delta is None:
-            return "#AAB7CB"
-        if delta >= 2:
-            return "#66BB6A"
-        if delta <= -2:
-            return "#EF5350"
-        return "#F9A825"
 
     def _deck_tab_label(self, deck_name):
         return deck_name if len(deck_name) <= 22 else f"{deck_name[:19]}..."
@@ -5246,6 +5265,10 @@ class StatsWindow(QWidget):
                 est = post["mean"] * 100.0
                 accent = self._confidence_accent(post["p_above_even"])
                 few = games < 3
+                decided = post["low"] > post.get("par", 0.5) or post["high"] < post.get("par", 0.5)
+                early = not few and games < self.MATCHUP_VERDICT_GAMES and not decided
+                if early:
+                    accent = self.NEUTRAL
                 self._set_meta_item(table, i, 3, f"{est:.0f}%", accent=self.NEUTRAL if few else accent)
                 item = table.item(i, 3)
                 if item is not None:
@@ -5266,6 +5289,15 @@ class StatsWindow(QWidget):
                     if item is not None:
                         item.setToolTip(f"Only {int(games)} game{'s' if games != 1 else ''}: the estimate leans on this "
                                         "deck's overall win rate. Play 3+ games for a matchup verdict.")
+                elif early:
+                    # Many small matchups: some look lopsided by chance alone
+                    # (8 even matchups of 5 games show a "Leaning" 98% of the time).
+                    self._set_meta_item(table, i, 6, f"Too early · {int(games)}/{self.MATCHUP_VERDICT_GAMES}", muted=True)
+                    item = table.item(i, 6)
+                    if item is not None:
+                        item.setToolTip(f"{int(games)} games and the likely range still includes an even matchup. "
+                                        f"With many matchups, a few always look lopsided by chance; verdicts start "
+                                        f"at {self.MATCHUP_VERDICT_GAMES} games or once the range clears 50%.")
                 else:
                     self._set_meta_item(table, i, 6, verdict_from_probability(post["p_above_even"]), accent=accent)
             else:
