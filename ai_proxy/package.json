@@ -1,0 +1,9 @@
+{
+  "name": "ptcgl-monitor-ai-proxy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/logic.test.mjs",
+    "deploy": "wrangler deploy"
+  }
+}

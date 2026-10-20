@@ -51,8 +51,8 @@ P.CHAT_CAPTURE_FILE = os.path.join(TMP, ".chat_capture.json")
 P.EXCEL_FILE = os.path.join(TMP, "none.xlsx")
 P.load_username = lambda: ME
 P._console_available = lambda: False
-P.is_local_only_mode = lambda: True
-P.load_api_key = lambda: None
+P.ai_provider.resolve = lambda settings=None: P.ai_provider.Plan("none", reason="local_only")
+P.ai_provider.ai_ready = lambda settings=None: False
 
 
 def _find_test_battle():

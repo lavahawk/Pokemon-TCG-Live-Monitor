@@ -18,6 +18,13 @@
 #define AppPublisher "lavahawk"
 #define AppURL       "https://github.com/lavahawk/Pokemon-TCG-Live-Monitor"
 #define RunValue     "PokemonTCGLiveMonitor"
+; ai = built-in AI through the hosted proxy; free = local predictor or your own model.
+#ifndef Edition
+  #define Edition "ai"
+#endif
+#ifndef EditionTag
+  #define EditionTag ""
+#endif
 
 [Setup]
 AppId={{D8F9A4C3-7B2E-4F1A-9D3C-5E8F1A2B4C6D}
@@ -40,7 +47,7 @@ DisableProgramGroupPage=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-OutputBaseFilename=PokemonTCGLiveMonitor-{#AppVersion}-Setup
+OutputBaseFilename=PokemonTCGLiveMonitor-{#AppVersion}-{#EditionTag}Setup
 SetupIconFile={#RootDir}\icon.ico
 UninstallDisplayIcon={app}\icon.ico
 UninstallDisplayName={#AppName}
@@ -130,6 +137,12 @@ Type: files; Name: "{app}\button_templates\scale_cache.json"
 var
   AccountPage: TInputQueryWizardPage;
   AccountPrefilled: Boolean;
+  AIPage: TInputOptionWizardPage;
+  KeyPage: TInputQueryWizardPage;
+  CompatPage: TInputQueryWizardPage;
+  AIPrefilled: Boolean;
+  // AIPage index -> provider ("hosted" only in the AI edition).
+  AIProviders: array of String;
 
 // Stop every process running from the install folder (monitor, overlay,
 // blocker, dashboard and Qt WebEngine helpers) so files can be replaced.
@@ -173,24 +186,119 @@ begin
     Result := Trim(String(S));
 end;
 
+procedure AddProvider(Id, Caption: String);
+begin
+  SetArrayLength(AIProviders, GetArrayLength(AIProviders) + 1);
+  AIProviders[GetArrayLength(AIProviders) - 1] := Id;
+  AIPage.Add(Caption);
+end;
+
+function ChosenProvider: String;
+begin
+  Result := 'none';
+  if (AIPage.SelectedValueIndex >= 0) and (AIPage.SelectedValueIndex < GetArrayLength(AIProviders)) then
+    Result := AIProviders[AIPage.SelectedValueIndex];
+end;
+
+procedure SelectProvider(Id: String);
+var
+  I: Integer;
+begin
+  for I := 0 to GetArrayLength(AIProviders) - 1 do
+    if AIProviders[I] = Id then
+      AIPage.SelectedValueIndex := I;
+end;
+
+function JsonString(Value: String): String;
+begin
+  StringChangeEx(Value, '\', '\\', True);
+  StringChangeEx(Value, '"', '\"', True);
+  Result := '"' + Value + '"';
+end;
+
 procedure InitializeWizard;
 begin
   AccountPage := CreateInputQueryPage(wpSelectTasks,
-    'Your account', 'Both fields are optional and can be changed later in the dashboard.',
-    'Your Pokemon TCG Live username lets the monitor tell your moves from your opponent''s in battle logs.' + #13#10#13#10 +
-    'An OpenAI API key enables AI deck detection. Without one the app runs in Local-Only mode (OCR and log parsing).');
+    'Your account', 'Optional; you can change it later in the dashboard.',
+    'Your Pokemon TCG Live username lets the monitor tell your moves from your opponent''s in battle logs.');
   AccountPage.Add('Pokemon TCG Live username:', False);
-  AccountPage.Add('OpenAI API key (optional):', True);
+
+  AIPage := CreateInputOptionPage(AccountPage.ID, 'AI deck detection',
+    'How should the app name your opponent''s deck after each battle?',
+    'You can change this any time in the dashboard (Settings, AI Parsing Mode).', True, False);
+#if Edition == "ai"
+  AddProvider('hosted', 'Built-in AI (recommended, nothing to set up)');
+#endif
+  AddProvider('openai', 'My own OpenAI API key');
+  AddProvider('compatible', 'A local model or another provider (Ollama, LM Studio, OpenRouter, Groq...)');
+  AddProvider('none', 'No AI: I pick the deck myself, helped by the local predictor');
+  AIPage.SelectedValueIndex := 0;
+
+  KeyPage := CreateInputQueryPage(AIPage.ID, 'Your OpenAI API key',
+    'Stored encrypted for your Windows account only.',
+    'Create a key at platform.openai.com/api-keys. Leave it empty to keep the key already saved by an earlier install.');
+  KeyPage.Add('OpenAI API key:', True);
+
+  CompatPage := CreateInputQueryPage(AIPage.ID, 'Your model',
+    'Any server that speaks the OpenAI chat API.',
+    'Examples: Ollama http://localhost:11434/v1 (model e.g. llama3.1), LM Studio http://localhost:1234/v1, ' +
+    'OpenRouter https://openrouter.ai/api/v1. The key is optional for local servers.');
+  CompatPage.Add('Base URL:', False);
+  CompatPage.Add('Model name:', False);
+  CompatPage.Add('API key (optional):', True);
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := ((PageID = KeyPage.ID) and (ChosenProvider <> 'openai')) or
+            ((PageID = CompatPage.ID) and (ChosenProvider <> 'compatible'));
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Dir: String;
+begin
+  Result := True;
+  Dir := AddBackslash(WizardDirValue);
+  if (CurPageID = KeyPage.ID) and (Trim(KeyPage.Values[0]) = '') and not FileExists(Dir + '.openai_key.dpapi') then
+  begin
+    MsgBox('Enter your OpenAI API key, or go back and choose another option.', mbError, MB_OK);
+    Result := False;
+  end
+  else if (CurPageID = CompatPage.ID) and ((Trim(CompatPage.Values[0]) = '') or (Trim(CompatPage.Values[1]) = '')) then
+  begin
+    MsgBox('Enter the base URL and the model name.', mbError, MB_OK);
+    Result := False;
+  end;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
+var
+  Settings: String;
 begin
   // Pre-fill from an existing install (the folder is known only by now).
   if (CurPageID = AccountPage.ID) and not AccountPrefilled then
   begin
     AccountPage.Values[0] := ReadTextFile(AddBackslash(WizardDirValue) + '.user_config');
-    AccountPage.Values[1] := ReadTextFile(AddBackslash(WizardDirValue) + '.openai_key');
     AccountPrefilled := True;
+  end;
+  // An earlier install's choice: keep it selected (keys stay encrypted on disk).
+  if (CurPageID = AIPage.ID) and not AIPrefilled then
+  begin
+    Settings := ReadTextFile(AddBackslash(WizardDirValue) + '.app_settings.json');
+    if Pos('"ai_provider": "compatible"', Settings) > 0 then
+      SelectProvider('compatible')
+    // local_only_mode alone was the old installers' default without a key.
+    else if Pos('"ai_provider": "none"', Settings) > 0 then
+      SelectProvider('none')
+    else if FileExists(AddBackslash(WizardDirValue) + '.openai_key.dpapi') then
+      SelectProvider('openai')
+#if Edition == "free"
+    else
+      SelectProvider('none')
+#endif
+    ;
+    AIPrefilled := True;
   end;
 end;
 
@@ -213,27 +321,37 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  Dir, User, Key: String;
+  Dir, User, Key, Provider, Choice: String;
 begin
   if CurStep <> ssPostInstall then
     Exit;
   Dir := ExpandConstant('{app}');
+  // Silent runs (in-app updates) never touch the account or the AI choice.
   if not WizardSilent then
   begin
     User := Trim(AccountPage.Values[0]);
-    Key := Trim(AccountPage.Values[1]);
     if User <> '' then
       SaveStringToFile(Dir + '\.user_config', User, False);
-    if Key <> '' then
-      SaveStringToFile(Dir + '\.openai_key', Key, False)
-    else
-      DeleteFile(Dir + '\.openai_key');
+    // Plain-text keys are encrypted (DPAPI) and deleted by the app on its
+    // first start (app_settings / ai_provider).
+    Provider := ChosenProvider;
+    Choice := '{"ai_provider": ' + JsonString(Provider);
+    if Provider = 'openai' then
+    begin
+      Key := Trim(KeyPage.Values[0]);
+      if Key <> '' then
+        SaveStringToFile(Dir + '\.openai_key', Key, False);
+    end
+    else if Provider = 'compatible' then
+    begin
+      Choice := Choice + ', "ai_base_url": ' + JsonString(Trim(CompatPage.Values[0])) +
+                ', "ai_model": ' + JsonString(Trim(CompatPage.Values[1]));
+      Key := Trim(CompatPage.Values[2]);
+      if Key <> '' then
+        SaveStringToFile(Dir + '\.ai_compat_key', Key, False);
+    end;
+    SaveStringToFile(Dir + '\.ai_provider_install.json', Choice + '}', False);
   end;
-  // First install without a key: start in local-only mode. Never on an
-  // update, and never when a key is already stored (encrypted since 2.7).
-  if not WizardSilent and not FileExists(Dir + '\.openai_key') and not FileExists(Dir + '\.openai_key.dpapi')
-     and not FileExists(Dir + '\.app_settings.json') then
-    SaveStringToFile(Dir + '\.app_settings.json', '{"local_only_mode": true}', False);
   // Unticked on this run: remove an earlier auto-start entry of THIS install
   // (never one that launches another copy, e.g. a dev checkout).
   if not WizardSilent and not WizardIsTaskSelected('autostart') and RunValueIsOurs(Dir) then

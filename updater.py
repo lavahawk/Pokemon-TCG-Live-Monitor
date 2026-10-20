@@ -31,6 +31,7 @@ REPO = "lavahawk/Pokemon-TCG-Live-Monitor"
 LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_NAME = re.compile(r"Setup\.exe$", re.IGNORECASE)
+FREE_NAME = re.compile(r"-Free-Setup\.exe$", re.IGNORECASE)
 
 
 def parse_version(text):
@@ -51,6 +52,24 @@ def _get_json(url, timeout=15):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _pick_installer(assets, edition=None):
+    """The Setup.exe of this edition: "...-Free-Setup.exe" for the free
+    build, the other one for the AI build (never the free one: it would
+    drop the built-in AI)."""
+    if edition is None:
+        try:
+            import edition as _edition
+            edition = _edition.EDITION
+        except Exception:
+            edition = "ai"
+    setups = [a for a in assets if INSTALLER_NAME.search(a.get("name") or "")]
+    free = [a for a in setups if FREE_NAME.search(a.get("name") or "")]
+    full = [a for a in setups if a not in free]
+    if edition == "free":
+        return (free or full or [None])[0]
+    return (full or [None])[0]
+
+
 def latest_release(fetch=None):
     """{"version", "tag", "page", "notes", "installer": {"name", "url", "size"}, "sha256_url"}
     or None (no release / offline). fetch(url) -> parsed JSON (tests)."""
@@ -61,7 +80,7 @@ def latest_release(fetch=None):
     if not isinstance(data, dict) or data.get("draft") or data.get("prerelease"):
         return None
     assets = data.get("assets") or []
-    installer = next((a for a in assets if INSTALLER_NAME.search(a.get("name") or "")), None)
+    installer = _pick_installer(assets)
     checksum = None
     if installer:
         checksum = next((a for a in assets if (a.get("name") or "") == installer["name"] + ".sha256"), None)

@@ -10,10 +10,9 @@ import pyperclip
 from pydantic import BaseModel
 
 from BattleDatabase import BattleDatabase, log_hash
+import ai_provider
 from app_settings import (
     is_ai_anonymize_names,
-    is_local_only_mode,
-    load_api_key,
     load_username,
     save_username,
 )
@@ -436,7 +435,7 @@ def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_
         result=win_or_loss,
         my_rank=load_last_rank(),
         confidence=confidence,
-        deck_source=deck_source or ("AI" if not is_local_only_mode() and load_api_key() else "Local"),
+        deck_source=deck_source or ("AI" if ai_provider.ai_ready() else "Local"),
         log_file=os.path.abspath(log_file_path) if log_file_path else latest_log_file(),
         is_tournament=is_tournament,
         chat_log=chat_log,
@@ -689,7 +688,24 @@ def _record_ai_usage(model, completion, prompt_chars):
         print(f"[AI] usage not recorded: {exc}")
 
 
-def ai_parse(battlelog, username, api_key, anonymize=None, client=None):
+def _reply_json(text):
+    """The JSON object in a model reply (local models may wrap it in prose
+    or a code fence)."""
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError):
+        match = re.search(r"\{.*\}", str(text or ""), re.S)
+        if not match:
+            raise
+        return json.loads(match.group(0))
+
+
+def ai_parse(battlelog, username, api_key=None, anonymize=None, client=None, plan=None):
+    """plan: an ai_provider.Plan (client + models); without one, an OpenAI
+    client from api_key and the ai_usage model order."""
+    models, json_mode = None, True
+    if plan is not None:
+        client, models, json_mode = plan.client, plan.models, plan.json_mode
     if client is None:
         from openai import OpenAI
         client = OpenAI(api_key=api_key, timeout=45.0, max_retries=1)
@@ -756,21 +772,24 @@ Battlelog:
 <<<END BATTLELOG>>>
 """
 
+    messages = [
+        {"role": "system", "content": "You parse Pokemon TCG battle logs and return JSON only."},
+        {"role": "user", "content": prompt},
+    ]
     last_error = None
-    for model in ai_usage.models_for_now():
+    for model in (models if models is not None else ai_usage.models_for_now()):
         try:
-            completion = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You parse Pokemon TCG battle logs and return JSON only.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-            )
-            payload = json.loads(completion.choices[0].message.content)
+            try:
+                kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
+                completion = client.chat.completions.create(model=model, messages=messages, **kwargs)
+            except Exception as exc:
+                # Some OpenAI-compatible servers (local models) reject JSON mode.
+                if not (json_mode and plan is not None and plan.provider == "compatible"
+                        and "response_format" in str(exc)):
+                    raise
+                json_mode = False
+                completion = client.chat.completions.create(model=model, messages=messages)
+            payload = _reply_json(completion.choices[0].message.content)
             parsed = BattleLogOutput(
                 My_deck=_coerce_text_field(payload, "My_deck", "MyDeck", "my_deck"),
                 OpponentsDeck=_coerce_text_field(payload, "OpponentsDeck", "OpponentDeck", "opponent_deck", "Opponent"),
@@ -778,7 +797,8 @@ Battlelog:
                 Confidence=_coerce_confidence_value(payload.get("Confidence")),
             )
             print(f"[AI] Parsed using model: {model}")
-            _record_ai_usage(model, completion, len(prompt) + 60)
+            if plan is None or plan.provider != "compatible":  # local/other providers: not our bill
+                _record_ai_usage(model, completion, len(prompt) + 60)
             alternatives = _coerce_candidates(payload)
             result = {
                 "My_deck": parsed.My_deck,
@@ -802,6 +822,9 @@ Battlelog:
             return result
         except Exception as exc:
             last_error = exc
+            if plan is not None and ai_provider.handle_failure(plan, exc)[0]:
+                print(f"[AI] {exc}")
+                break
             print(f"[AI] Model {model} failed: {exc}. Trying next...")
     raise last_error
 
@@ -826,30 +849,32 @@ def main():
         print("DUPLICATE: this battle log is already in the database.")
         return
 
-    settings_local_only = is_local_only_mode()
-    api_key = load_api_key()
-    budget_spent = bool(api_key) and not settings_local_only and ai_usage.over_budget()
-    use_local_only = settings_local_only or not api_key or budget_spent
-    manual_reason = None
-    if use_local_only:
-        manual_reason = "local_only" if settings_local_only else ("no_key" if not api_key else "ai_budget")
-
-    if use_local_only:
-        if settings_local_only:
+    try:
+        plan = ai_provider.resolve()
+    except Exception as exc:
+        print(f"[AI] provider setup failed: {exc}")
+        plan = ai_provider.Plan("none", reason="ai_failed")
+    manual_reason = plan.reason
+    if plan.client is None:
+        if manual_reason == "local_only":
             print("Local-only mode is enabled. Falling back to manual opponent deck entry.")
-        elif budget_spent:
-            print(f"AI usage limit reached for this month; manual mode until {ai_usage.next_reset()}.")
+        elif manual_reason == "no_key":
+            print("No AI model configured. Falling back to local-only parsing.")
         else:
-            print("No OpenAI API key found. Falling back to local-only parsing.")
+            print("AI deck detection unavailable. Falling back to local-only parsing.")
         response_dict = local_fallback_parse(battlelog, username)
     else:
+        print(f"[AI] Provider: {plan.provider}")
         try:
-            response_dict = ai_parse(battlelog, username, api_key)
+            response_dict = ai_parse(battlelog, username, plan=plan)
         except Exception as exc:
-            print(f"AI parse failed: {exc}")
+            manual_reason = ai_provider.handle_failure(plan, exc)[1]
+            if manual_reason == "ai_budget":
+                print("AI usage limit reached for this month; manual mode until next month.")
+            else:
+                print(f"AI parse failed: {exc}")
             print("Falling back to local-only parsing.")
             response_dict = local_fallback_parse(battlelog, username)
-            manual_reason = "ai_failed"
 
     my_deck = response_dict.get("My_deck") or "Unknown Deck"
     opponents_deck = response_dict.get("OpponentsDeck") or "Unknown"

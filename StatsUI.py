@@ -61,6 +61,7 @@ import adblock
 import card_usage
 from deck_score import compute_scores
 import formulas
+import ai_provider
 from ui_widgets import DeckFlagButton, DeckTabBar, MineRowDelegate, MINE_ROLE
 from leagues import LEAGUES, league_name
 from app_settings import (
@@ -4318,13 +4319,18 @@ class StatsWindow(QWidget):
         if index < 0 or not hasattr(self, "api_key_input"):
             return
         self.tab_widget.setCurrentIndex(index)
-        field = self.api_key_input
+        combo = getattr(self, "ai_provider_combo", None)
+        if combo is not None and combo.currentData() not in ("auto", "openai", "compatible"):
+            # Off / Built-in AI have no key field: switch to the one that does.
+            combo.setCurrentIndex(max(0, combo.findData("auto")))
+        compat = combo is not None and combo.currentData() == "compatible"
+        field = self.ai_base_url_input if compat else self.api_key_input
 
         def focus():
             try:
                 self.settings_scroll.ensureWidgetVisible(field, 40, 120)
                 field.setFocus()
-                card = field.parentWidget()
+                card = getattr(self, "parser_card", None) or field.parentWidget()
                 FlashOverlay(card if card is not None else field, radius=10, color="#F0B43C")
             except Exception:
                 pass
@@ -7530,12 +7536,30 @@ class StatsWindow(QWidget):
         parser_layout.setSpacing(8)
         parser_layout.setContentsMargins(12, 8, 12, 12)
 
+        provider_label = QLabel("Deck detection")
+        provider_label.setObjectName("settingsDesc")
+        parser_layout.addWidget(provider_label)
+
+        self.ai_provider_combo = QComboBox()
+        self.ai_provider_combo.setObjectName("metaCombo")
+        self.ai_provider_combo.setFixedHeight(30)
+        for key in ai_provider.PROVIDERS:
+            if key == "hosted" and not ai_provider.hosted_available():
+                continue
+            self.ai_provider_combo.addItem(ai_provider.LABELS[key], key)
+        parser_layout.addWidget(self.ai_provider_combo)
+
+        # Own OpenAI key (Automatic / My OpenAI key)
+        self.ai_openai_box = QWidget()
+        openai_layout = QVBoxLayout(self.ai_openai_box)
+        openai_layout.setContentsMargins(0, 0, 0, 0)
+        openai_layout.setSpacing(8)
         self.api_key_input = QLineEdit()
         self.api_key_input.setObjectName("metaSearch")
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_input.setPlaceholderText("OpenAI API key")
         self.api_key_input.setText(load_api_key() or "")
-        parser_layout.addWidget(self.api_key_input)
+        openai_layout.addWidget(self.api_key_input)
 
         self.show_api_key_toggle = QCheckBox("Show API key")
         self.show_api_key_toggle.setObjectName("settingsCheck")
@@ -7544,26 +7568,77 @@ class StatsWindow(QWidget):
                 QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
             )
         )
-        parser_layout.addWidget(self.show_api_key_toggle)
+        openai_layout.addWidget(self.show_api_key_toggle)
+        parser_layout.addWidget(self.ai_openai_box)
+
+        # Local model or another OpenAI-compatible provider
+        self.ai_compat_box = QWidget()
+        compat_layout = QVBoxLayout(self.ai_compat_box)
+        compat_layout.setContentsMargins(0, 0, 0, 0)
+        compat_layout.setSpacing(8)
+        self.ai_preset_combo = QComboBox()
+        self.ai_preset_combo.setObjectName("metaCombo")
+        self.ai_preset_combo.setFixedHeight(30)
+        self.ai_preset_combo.addItem("Fill in a preset...", "")
+        for name, url in self.AI_PRESETS:
+            self.ai_preset_combo.addItem(name, url)
+        self.ai_preset_combo.activated.connect(self._apply_ai_preset)
+        compat_layout.addWidget(self.ai_preset_combo)
+        self.ai_base_url_input = QLineEdit()
+        self.ai_base_url_input.setObjectName("metaSearch")
+        self.ai_base_url_input.setPlaceholderText("Base URL, e.g. http://localhost:11434/v1")
+        self.ai_base_url_input.setText(self.app_settings.get("ai_base_url") or "")
+        compat_layout.addWidget(self.ai_base_url_input)
+        self.ai_model_input = QLineEdit()
+        self.ai_model_input.setObjectName("metaSearch")
+        self.ai_model_input.setPlaceholderText("Model name, e.g. llama3.1")
+        self.ai_model_input.setText(self.app_settings.get("ai_model") or "")
+        compat_layout.addWidget(self.ai_model_input)
+        self.ai_compat_key_input = QLineEdit()
+        self.ai_compat_key_input.setObjectName("metaSearch")
+        self.ai_compat_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ai_compat_key_input.setPlaceholderText("API key (optional for local models)")
+        try:
+            self.ai_compat_key_input.setText(ai_provider.load_compat_key() or "")
+        except Exception:
+            pass
+        compat_layout.addWidget(self.ai_compat_key_input)
+        self.ai_compat_show_toggle = QCheckBox("Show API key")
+        self.ai_compat_show_toggle.setObjectName("settingsCheck")
+        self.ai_compat_show_toggle.toggled.connect(
+            lambda checked: self.ai_compat_key_input.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        compat_layout.addWidget(self.ai_compat_show_toggle)
+        parser_layout.addWidget(self.ai_compat_box)
 
         self.local_only_checkbox = QCheckBox("Enable local-only parsing fallback")
         self.local_only_checkbox.setObjectName("settingsCheck")
-        self.local_only_checkbox.setChecked(bool(self.app_settings.get("local_only_mode", False)))
-        self.local_only_checkbox.toggled.connect(lambda checked: self.refresh_parser_mode_status())
+        self.local_only_checkbox.setToolTip("Same as choosing Off (local predictor) above.")
         parser_layout.addWidget(self.local_only_checkbox)
+
+        saved_provider = "none" if self.app_settings.get("local_only_mode", False) else (
+            self.app_settings.get("ai_provider") or "auto")
+        index = self.ai_provider_combo.findData(saved_provider)
+        self.ai_provider_combo.setCurrentIndex(index if index >= 0 else max(0, self.ai_provider_combo.findData("auto")))
+        self.local_only_checkbox.setChecked(self.ai_provider_combo.currentData() == "none")
+        self.ai_provider_combo.currentIndexChanged.connect(self._on_ai_provider_changed)
+        self.local_only_checkbox.toggled.connect(self._on_local_only_toggled)
+        self._update_ai_provider_fields()
 
         # SEC-09: say plainly what leaves the machine, and offer to strip names.
         self.privacy_notice_label = QLabel(
-            "Privacy: with an API key, each battle log is sent to OpenAI to name the decks. "
+            "Privacy: unless detection is off, each battle log is sent to the chosen AI to name the decks. "
             "Replay uploads the log to ptcglreplay.com. Limitless match chat is saved locally with each battle.")
         self.privacy_notice_label.setObjectName("settingsDesc")
         self.privacy_notice_label.setWordWrap(True)
         parser_layout.addWidget(self.privacy_notice_label)
 
-        self.ai_anonymize_checkbox = QCheckBox("Hide both usernames from OpenAI (sent as Player / Opponent)")
+        self.ai_anonymize_checkbox = QCheckBox("Hide both usernames from the AI (sent as Player / Opponent)")
         self.ai_anonymize_checkbox.setObjectName("settingsCheck")
         self.ai_anonymize_checkbox.setToolTip(
-            "Replaces your name and your opponent's name in the log before it is sent to OpenAI. "
+            "Replaces your name and your opponent's name in the log before it is sent to the AI. "
             "Local parsing and the saved log keep the real names.")
         self.ai_anonymize_checkbox.setChecked(bool(self.app_settings.get("ai_anonymize_names", True)))
         self.ai_anonymize_checkbox.toggled.connect(
@@ -7589,11 +7664,11 @@ class StatsWindow(QWidget):
         save_parser_btn.clicked.connect(self.save_parser_settings)
         parser_btn_row.addWidget(save_parser_btn)
 
-        clear_key_btn = QPushButton("Clear API Key")
-        clear_key_btn.setObjectName("settingsBtn")
-        clear_key_btn.setFixedHeight(38)
-        clear_key_btn.clicked.connect(self.clear_parser_api_key)
-        parser_btn_row.addWidget(clear_key_btn)
+        self.clear_key_btn = QPushButton("Clear OpenAI Key")
+        self.clear_key_btn.setObjectName("settingsBtn")
+        self.clear_key_btn.setFixedHeight(38)
+        self.clear_key_btn.clicked.connect(self.clear_parser_api_key)
+        parser_btn_row.addWidget(self.clear_key_btn)
 
         parser_layout.addLayout(parser_btn_row)
 
@@ -7603,7 +7678,7 @@ class StatsWindow(QWidget):
         parser_layout.addWidget(self.parser_mode_status_label)
 
         parser_desc = QLabel(
-            "When local-only mode is enabled, or no API key is available, battle parsing falls back to OCR/manual flow. "
+            "When detection is off, or no AI is available, battle parsing falls back to OCR/manual flow. "
             "The parser will use your last OCR-detected deck, and the overlay asks for the opponent's deck "
             "after each battle."
         )
@@ -7613,6 +7688,8 @@ class StatsWindow(QWidget):
 
         parser_card.layout().addLayout(parser_layout)
         layout.addWidget(parser_card)
+        self.parser_card = parser_card
+        self._update_ai_provider_fields()
         self.refresh_parser_mode_status()
         
         # AutoRun Section
@@ -10548,16 +10625,82 @@ class StatsWindow(QWidget):
         except Exception as e:
             print(f"Error opening logs folder: {e}")
 
-    def refresh_parser_mode_status(self):
-        local_only = bool(self.app_settings.get("local_only_mode", False))
-        has_key = bool(load_api_key())
-        if local_only:
-            text = ("Local-only mode is active. The parser will not call GPT; the overlay asks for the "
-                    "opponent's deck after each battle.")
-        elif has_key:
-            text = "GPT parsing is active. If an API call fails, the parser will fall back to local-only flow."
+    AI_PRESETS = (
+        ("Ollama (local)", "http://localhost:11434/v1"),
+        ("LM Studio (local)", "http://localhost:1234/v1"),
+        ("OpenRouter", "https://openrouter.ai/api/v1"),
+        ("Groq", "https://api.groq.com/openai/v1"),
+    )
+
+    def _apply_ai_preset(self, index):
+        url = self.ai_preset_combo.itemData(index)
+        if url:
+            self.ai_base_url_input.setText(url)
+            self.ai_base_url_input.setFocus()
+        self.ai_preset_combo.setCurrentIndex(0)
+
+    def _on_ai_provider_changed(self, _index=0):
+        # Off == local-only mode: keep the checkbox in step without re-entering.
+        want = self.ai_provider_combo.currentData() == "none"
+        if self.local_only_checkbox.isChecked() != want:
+            self.local_only_checkbox.blockSignals(True)
+            self.local_only_checkbox.setChecked(want)
+            self.local_only_checkbox.blockSignals(False)
+        self._update_ai_provider_fields()
+        self.refresh_parser_mode_status()
+
+    def _on_local_only_toggled(self, checked):
+        combo = self.ai_provider_combo
+        if checked:
+            combo.setCurrentIndex(max(0, combo.findData("none")))
+        elif combo.currentData() == "none":
+            combo.setCurrentIndex(max(0, combo.findData("auto")))
         else:
-            text = "No API key is saved. The parser will automatically fall back to local-only mode."
+            self._on_ai_provider_changed()
+
+    def _update_ai_provider_fields(self):
+        provider = self.ai_provider_combo.currentData()
+        self.ai_openai_box.setVisible(provider in ("auto", "openai"))
+        self.ai_compat_box.setVisible(provider == "compatible")
+        if hasattr(self, "clear_key_btn"):
+            self.clear_key_btn.setVisible(provider in ("auto", "openai"))
+
+    def refresh_parser_mode_status(self):
+        combo = getattr(self, "ai_provider_combo", None)
+        choice = combo.currentData() if combo is not None else (
+            "none" if self.app_settings.get("local_only_mode", False) else (self.app_settings.get("ai_provider") or "auto"))
+        if choice == "auto":
+            if combo is not None and hasattr(self, "api_key_input"):
+                has_key = bool(self.api_key_input.text().strip())
+            else:
+                has_key = bool(load_api_key())
+            choice = "openai" if has_key else ("hosted" if ai_provider.hosted_available() else "none")
+            auto = True
+        else:
+            auto = False
+        if choice == "hosted":
+            text = ("Built-in AI is active. Your battle logs go through the app's secure server to OpenAI with "
+                    "player names removed; no key needed.")
+        elif choice == "openai":
+            if auto or (hasattr(self, "api_key_input") and self.api_key_input.text().strip()) or load_api_key():
+                text = "Your OpenAI key is used for deck detection. If a call fails, the overlay asks for the deck."
+            else:
+                text = "No OpenAI key is saved, so deck detection falls back to the local predictor."
+        elif choice == "compatible":
+            if combo is not None:
+                ready = bool(self.ai_base_url_input.text().strip() and self.ai_model_input.text().strip())
+            else:
+                ready = bool(self.app_settings.get("ai_base_url") and self.app_settings.get("ai_model"))
+            if ready:
+                text = ("Deck detection uses the model you set up. Local servers keep logs on this PC; "
+                        "other providers receive them. If a call fails, the overlay asks for the deck.")
+            else:
+                text = "Enter a base URL and a model name, or deck detection falls back to the local predictor."
+        else:
+            text = ("Deck detection is off. The parser will not call an AI; the overlay asks for the "
+                    "opponent's deck after each battle.")
+            if auto:
+                text = "No API key is saved. " + text
         if hasattr(self, "parser_mode_status_label"):
             self.parser_mode_status_label.setText(text)
 
@@ -10576,8 +10719,8 @@ class StatsWindow(QWidget):
                  "A small Reset? popup above the overlay when Pokemon TCG Live starts (only if today's "
                  "W-L isn't 0-0). It fades away on its own after about 10 seconds."),
                 ("manual_mode_notice", "Remind me when AI deck detection is off",
-                 "Without an OpenAI API key (or with local-only mode on) a small card says so when the "
-                 "overlay starts, with a shortcut to the key setting."),
+                 "Without a working AI (no key, or detection set to Off) a small card says so when the "
+                 "overlay starts, with a shortcut to the setting."),
                 ("check_updates", "Check for updates when the app starts",
                  "Looks for a newer release on GitHub shortly after the overlay appears. If there is one, a "
                  "card offers to download and install it (one click; your battles and settings stay).")):
@@ -10923,9 +11066,25 @@ class StatsWindow(QWidget):
     def save_parser_settings(self):
         key_value = (self.api_key_input.text() if hasattr(self, "api_key_input") else "").strip()
         self.app_settings = {**load_app_settings(), **self.app_settings}
-        self.app_settings["local_only_mode"] = bool(
-            self.local_only_checkbox.isChecked() if hasattr(self, "local_only_checkbox") else False
-        )
+        if hasattr(self, "ai_provider_combo"):
+            provider = self.ai_provider_combo.currentData() or "auto"
+            self.app_settings["ai_provider"] = provider
+            self.app_settings["local_only_mode"] = provider == "none"
+            base_url = self.ai_base_url_input.text().strip()
+            model = self.ai_model_input.text().strip()
+            for setting, value in (("ai_base_url", base_url), ("ai_model", model)):
+                if value:
+                    self.app_settings[setting] = value
+                else:
+                    self.app_settings.pop(setting, None)
+            try:
+                ai_provider.save_compat_key(self.ai_compat_key_input.text())
+            except Exception as exc:
+                print(f"[AI] could not save the provider key: {exc}")
+        else:
+            self.app_settings["local_only_mode"] = bool(
+                self.local_only_checkbox.isChecked() if hasattr(self, "local_only_checkbox") else False
+            )
         save_app_settings(self.app_settings)
         if key_value:
             save_api_key(key_value)

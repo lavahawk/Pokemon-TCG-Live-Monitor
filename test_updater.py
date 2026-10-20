@@ -95,6 +95,16 @@ def test_download_verifies_checksum():
         assert "checksum" in str(exc)
 
 
+def test_installer_matches_edition():
+    assets = [{"name": "PokemonTCGLiveMonitor-2.8.0-Free-Setup.exe"}, {"name": "PokemonTCGLiveMonitor-2.8.0-Setup.exe"},
+              {"name": "PokemonTCGLiveMonitor-2.8.0-Setup.exe.sha256"}]
+    assert U._pick_installer(assets, "ai")["name"] == "PokemonTCGLiveMonitor-2.8.0-Setup.exe"
+    assert U._pick_installer(assets, "free")["name"] == "PokemonTCGLiveMonitor-2.8.0-Free-Setup.exe"
+    # Older releases have one Setup.exe: the free build takes it, the AI build never takes a free one.
+    assert U._pick_installer(assets[1:], "free")["name"] == "PokemonTCGLiveMonitor-2.8.0-Setup.exe"
+    assert U._pick_installer(assets[:1], "ai") is None
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

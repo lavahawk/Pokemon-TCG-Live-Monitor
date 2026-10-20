@@ -31,7 +31,11 @@
 #>
 param(
     [switch]$Clean,
-    [switch]$SkipSmokeTest
+    [switch]$SkipSmokeTest,
+    # ai: built-in AI through the hosted proxy (edition.HOSTED_AI_URL must be set).
+    # free: no built-in AI (local predictor, or the user's own model / key).
+    [ValidateSet("ai", "free")]
+    [string]$Edition = "ai"
 )
 
 $ErrorActionPreference = "Stop"
@@ -192,6 +196,23 @@ foreach ($line in Get-Content (Join-Path $Root "release_manifest.txt")) {
 }
 Info "$count files"
 
+# ── Edition ──────────────────────────────────────────────────────────────
+# The staged edition.py decides the edition; the repo's copy holds the proxy
+# URL (never a key: the OpenAI key exists only as a Cloudflare secret).
+$EditionTag = if ($Edition -eq "free") { "Free-" } else { "" }
+$edFile = Join-Path $Stage "edition.py"
+$edText = Get-Content $edFile -Raw
+if ($Edition -eq "ai") {
+    if ($edText -notmatch 'HOSTED_AI_URL = "https://[^"]+"') {
+        throw "AI edition: set HOSTED_AI_URL in edition.py to the deployed proxy (ai_proxy\README.md), or build -Edition free."
+    }
+} else {
+    $edText = $edText -replace 'EDITION = "ai"', 'EDITION = "free"' -replace 'HOSTED_AI_URL = "[^"]*"', 'HOSTED_AI_URL = ""'
+    Set-Content -Path $edFile -Value $edText -NoNewline -Encoding UTF8
+}
+if ($edText -match 'sk-[A-Za-z0-9_-]{16,}') { throw "edition.py contains something that looks like an OpenAI key." }
+Info "Edition: $Edition"
+
 # ── 4. Smoke test ────────────────────────────────────────────────────────
 if ($SkipSmokeTest) {
     Write-Warning "Smoke test skipped."
@@ -207,7 +228,7 @@ Get-ChildItem $Stage -Recurse -Directory -Filter "__pycache__" -ErrorAction Sile
 # caches, Logs\). Shipping those would overwrite a user's battle history on
 # every upgrade (it did, v2.4.0-v2.6.0). Remove everything the app generates.
 $generated = @("tcg_battles.db", "*.db-journal", ".app_settings.json", ".user_config", ".openai_key",
-    ".openai_key.dpapi", ".decklists.json", ".deck_archetypes.json", ".pet_state.json",
+    ".openai_key.dpapi", ".ai_install.dpapi", ".ai_compat_key", ".ai_compat_key.dpapi", ".ai_provider_install.json", ".decklists.json", ".deck_archetypes.json", ".pet_state.json",
     ".stats_window_geometry.json", ".last_deck", ".ai_usage.json", ".monitor_pid", ".monitor_lock", ".local_model_cache.json", ".label_cards_cache.json",
     ".meta_cache_*.json", ".chat_capture.json", ".overlay_debug.log*", ".game_session")
 foreach ($pattern in $generated) {
@@ -233,11 +254,11 @@ $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\I
           "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw "Inno Setup 6 not found. Install it from https://jrsoftware.org/isdl.php" }
 Info ("Staged bundle: {0} MB" -f (Size-MB $Stage))
-& $iscc "/DAppVersion=$Version" "/DStageDir=$Stage" "/DArtDir=$art" "/DRootDir=$Root" "/O$OutDir" `
+& $iscc "/DAppVersion=$Version" "/DEdition=$Edition" "/DEditionTag=$EditionTag" "/DStageDir=$Stage" "/DArtDir=$art" "/DRootDir=$Root" "/O$OutDir" `
     (Join-Path $PSScriptRoot "PokemonTCGLiveMonitor.iss")
 Check-Exit "Inno Setup compile"
 
-$exe = Join-Path $OutDir "PokemonTCGLiveMonitor-$Version-Setup.exe"
+$exe = Join-Path $OutDir "PokemonTCGLiveMonitor-$Version-$($EditionTag)Setup.exe"
 $sha = (Get-FileHash $exe -Algorithm SHA256).Hash
 Set-Content -Path "$exe.sha256" -Value "$sha  $(Split-Path $exe -Leaf)" -Encoding ASCII
 Write-Host ""

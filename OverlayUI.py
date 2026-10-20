@@ -576,9 +576,11 @@ class MinimalOverlay(QWidget):
             return
         self._manual_notice_checked = True
         try:
-            from app_settings import is_local_only_mode, load_api_key
+            import ai_provider
+            from app_settings import is_local_only_mode
             local_only = is_local_only_mode()
-            has_key = bool(load_api_key())
+            has_key = ai_provider.ai_ready()
+            provider = ai_provider.configured_provider()
         except Exception as exc:
             _dbg(f"manual notice check failed: {exc}")
             return
@@ -590,6 +592,12 @@ class MinimalOverlay(QWidget):
         if local_only:
             title, text = "MANUAL MODE", ("Local-only mode is on, so AI deck detection is off. After each "
                                           "battle you'll pick the opponent's deck yourself.")
+            primary = ("Open Advanced", self.open_api_key_setting)
+        elif provider in ("hosted", "compatible"):
+            title, text = "MANUAL MODE", ("AI deck detection isn't set up yet" +
+                                          (" (the built-in AI couldn't be reached)." if provider == "hosted"
+                                           else ": add a base URL and model.") +
+                                          " Battles are still logged; you'll pick the opponent's deck after each one.")
             primary = ("Open Advanced", self.open_api_key_setting)
         else:
             title, text = "MANUAL MODE", ("No OpenAI API key, so AI deck detection is off. Battles are still "

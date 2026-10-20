@@ -22,6 +22,8 @@ ai_usage.py
 updater.py
 datatransfer.py
 app_settings.py
+ai_provider.py
+edition.py
 startup_utils.py
 qt_dialogs.py
 version.py

@@ -1,0 +1,27 @@
+# Cloudflare Worker that holds the OpenAI key for the AI edition.
+# Deploy: see README.md in this folder. Never put a key in this file.
+name = "ptcgl-monitor-ai"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+AI_ENABLED = "true"            # "false" = kill switch: every install falls back to manual mode
+MONTHLY_BUDGET_USD = "2.5"     # per install
+DAILY_FULL_GAMES = "40"        # per install per day on the primary model, then the light model
+DAILY_MAX_GAMES = "150"        # per install per day, hard stop
+PER_MINUTE = "6"               # per install
+GLOBAL_DAILY_USD = "10"        # all installs together
+GLOBAL_MONTHLY_USD = "150"
+REGISTER_PER_IP_PER_DAY = "5"
+
+[[durable_objects.bindings]]
+name = "QUOTA"
+class_name = "Quota"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Quota"]
+
+[observability]
+enabled = true
