@@ -58,12 +58,12 @@ def test_wilson_known_values():
 
 
 def test_summary_observed_follows_the_tie_mode():
-    # bayesian_binomial_summary's observed rate used a fixed third for ties.
+    # The old summary's observed rate used a fixed third for ties.
     old = deck_analytics.tie_mode
     try:
         for mode, expected in (("half", 6 / 10), ("third", (5 + 2 / 3) / 10), ("ignore", 5 / 8)):
             deck_analytics.tie_mode = lambda m=mode: m
-            got = deck_analytics.bayesian_binomial_summary(5, 3, 2)["observed"]
+            got = deck_analytics.win_rate_posterior(5, 3, 2)["observed"]
             assert abs(got - expected) < 1e-9, (mode, got)
     finally:
         deck_analytics.tie_mode = old

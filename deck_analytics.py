@@ -254,15 +254,49 @@ def probability_above(posterior, threshold):
     return 1.0 - beta_cdf(float(threshold), posterior["alpha"], posterior["beta"])
 
 
-def sample_confidence(games):
-    """('Low'|'Medium'|'High', plain-language note) for a sample size."""
-    if games <= 0:
-        return "Low", "No recorded games yet."
-    if games < 10:
-        return "Low", f"Only {int(games)} game{'s' if games != 1 else ''} - the range is wide; treat it as a hint."
-    if games < 30:
-        return "Medium", f"{int(games)} games - the estimate is taking shape but can still move."
-    return "High", f"{int(games)} games - a fairly stable estimate."
+# One confidence scale for every "how much can I trust this number" label.
+# It reads the half-width of the likely range (CREDIBLE_LEVEL, 90%), i.e. the
+# +/- the number carries, not the raw game count - so a lopsided record or a
+# pooled estimate is judged by what it actually pins down. +/-7.5 pts tells a
+# 50% deck from a 58% one; +/-12.5 pts only resolves big edges.
+CONFIDENCE_HIGH_HALF_WIDTH = 0.075
+CONFIDENCE_MEDIUM_HALF_WIDTH = 0.125
+
+# A light prior (worth 4 games) for plain records with no pilot context, such
+# as Limitless archetype rows and the dashboard deck list.
+SIMPLE_PRIOR_GAMES = 4.0
+
+
+def confidence_tier(low, high):
+    """('low'|'medium'|'high', 'Low'|'Medium'|'High') from a likely range.
+
+    low/high: the range's ends as fractions (a win_rate_posterior's low/high,
+    or any interval at CREDIBLE_LEVEL). Unusable ends mean Low.
+    """
+    try:
+        half = (float(high) - float(low)) / 2.0
+    except (TypeError, ValueError):
+        return "low", "Low"
+    if half <= CONFIDENCE_HIGH_HALF_WIDTH + 1e-9:
+        return "high", "High"
+    if half <= CONFIDENCE_MEDIUM_HALF_WIDTH + 1e-9:
+        return "medium", "Medium"
+    return "low", "Low"
+
+
+def confidence_text(low, high, games):
+    """Plain-language note matching confidence_tier()."""
+    if not games or games <= 0:
+        return "No recorded games yet."
+    tier = confidence_tier(low, high)[0]
+    n = f"{games:.0f}" if abs(games - round(games)) < 0.05 else f"{games:.1f}"
+    s = "" if n == "1" else "s"
+    half = (float(high) - float(low)) * 50.0
+    if tier == "low":
+        return f"{n} game{s} (range +/-{half:.0f} pts) - wide; treat it as a hint."
+    if tier == "medium":
+        return f"{n} game{s} (range +/-{half:.0f} pts) - taking shape but can still move."
+    return f"{n} game{s} (range +/-{half:.0f} pts) - a fairly stable estimate."
 
 
 def verdict_from_probability(p_above):
@@ -353,68 +387,6 @@ def meta_adjusted_winrate(deck_posterior, field, *, pool_strength=6.0, level=CRE
         "p_above_even": 1.0 - beta_cdf(par, a, b),
         "coverage": coverage,
         "rows": rows,
-    }
-
-
-def bayesian_binomial_summary(wins, losses, ties=0.0, *, alpha=2.0, beta=2.0, z=1.96):
-    """Backward-compatible summary used across the dashboard.
-
-    v2.4.1: bayes/ci ranges are the exact 95% Beta credible interval and
-    probability_above_even is exact (see win_rate_posterior).
-    """
-    wins = max(0.0, float(wins or 0))
-    losses = max(0.0, float(losses or 0))
-    ties = max(0.0, float(ties or 0))
-    total = wins + losses + ties
-    raw_observed = (wins / total) if total else 0.0
-    # The user's tie rule (it was a fixed third here, whatever the setting).
-    tie_wins, tie_losses = tie_split(ties)
-    decided = wins + losses + tie_wins + tie_losses
-    observed = ((wins + tie_wins) / decided) if decided else 0.0
-
-    post = win_rate_posterior(wins, losses, ties, prior_mean=alpha / (alpha + beta),
-                              prior_strength=alpha + beta, level=0.95)
-    posterior_mean = post["mean"]
-    credible_low, credible_high = post["low"], post["high"]
-    # One consistent interval everywhere (it used to be a Wilson interval
-    # around the raw rate shown next to the Bayesian estimate).
-    ci_low, ci_high = credible_low, credible_high
-    probability_above_even = post["p_above_even"]
-    interval_width = ci_high - ci_low
-
-    if total >= 30 or interval_width <= 0.18:
-        confidence_label = "High"
-    elif total >= 12 or interval_width <= 0.30:
-        confidence_label = "Medium"
-    else:
-        confidence_label = "Low"
-
-    if total == 0:
-        confidence_note = "No recorded games yet."
-    elif total < 5:
-        confidence_note = "Very small sample. Treat the win rate as directional only."
-    elif total < 12:
-        confidence_note = "Early sample. The estimate is stabilized, but still swingy."
-    elif total < 30:
-        confidence_note = "Reasonable sample. The interval is becoming informative."
-    else:
-        confidence_note = "Strong sample. The estimate is relatively stable."
-
-    return {
-        "wins": wins,
-        "losses": losses,
-        "ties": ties,
-        "games": total,
-        "raw_observed": raw_observed,
-        "observed": observed,
-        "bayes_mean": posterior_mean,
-        "bayes_low": credible_low,
-        "bayes_high": credible_high,
-        "ci_low": ci_low,
-        "ci_high": ci_high,
-        "probability_above_even": max(0.0, min(1.0, probability_above_even)),
-        "confidence_label": confidence_label,
-        "confidence_note": confidence_note,
     }
 
 
@@ -566,22 +538,13 @@ def rank_weighted_winrate(battles, *, z=1.96):
     max_rank = max(ranks) if ranks else None
     rank_coverage = (len(ranks) / games) if games else 0.0
 
-    # Confidence tiers: weight both sample size AND rank coverage.
-    if games == 0:
-        confidence_label = "Low"
-        confidence_note = "No recorded games yet."
-    elif effective_n >= 30 and rank_coverage >= 0.5:
-        confidence_label = "High"
-        confidence_note = "Strong sample with good rank coverage."
-    elif effective_n >= 12 and rank_coverage >= 0.3:
-        confidence_label = "Medium"
-        confidence_note = "Reasonable sample; interval is becoming informative."
-    elif effective_n < 5:
-        confidence_label = "Low"
-        confidence_note = "Very small effective sample. Directional only."
-    else:
-        confidence_label = "Low"
-        confidence_note = "Early sample or sparse rank data. Treat as directional."
+    # Same tier scale as everywhere else, from the interval on the effective
+    # sample (rank coverage is only a caveat on the note).
+    tier_low, tier_high = wilson_interval(weighted_winrate * effective_n, effective_n, z=1.645)  # 90%, as CREDIBLE_LEVEL
+    confidence_label = confidence_tier(tier_low, tier_high)[1]
+    confidence_note = confidence_text(tier_low, tier_high, effective_n) if games else "No recorded games yet."
+    if games and rank_coverage < 0.3:
+        confidence_note += " Sparse rank data."
 
     return {
         "games": games,

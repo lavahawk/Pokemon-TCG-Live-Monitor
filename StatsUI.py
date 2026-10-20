@@ -40,7 +40,9 @@ from deck_analytics import (
     result_rate,
     tie_mode,
     weighted_record,
-    bayesian_binomial_summary,
+    SIMPLE_PRIOR_GAMES,
+    confidence_tier,
+    confidence_text,
     record_par,
     deck_archetypes,
     deck_archetypes_signature,
@@ -49,7 +51,6 @@ from deck_analytics import (
     meta_adjusted_winrate,
     probability_above,
     rank_weighted_winrate,
-    sample_confidence,
     verdict_from_probability,
     win_rate_posterior,
 )
@@ -3052,22 +3053,23 @@ class MetaFetcher(QThread):
                     record = None
                 if not record:
                     continue
-                summary = bayesian_binomial_summary(
+                summary = win_rate_posterior(
                     record.get("wins", 0),
                     record.get("losses", 0),
                     record.get("ties", 0),
+                    prior_strength=SIMPLE_PRIOR_GAMES,
                 )
                 rows[index].update({
                     "wins": record.get("wins", 0),
                     "losses": record.get("losses", 0),
                     "ties": record.get("ties", 0),
-                    "win_pct": round(summary.get("observed", 0.0) * 100.0, 1),
+                    "win_pct": round((summary.get("observed") or 0.0) * 100.0, 1),
                     "raw_page_win_pct": record.get("raw_page_win_pct", 0.0),
-                    "bayes_win_pct": round(summary.get("bayes_mean", 0.0) * 100.0, 1),
-                    "ci_low_pct": round(summary.get("ci_low", 0.0) * 100.0, 1),
-                    "ci_high_pct": round(summary.get("ci_high", 0.0) * 100.0, 1),
-                    "prob_above_even_pct": round(summary.get("probability_above_even", 0.0) * 100.0, 1),
-                    "confidence_label": summary.get("confidence_label"),
+                    "bayes_win_pct": round(summary["mean"] * 100.0, 1),
+                    "ci_low_pct": round(summary["low"] * 100.0, 1),
+                    "ci_high_pct": round(summary["high"] * 100.0, 1),
+                    "prob_above_even_pct": round(summary["p_above_even"] * 100.0, 1),
+                    "confidence_label": confidence_tier(summary["low"], summary["high"])[1],
                     "record_source": "deck_page",
                 })
 
@@ -3140,8 +3142,8 @@ class MetaFetcher(QThread):
             w = stats['wins']
             l = stats['losses']
             t = stats.get("ties", 0)
-            summary = bayesian_binomial_summary(w, l, t)
-            win_pct = round(summary.get("observed", 0.0) * 100, 1)
+            summary = win_rate_posterior(w, l, t, prior_strength=SIMPLE_PRIOR_GAMES)
+            win_pct = round((summary.get("observed") or 0.0) * 100, 1)
             rows.append({
                 'id': stats.get("id"),
                 'deck': stats['deck'],
@@ -3152,11 +3154,11 @@ class MetaFetcher(QThread):
                 'losses': l,
                 'ties': t,
                 'win_pct': win_pct,
-                'bayes_win_pct': round(summary.get("bayes_mean", 0.0) * 100.0, 1),
-                'ci_low_pct': round(summary.get("ci_low", 0.0) * 100.0, 1),
-                'ci_high_pct': round(summary.get("ci_high", 0.0) * 100.0, 1),
-                'prob_above_even_pct': round(summary.get("probability_above_even", 0.0) * 100.0, 1),
-                'confidence_label': summary.get("confidence_label"),
+                'bayes_win_pct': round(summary["mean"] * 100.0, 1),
+                'ci_low_pct': round(summary["low"] * 100.0, 1),
+                'ci_high_pct': round(summary["high"] * 100.0, 1),
+                'prob_above_even_pct': round(summary["p_above_even"] * 100.0, 1),
+                'confidence_label': confidence_tier(summary["low"], summary["high"])[1],
                 'deck_url': stats.get("deck_url"),
                 'record_source': 'recent_tournaments',
             })
@@ -5020,7 +5022,7 @@ class StatsWindow(QWidget):
         for meta_row in self._top_limitless_rows(limit):
             key = meta_row.get("id") or meta_row.get("deck")
             local = aggregate.get(key, {"games": 0, "wins": 0, "losses": 0, "ties": 0})
-            summary = bayesian_binomial_summary(local["wins"], local["losses"], local["ties"])
+            summary = win_rate_posterior(local["wins"], local["losses"], local["ties"], prior_strength=SIMPLE_PRIOR_GAMES)
             rows.append({
                 "meta_row": meta_row,
                 "games": local["games"],
@@ -5032,7 +5034,7 @@ class StatsWindow(QWidget):
         return rows
 
     def _build_deck_analysis(self, deck_name, games, wins, losses, ties=0, last_played=None):
-        summary = bayesian_binomial_summary(wins, losses, ties)
+        summary = win_rate_posterior(wins, losses, ties, prior_strength=SIMPLE_PRIOR_GAMES)
         # Rank-weighted Elo win rate: weights each battle by the rank it was
         # played at, so high-rank results count more and sub-Masterball games
         # are heavily discounted.
@@ -5042,7 +5044,7 @@ class StatsWindow(QWidget):
         opponent_rows = self.db.get_deck_matchups(deck_name)
         matchup_entries = []
         for opponent_name, opp_games, opp_wins, opp_losses, opp_ties in opponent_rows:
-            opp_summary = bayesian_binomial_summary(opp_wins, opp_losses, opp_ties)
+            opp_summary = win_rate_posterior(opp_wins, opp_losses, opp_ties, prior_strength=SIMPLE_PRIOR_GAMES)
             opp_meta = self._match_limitless_row(opponent_name)
             matchup_entries.append({
                 "deck": opponent_name,
@@ -5061,7 +5063,7 @@ class StatsWindow(QWidget):
         )
         field_benchmark = self._field_benchmark_winrate()
         matched_row = matched_meta.get("row") if matched_meta else None
-        bayes_pct = summary["bayes_mean"] * 100.0
+        bayes_pct = summary["mean"] * 100.0
         delta_vs_meta = None
         if matched_row:
             delta_vs_meta = bayes_pct - float(matched_row.get("win_pct", 0) or 0)
@@ -5083,7 +5085,8 @@ class StatsWindow(QWidget):
             by_opponent.setdefault(battle.get("opponent"), []).append(battle)
         for entry in matchup_entries:
             entry["w_record"] = weighted_record(by_opponent.get(entry.get("deck"), []), expansions)
-        confidence_label, confidence_note = sample_confidence(posterior["games"])
+        confidence_label = confidence_tier(posterior["low"], posterior["high"])[1]
+        confidence_note = confidence_text(posterior["low"], posterior["high"], posterior["games"])
         # Every meta archetype (not just the top 8), with your record against
         # it. Opponents that match no archetype count toward "Other".
         meta_rows = self._top_limitless_rows()
@@ -11787,9 +11790,9 @@ class StatsWindow(QWidget):
             
             for analysis in deck_analyses[:8]:
                 summary = analysis.get("summary", {})
-                bayes_pct = summary.get("bayes_mean", 0) * 100.0
-                ci_low = summary.get("ci_low", 0) * 100.0
-                ci_high = summary.get("ci_high", 0) * 100.0
+                bayes_pct = summary.get("mean", 0) * 100.0
+                ci_low = summary.get("low", 0) * 100.0
+                ci_high = summary.get("high", 0) * 100.0
                 matched_meta = analysis.get("matched_meta")
                 deck_icons = analysis.get("deck_icons", [])
 

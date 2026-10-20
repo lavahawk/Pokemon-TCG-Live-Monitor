@@ -55,6 +55,35 @@ def test_sd_is_shared_deck_term_plus_independent_cells():
     assert res["sd"] < 0.5 * sd_cell + 0.5 * deck["sd"]      # below the old fully-correlated bound
 
 
+def test_confidence_tier_thresholds():
+    t = deck_analytics.confidence_tier
+    assert t(0.50, 0.65) == ("high", "High")      # half-width 7.5 pts
+    assert t(0.50, 0.651) == ("medium", "Medium")
+    assert t(0.40, 0.65) == ("medium", "Medium")  # half-width 12.5 pts
+    assert t(0.40, 0.651) == ("low", "Low")
+    assert t(0.0, 1.0) == ("low", "Low")
+    assert t(None, None) == ("low", "Low")
+
+
+def test_confidence_tier_follows_the_range_not_the_count():
+    p = deck_analytics.win_rate_posterior
+    few = p(3, 2, prior_strength=4.0)
+    many = p(300, 200, prior_strength=4.0)
+    assert deck_analytics.confidence_tier(few["low"], few["high"])[0] == "low"
+    assert deck_analytics.confidence_tier(many["low"], many["high"])[0] == "high"
+
+
+def test_posterior_games_leave_ties_out_in_ignore_mode():
+    old = deck_analytics.tie_mode
+    try:
+        deck_analytics.tie_mode = lambda: "ignore"
+        post = deck_analytics.win_rate_posterior(5, 3, 2, prior_strength=4.0)
+        assert post["games"] == 8 and abs(post["observed"] - 5 / 8) < 1e-9
+        deck_analytics.tie_mode = lambda: "half"
+        assert deck_analytics.win_rate_posterior(5, 3, 2)["games"] == 10
+    finally:
+        deck_analytics.tie_mode = old
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):
