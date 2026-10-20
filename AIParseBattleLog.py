@@ -423,7 +423,7 @@ def load_chat_capture():
 
 
 def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_path=None, is_tournament=False,
-                     battle_hash=None, deck_source=None):
+                     battle_hash=None, deck_source=None, card_ranked=None):
     # Attach the current match's chat (if any) to the battle record so it can
     # be reviewed alongside the game data.
     chat_capture = load_chat_capture()
@@ -441,6 +441,7 @@ def save_to_database(my_deck, opponents_deck, win_or_loss, confidence, log_file_
         is_tournament=is_tournament,
         chat_log=chat_log,
         log_hash=battle_hash,
+        card_ranked=card_ranked,
     )
 
 
@@ -900,9 +901,14 @@ def main():
         deck_source = response_dict.get("deck_source") or "none"
         if deck_source in ("ai", "cards") and not (response_dict.get("OpponentsDeck") or "").strip():
             deck_source = "none"  # no deck: ask on the overlay card
+        try:  # the card matcher's own ranking: a second opinion on the label for the stats
+            card_ranked = card_evidence(battlelog, username)["ranked"]
+        except Exception:
+            card_ranked = None
         battle_id = save_to_database(my_deck, opponents_deck, win_or_loss, confidence, explicit_log_path,
                                      is_tournament=tournament, battle_hash=battle_hash,
-                                     deck_source={"ai": "AI", "cards": "Cards"}.get(deck_source, "Local"))
+                                     deck_source={"ai": "AI", "cards": "Cards"}.get(deck_source, "Local"),
+                                     card_ranked=card_ranked)
         if battle_id:
             print(f"Battle saved to database{' (Limitless tournament)' if tournament else ''}.")
             print(f"BATTLE_ID={battle_id}")

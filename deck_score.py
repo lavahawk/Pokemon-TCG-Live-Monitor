@@ -173,7 +173,7 @@ def score_deck(prior_a, prior_b, matchups, overall, field, own_key, k_m, level=C
         b = k_m * (1.0 - THETA) + l
         mean_j = a / (a + b)
         if n > 0:
-            covered += s
+            covered += s * min(1.0, n)  # a split game covers only its share
         const += s * mean_j if n > 0 else 0.0
         if n <= 0:
             slope += s

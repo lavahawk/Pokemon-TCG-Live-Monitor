@@ -5088,9 +5088,23 @@ class StatsWindow(QWidget):
             entry["field_index"] = idx
             if idx is None:
                 continue
-            for k, v in zip(("wins", "losses", "ties"), entry.get("w_record") or (0, 0, 0)):
-                field[idx][k] += v                                  # weighted (statistics)
+            for k in ("wins", "losses", "ties"):
                 field[idx]["raw_" + k] = field[idx].get("raw_" + k, 0) + (entry.get(k, 0) or 0)  # display
+        # Statistics: each game split between its label and the card read
+        # (label_dist), weighted per game, so a doubtful label counts partly.
+        label_index = {}
+
+        def field_key(deck):
+            if deck not in label_index:
+                hit = self._match_limitless_row(deck)
+                row = (hit or {}).get("row") or {}
+                label_index[deck] = field_index.get(row.get("id") or row.get("deck")) if hit else None
+                if label_index[deck] is None:
+                    label_index[deck] = other_index
+            return label_index[deck]
+        for idx, group in self._split_by_archetype(detailed, meta_rows, field_key).items():
+            for k, v in zip(("wins", "losses", "ties"), weighted_record(group, expansions)):
+                field[idx][k] += v
         meta_adjusted = meta_adjusted_winrate(posterior, field) if field and games else None
         # Matchup estimates pooled toward the deck's own win rate.
         for entry in matchup_entries:
@@ -8619,6 +8633,23 @@ class StatsWindow(QWidget):
         n = a + b
         return a / n, math.sqrt(a * b / (n * n * (n + 1.0)))
 
+    def _split_by_archetype(self, battles, meta_rows, key_of):
+        """{archetype key: [battle copies with "frac"]}: each game split
+        between its label and the card read (label_dist), so a doubtful label
+        can't make a matchup look certain. key_of(deck name) -> key or None."""
+        import label_dist
+        sheet = self.limitless_standard_meta or {}
+        label_dist.fill_card_ranked(battles, meta_rows, stamp=str(sheet.get("fetched_at") or ""))
+        groups = {}
+        for b in battles:
+            if b.get("imported"):
+                continue  # imported results have no opponent deck: overall record only
+            for deck, share in label_dist.distribution(b.get("opponent"), b.get("source"), b.get("card_ranked")):
+                key = key_of(deck)
+                if key is not None and share > 0:
+                    groups.setdefault(key, []).append(dict(b, frac=share))
+        return groups
+
     def _my_deck_meta_rows(self, meta_rows, starred_only=True, use_weights=True):
         """Your decks as meta rows: weighted record + matchups vs meta archetypes
         (opponents mapped to Limitless archetypes; unmatched -> 'Other').
@@ -8629,10 +8660,12 @@ class StatsWindow(QWidget):
         def record(battles):
             if use_weights:
                 return weighted_record(battles, expansions)
-            kinds = [str(b.get("result", "")).strip().lower() for b in battles]
-            wins = kinds.count("win")
-            ties = sum(1 for k in kinds if k in ("tie", "draw"))
-            return float(wins), float(len(kinds) - wins - ties), float(ties)
+            out = {"win": 0.0, "tie": 0.0, "loss": 0.0}
+            for b in battles:
+                kind = str(b.get("result", "")).strip().lower()
+                kind = "tie" if kind in ("tie", "draw") else ("win" if kind == "win" else "loss")
+                out[kind] += float(b.get("frac", 1.0))
+            return out["win"], out["loss"], out["tie"]
         match_cache = {}
         icons_by_deck = {a.get("deck_name"): a.get("deck_icons") or [] for a in (self.deck_analyses or [])}
         mine = []
@@ -8650,17 +8683,13 @@ class StatsWindow(QWidget):
                       for b in battles]
                 total = sum(w for w, _t in ws)
                 return sum(w for w, tour in ws if not tour) / total if total > 0 else 1.0
-            groups = {}
-            for b in detailed:
-                if b.get("imported"):
-                    continue  # imported results have no opponent deck: overall record only
-                opp = b.get("opponent") or ""
+            def key_of(opp):
+                opp = opp or ""
                 if opp not in match_cache:
                     hit = match_meta_row(opp, meta_rows)
                     match_cache[opp] = hit["row"]["id"] if hit else other_key
-                key = match_cache[opp]
-                if key:
-                    groups.setdefault(key, []).append(b)
+                return match_cache[opp]
+            groups = self._split_by_archetype(detailed, meta_rows, key_of)
             mine.append({
                 "id": f"you:{deck_name}", "deck": deck_name, "icons": icons_by_deck.get(deck_name, []),
                 "is_mine": True, "wins": ww, "losses": wl, "ties": wt, "raw_games": games,

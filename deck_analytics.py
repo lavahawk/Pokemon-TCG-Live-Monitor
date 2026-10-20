@@ -312,7 +312,7 @@ def meta_adjusted_winrate(deck_posterior, field, *, pool_strength=6.0, level=CRE
             post = win_rate_posterior(f.get("wins"), f.get("losses"), f.get("ties"),
                                       prior_mean=m, prior_strength=pool_strength, level=level)
             p, sd = post["mean"], post["sd"]
-            coverage += w
+            coverage += w * min(1.0, games)  # a split game (label_dist) covers only its share
         else:
             post, p, sd = None, m, sd_m
         mean += w * p
@@ -621,6 +621,11 @@ def weighted_record(battles, expansions=None):
     the weighted record is rescaled so its total equals Kish's effective
     sample size (sum w)^2 / sum w^2. With equal weights this is exactly the
     raw record; a few heavy games give a smaller, honest sample.
+
+    A battle may carry "frac": the share of it that belongs here (how likely
+    the opponent label is, see label_dist). It scales the counts only; the
+    effective-sample scale comes from the weights, since Kish ignores a
+    common factor and would turn a cell of half-games back into full games.
     """
     total = sq = wins = losses = ties = 0.0
     for b in battles or []:
@@ -630,12 +635,13 @@ def weighted_record(battles, expansions=None):
         outcome = str(b.get("result", "")).strip().lower()
         total += w
         sq += w * w
+        counted = w * float(b.get("frac", 1.0))
         if outcome == "win":
-            wins += w
+            wins += counted
         elif outcome in ("tie", "draw"):
-            ties += w
+            ties += counted
         else:
-            losses += w
+            losses += counted
     if total <= 0:
         return 0.0, 0.0, 0.0
     scale = (total * total / sq) / total

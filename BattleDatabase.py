@@ -14,6 +14,7 @@ v2.4 changes (see DevVault/03 Findings/Bug Register):
 """
 
 import hashlib
+import json
 import os
 import sqlite3
 from datetime import datetime
@@ -118,7 +119,7 @@ class BattleDatabase:
             # weight: an explicit per-game weight (imported results); import_id
             # groups the rows of one import so it can be removed as a whole.
             for name, ddl in (("is_tournament", "INTEGER DEFAULT 0"), ("chat_log", "TEXT"), ("log_hash", "TEXT"),
-                              ("weight", "REAL"), ("import_id", "TEXT")):
+                              ("weight", "REAL"), ("import_id", "TEXT"), ("card_ranked", "TEXT")):
                 if name not in columns:
                     cur.execute(f"ALTER TABLE battles ADD COLUMN {name} {ddl}")
             conn.commit()
@@ -206,18 +207,22 @@ class BattleDatabase:
             conn.close()
 
     def add_battle(self, my_deck, opponent_deck, result, my_rank=None, confidence=None,
-                   deck_source="AI", log_file=None, is_tournament=False, chat_log=None, log_hash=None):
-        """Add a battle. Returns the new id, or None if this log is already stored."""
+                   deck_source="AI", log_file=None, is_tournament=False, chat_log=None, log_hash=None,
+                   card_ranked=None):
+        """Add a battle. Returns the new id, or None if this log is already stored.
+        card_ranked: [(archetype, probability)] from the opponent's revealed
+        cards (card_usage.classify), a second opinion on the label."""
         conn = self._connect()
         try:
             cur = conn.cursor()
             try:
                 cur.execute("""
                     INSERT INTO battles (timestamp, my_deck, opponent_deck, result, my_rank, confidence,
-                                         deck_source, log_file, is_tournament, chat_log, log_hash)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                         deck_source, log_file, is_tournament, chat_log, log_hash, card_ranked)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (now_local(), my_deck, opponent_deck, result, my_rank, confidence, deck_source,
-                      log_file, 1 if is_tournament else 0, chat_log, log_hash))
+                      log_file, 1 if is_tournament else 0, chat_log, log_hash,
+                      json.dumps([[str(d), round(float(p), 4)] for d, p in card_ranked]) if card_ranked else None))
             except sqlite3.IntegrityError:
                 return None  # duplicate log
             battle_id = cur.lastrowid
@@ -574,11 +579,18 @@ class BattleDatabase:
     def get_deck_battles_detailed(self, deck_name):
         """Every game with this deck: result, rank, tournament flag, date, opponent."""
         rows = self._fetchall(
-            "SELECT result, my_rank, is_tournament, timestamp, opponent_deck, weight, deck_source FROM battles "
-            "WHERE my_deck = ? ORDER BY timestamp ASC", (deck_name,))
-        return [{"result": str(r or "").strip(), "my_rank": rank, "is_tournament": bool(t),
-                 "timestamp": ts, "opponent": opp, "weight": w, "imported": src == "Import"}
-                for r, rank, t, ts, opp, w, src in rows]
+            "SELECT result, my_rank, is_tournament, timestamp, opponent_deck, weight, deck_source, "
+            "log_file, log_hash, card_ranked FROM battles WHERE my_deck = ? ORDER BY timestamp ASC", (deck_name,))
+        out = []
+        for r, rank, t, ts, opp, w, src, log_file, lh, ranked in rows:
+            try:
+                ranked = [(str(d), float(p)) for d, p in json.loads(ranked)] if ranked else None
+            except (ValueError, TypeError):
+                ranked = None
+            out.append({"result": str(r or "").strip(), "my_rank": rank, "is_tournament": bool(t),
+                        "timestamp": ts, "opponent": opp, "weight": w, "imported": src == "Import",
+                        "source": src or "", "log_file": log_file, "log_hash": lh, "card_ranked": ranked})
+        return out
 
     def get_battle_timeline(self):
         """Every battle oldest first: (timestamp, my_deck, opponent_deck, result, my_rank, is_tournament)."""
