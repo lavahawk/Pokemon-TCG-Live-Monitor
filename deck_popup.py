@@ -20,7 +20,7 @@ import math
 import time
 
 from PySide6.QtCore import Qt, QTimer, QVariantAnimation, QEasingCurve, QPointF, QRectF, QEvent, QSize
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QStandardItemModel, QStandardItem, QIcon
+from PySide6.QtGui import QColor, QCursor, QPainter, QPainterPath, QPen, QPixmap, QStandardItemModel, QStandardItem, QIcon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QToolButton, QCompleter,
     QStyledItemDelegate, QStyle,
@@ -39,6 +39,7 @@ CARD_W = 250
 MIN_VISIBLE_S = 4.0     # an AI pick stays at least this long
 FADE_AFTER_MENU_S = 2.5  # ...and fades this long after the main menu is seen
 MAX_SHOW_S = 90.0       # fallback when the menu is never reported
+COLLAPSE_DELAY_MS = 350  # hover-out grace before a sure pick folds back to one line
 NO_HOVER_S = 20.0       # a sure pick nobody hovered fades after this, menu seen or not
 SURE_CONFIDENCE = 90    # at or above: show only the pick; the choices appear on hover
 LOW_CONFIDENCE = 50     # below this the card asks instead of fading on the menu
@@ -188,6 +189,11 @@ class DeckConfirmPopup(QWidget):
         self._outro = QVariantAnimation(self, duration=450, easingCurve=QEasingCurve.Type.InCubic)
         self._outro.valueChanged.connect(self._on_intro)
         self._outro.finished.connect(self._after_outro)
+        # Collapsing a sure pick waits until the cursor has really left: the
+        # card resizes and moves when it expands, which used to fire a stray
+        # leave/enter pair under a still cursor and make it flicker.
+        self._collapse_timer = QTimer(self, singleShot=True, interval=COLLAPSE_DELAY_MS)
+        self._collapse_timer.timeout.connect(self._maybe_collapse)
         self._shaker = QVariantAnimation(self, duration=320, startValue=0.0, endValue=1.0)
         self._shaker.valueChanged.connect(self._on_shake)
         self._tick = QVariantAnimation(self, duration=620, startValue=0.0, endValue=1.0,
@@ -496,6 +502,7 @@ class DeckConfirmPopup(QWidget):
     def enterEvent(self, event):
         # A sure pick shows only the deck; hovering reveals the choices.
         self._hovered_once = True
+        self._collapse_timer.stop()
         if self.mode == "show" and getattr(self, "_compact", False):
             self._compact = False
             self._set_mode("show")
@@ -503,9 +510,16 @@ class DeckConfirmPopup(QWidget):
 
     def leaveEvent(self, event):
         if self.mode == "show" and self._sure() and not getattr(self, "_compact", False):
-            self._compact = True
-            self._set_mode("show")
+            self._collapse_timer.start()
         super().leaveEvent(event)
+
+    def _maybe_collapse(self):
+        if self.mode != "show" or not self._sure() or getattr(self, "_compact", False):
+            return
+        if self.frameGeometry().contains(QCursor.pos()):
+            return  # a leave from our own resize/move: the cursor never left
+        self._compact = True
+        self._set_mode("show")
 
     def _low_confidence(self):
         confidence = (self.request or {}).get("confidence")
