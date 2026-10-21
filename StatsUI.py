@@ -10735,26 +10735,38 @@ class StatsWindow(QWidget):
         row.addWidget(combo)
         row.addStretch()
         body.addLayout(row)
-        note = QLabel()
-        note.setObjectName("settingsDesc")
-        note.setWordWrap(True)
-
-        def show_note(_index=0):
-            key = combo.currentData()
-            text = ("The original look." if key == "legacy" else
-                    "Fonts, colours and corners from the Vercel Geist and GitHub Primer design systems.")
-            if key != saved:
-                text += " Restart the dashboard and overlay to apply it."
-            note.setText(text)
+        restart = QPushButton("Restart app")
+        restart.setObjectName("eloScaleBtn")
+        restart.setFixedHeight(26)
+        restart.setToolTip("Restarts the overlay and this dashboard (battle tracking keeps running).")
+        restart.clicked.connect(lambda: self.restart_ui())
+        row.addWidget(restart)
 
         def changed(_index):
+            if combo.currentData() == saved:
+                return
             self._save_app_setting("ui_theme", combo.currentData())
-            show_note()
+            # A theme is applied when the UI starts: restart it now.
+            QTimer.singleShot(150, lambda: self.restart_ui())
         combo.currentIndexChanged.connect(changed)
-        show_note()
-        body.addWidget(note)
         card.layout().addLayout(body)
         return card
+
+    def restart_ui(self, tab="Advanced"):
+        """Restart the UI and come back to `tab`: inside the overlay the
+        monitor relaunches it; a standalone dashboard relaunches itself."""
+        overlay = getattr(self, "parent_overlay", None)
+        if overlay is not None and hasattr(overlay, "restart_ui"):
+            overlay.restart_ui(tab)
+            return
+        import ui_restart
+        try:
+            ui_restart.relaunch_dashboard(tab)
+        except Exception as exc:
+            print(f"Restart failed: {exc}")
+            return
+        QApplication.instance().quit()
+        os._exit(0)  # background threads would keep this copy alive next to the new one
 
     def _create_overlay_prefs_card(self):
         """Advanced → Preferences · Overlay: what the in-game mini GUI shows.
@@ -13327,7 +13339,11 @@ def main():
     
     window = StatsWindow()
     window.show()
-    
+    import ui_restart
+    note = ui_restart.take()  # relaunched by Restart app: back on the same tab
+    if note and note.get("tab") and window._main_tab_index(note["tab"]) >= 0:
+        window.tab_widget.setCurrentIndex(window._main_tab_index(note["tab"]))
+
     sys.exit(app.exec())
 
 

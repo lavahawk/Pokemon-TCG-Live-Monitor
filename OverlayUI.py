@@ -523,6 +523,17 @@ class MinimalOverlay(QWidget):
         self._session_seen = None
         self._session_prompt_due = None
         self.pet = None  # HUD buddy (pet.py), off unless overlay_pet is on
+        # Restarted from the dashboard (theme / Restart app): skip the launch
+        # prompts already seen and reopen the dashboard where it was.
+        import ui_restart
+        self._restart_note = ui_restart.take()
+        if self._restart_note:
+            self._manual_notice_checked = True
+            try:
+                with open(GAME_SESSION_FILE, "r", encoding="utf-8") as handle:
+                    self._session_seen = float(handle.read().strip() or 0)
+            except (OSError, ValueError):
+                pass
         _dbg("__init__ complete")
     
     def _poll_deck_confirm(self):
@@ -761,6 +772,26 @@ class MinimalOverlay(QWidget):
             save_app_settings(settings)
         except Exception as exc:
             _dbg(f"mute manual notice failed: {exc}")
+
+    def _reopen_dashboard(self, tab=None):
+        try:
+            self.animate_arrow("▼")
+            self.open_stats_dashboard()
+            window = self.stats_window
+            if window is not None and tab:
+                index = window._main_tab_index(tab)
+                if index >= 0:
+                    window.tab_widget.setCurrentIndex(index)
+        except Exception as exc:
+            _dbg(f"reopen dashboard failed: {exc}")
+
+    def restart_ui(self, tab=None):
+        """Quit; the monitor relaunches the overlay at once (ui_restart)."""
+        import ui_restart
+        ui_restart.request(tab)
+        _dbg(f"restart requested (tab={tab})")
+        self._restarting = True
+        QApplication.instance().quit()
 
     def open_api_key_setting(self):
         """Dashboard -> Advanced, at the OpenAI key field."""
@@ -1036,6 +1067,9 @@ class MinimalOverlay(QWidget):
                 )
                 # Popups anchored to the mini GUI may only be placed from now on.
                 self._overlay_placed = True
+                if getattr(self, "_restart_note", None):
+                    note, self._restart_note = self._restart_note, None
+                    QTimer.singleShot(300, lambda: self._reopen_dashboard(note.get("tab")))
                 self._position_reset_popup()
         except Exception as e:
             _dbg(f"follow_game_window exception: {e}")
@@ -1564,8 +1598,13 @@ def main():
     # Create and show overlay
     overlay = MinimalOverlay()
     overlay.show()
-    
-    sys.exit(app.exec())
+
+    code = app.exec()
+    if getattr(overlay, "_restarting", False):
+        # Background threads (web views, scans) would keep the process alive,
+        # and the monitor only relaunches the overlay once it has exited.
+        os._exit(0)
+    sys.exit(code)
 
 
 if __name__ == "__main__":

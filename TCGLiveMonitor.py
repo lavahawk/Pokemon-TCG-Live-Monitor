@@ -532,9 +532,13 @@ class Monitor:
             return
         if self.overlay_proc is not None and self.overlay_proc.poll() is None:
             return
-        if self.overlay_starts >= 5:
+        import ui_restart
+        if ui_restart.pending():
+            pass  # Advanced -> Restart app / a theme change: not a crash
+        elif self.overlay_starts >= 5:
             return  # crashing repeatedly; see Logs/overlay_error.log
-        self.overlay_starts += 1
+        else:
+            self.overlay_starts += 1
         try:
             err = open(os.path.join(LOG_DIR, "overlay_error.log"), "a", encoding="utf-8")
             self.overlay_proc = subprocess.Popen([gui_python(), OVERLAY_SCRIPT], cwd=BASE_DIR,
@@ -687,6 +691,10 @@ class Monitor:
             if not game_running:
                 time.sleep(IDLE_POLL_S)
                 continue
+            if self.overlay_proc is not None and self.overlay_proc.poll() is not None:
+                import ui_restart
+                if ui_restart.pending():
+                    self.ensure_overlay()  # restart asked for: don't wait for the next process check
 
             seq = clipboard_sequence()
             if seq is None or seq != last_seq:

@@ -26,10 +26,10 @@ FONT_DIR = os.path.join(BASE_DIR, "fonts")
 
 THEMES = {
     # key: (label, type, palette, shape)
-    "legacy": ("Legacy (original look)", "legacy", "legacy", "legacy"),
-    "geist_primer_geist": ("Geist type · Primer colours · Geist corners", "geist", "primer", "geist"),
-    "primer_geist_valorant": ("Primer type · Geist colours · square corners", "primer", "geist", "valorant"),
-    "primer": ("Primer", "primer", "primer", "primer"),
+    "legacy": ("Legacy", "legacy", "legacy", "legacy"),
+    "geist_primer_geist": ("Graphite", "geist", "primer", "geist"),          # Geist type, Primer colours, Geist corners
+    "primer_geist_valorant": ("Obsidian", "primer", "geist", "valorant"),   # Primer type, Geist black, square corners
+    "primer": ("Harbor", "primer", "primer", "primer"),                     # GitHub Primer throughout
 }
 DEFAULT_THEME = "legacy"
 

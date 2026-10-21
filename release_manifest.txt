@@ -39,6 +39,7 @@ deck_confirm.py
 sounds.py
 pet.py
 theme.py
+ui_restart.py
 # UI theme fonts (OFL, theme.py)
 fonts\Geist-Bold.ttf
 fonts\Geist-Medium.ttf

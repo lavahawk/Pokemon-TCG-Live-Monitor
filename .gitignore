@@ -153,3 +153,6 @@ installer/Output/
 .tcgcsv_cache/
 .ai_usage.json
 DevVault/
+
+# UI restart note (ui_restart.py)
+.ui_restart.json
