@@ -791,7 +791,9 @@ class MinimalOverlay(QWidget):
         ui_restart.request(tab)
         _dbg(f"restart requested (tab={tab})")
         self._restarting = True
-        QApplication.instance().quit()
+        # exit(), not quit(): Qt 6's quit() asks every window to close first and
+        # gives up when one refuses (the hosted dashboard hides instead).
+        QApplication.instance().exit(0)
 
     def open_api_key_setting(self):
         """Dashboard -> Advanced, at the OpenAI key field."""

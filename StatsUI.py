@@ -10765,7 +10765,6 @@ class StatsWindow(QWidget):
         except Exception as exc:
             print(f"Restart failed: {exc}")
             return
-        QApplication.instance().quit()
         os._exit(0)  # background threads would keep this copy alive next to the new one
 
     def _create_overlay_prefs_card(self):
