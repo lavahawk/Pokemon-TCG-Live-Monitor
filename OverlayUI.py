@@ -567,10 +567,7 @@ class MinimalOverlay(QWidget):
         notice = getattr(self, "_manual_notice", None)
         if notice is not None:
             if notice.isVisible():
-                popup = self.deck_popup
-                if popup is not None and popup.isVisible():
-                    anchor = (anchor[0], popup.y() - 6)
-                notice.reposition(anchor)
+                notice.reposition(self._above_open_cards(anchor))
             return
         if getattr(self, "_manual_notice_checked", False) or not self.isVisible():
             return
@@ -605,8 +602,20 @@ class MinimalOverlay(QWidget):
             primary = ("Add API key", self.open_api_key_setting)
         self._manual_notice = NoticeCard(title, text, primary=primary,
                                          secondary=("Don't remind me", self._mute_manual_notice))
-        self._manual_notice.show_at(anchor)
+        self._manual_notice.show_at(self._above_open_cards(anchor))
         _dbg(f"manual mode notice shown (local_only={local_only}, has_key={has_key})")
+
+    def _above_open_cards(self, anchor):
+        """The anchor moved above the deck card and the Reset? prompt when they
+        show, so stacked cards never overlap (they used to fight for one spot)."""
+        top = anchor[1]
+        for card in (self.deck_popup, getattr(self, "_reset_popup", None)):
+            try:
+                if card is not None and card.isVisible():
+                    top = min(top, card.y() - 6)
+            except RuntimeError:  # deleted
+                pass
+        return (anchor[0], top)
 
     UPDATE_CHECK_DELAY_S = 25  # after the mini GUI is placed: let the game settle first
 
