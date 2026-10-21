@@ -460,7 +460,7 @@ class DeckConfirmPopup(QWidget):
         link = "<a href='settings' style='color:#F0B43C;'>{}</a>"
         note = {
             "no_key": "AI deck detection is off (manual mode). " + link.format("Add an OpenAI key in Advanced"),
-            "local_only": "Local-only mode: AI deck detection is off. " + link.format("Change in Advanced"),
+            "local_only": "Local mode: guessed from the cards played only (no AI). " + link.format("Change in Advanced"),
             "ai_failed": "The AI couldn't be reached, so the deck is asked instead. "
                          + link.format("Check the key in Advanced"),
             "ai_budget": "AI deck detection is paused: this month's AI usage limit is reached. "

@@ -553,11 +553,15 @@ class MinimalOverlay(QWidget):
             if self.deck_popup is not None:
                 self.deck_popup.tick(menu_seen_at(), anchor, self.isVisible())
                 self._position_chat_window()
+        except Exception as exc:
+            _dbg(f"_poll_deck_confirm error: {exc}")
+        # The Reset? prompt is scheduled here, before the notice looks for it.
+        self._poll_game_session()
+        try:
             self._poll_manual_mode_notice(anchor)
             self._poll_update(anchor)
         except Exception as exc:
             _dbg(f"_poll_deck_confirm error: {exc}")
-        self._poll_game_session()
         self._poll_pet()
 
     def _poll_manual_mode_notice(self, anchor):
@@ -570,6 +574,18 @@ class MinimalOverlay(QWidget):
                 notice.reposition(self._above_open_cards(anchor))
             return
         if getattr(self, "_manual_notice_checked", False) or not self.isVisible():
+            return
+        # One card at a time: wait for the Reset? prompt (pending or showing)
+        # to finish, then a short pause.
+        reset = getattr(self, "_reset_popup", None)
+        try:
+            reset_showing = reset is not None and reset.isVisible()
+        except RuntimeError:
+            reset_showing = False
+        if reset_showing or getattr(self, "_session_prompt_due", None) is not None:
+            self._notice_hold_until = time.time() + 2.0
+            return
+        if time.time() < getattr(self, "_notice_hold_until", 0.0):
             return
         self._manual_notice_checked = True
         try:
@@ -586,19 +602,19 @@ class MinimalOverlay(QWidget):
         if not _overlay_setting("manual_mode_notice", True):
             return
         from deck_popup import NoticeCard
+        # What manual mode means: no AI, only the opponent's revealed cards.
+        how = ("The opponent's deck is guessed only from the cards they played, which is less "
+               "accurate than AI. After each battle, check the guess or pick the deck yourself.")
         if local_only:
-            title, text = "MANUAL MODE", ("Local-only mode is on, so AI deck detection is off. After each "
-                                          "battle you'll pick the opponent's deck yourself.")
+            title, text = "LOCAL MODE", how
             primary = ("Open Advanced", self.open_api_key_setting)
         elif provider in ("hosted", "compatible"):
-            title, text = "MANUAL MODE", ("AI deck detection isn't set up yet" +
-                                          (" (the built-in AI couldn't be reached)." if provider == "hosted"
-                                           else ": add a base URL and model.") +
-                                          " Battles are still logged; you'll pick the opponent's deck after each one.")
+            title, text = "MANUAL MODE", ("AI deck detection isn't available"
+                                          + (" (the built-in AI couldn't be reached). " if provider == "hosted"
+                                             else ": add a base URL and model in Advanced. ") + how)
             primary = ("Open Advanced", self.open_api_key_setting)
         else:
-            title, text = "MANUAL MODE", ("No OpenAI API key, so AI deck detection is off. Battles are still "
-                                          "logged; you'll pick the opponent's deck after each one.")
+            title, text = "MANUAL MODE", "No AI is set up. " + how
             primary = ("Add API key", self.open_api_key_setting)
         self._manual_notice = NoticeCard(title, text, primary=primary,
                                          secondary=("Don't remind me", self._mute_manual_notice))
