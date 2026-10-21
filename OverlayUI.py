@@ -537,6 +537,7 @@ class MinimalOverlay(QWidget):
         _dbg("__init__ complete")
     
     def _poll_deck_confirm(self):
+        self._poll_minimize_request()
         if not getattr(self, "_overlay_placed", False):
             return  # anchored popups wait until the mini GUI sits on the game window
         try:
@@ -772,6 +773,19 @@ class MinimalOverlay(QWidget):
             save_app_settings(settings)
         except Exception as exc:
             _dbg(f"mute manual notice failed: {exc}")
+
+    def _poll_minimize_request(self):
+        """A shared-deck import (ptcgl_import) is about to drive the game:
+        tuck the always-on-top dashboard away so it can't cover the clicks."""
+        try:
+            import ptcgl_import
+            if not ptcgl_import.take_minimize_request():
+                return
+            window = self.stats_window
+            if window is not None and window.isVisible():
+                window.minimize_to_overlay()
+        except Exception as exc:
+            _dbg(f"minimize request failed: {exc}")
 
     def _reopen_dashboard(self, tab=None):
         try:

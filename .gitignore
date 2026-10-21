@@ -162,3 +162,6 @@ DevVault/
 
 # Deck links this app made (deck_share.py)
 .own_share_links
+
+# Shared-deck import asking the overlay to hide the dashboard (ptcgl_import.py)
+.minimize_dashboard

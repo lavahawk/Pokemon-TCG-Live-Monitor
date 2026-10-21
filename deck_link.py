@@ -1,8 +1,9 @@
 """
 Opens shared deck links (ptcglmonitor://d#...): Windows starts this script
 with the link; it shows the deck, and on Import saves it to the app's
-decklists and puts the list on the clipboard, ready for PTCGL's Decks ->
-New deck -> Import.
+decklists, puts the list on the clipboard and - when Pokemon TCG Live is
+running - adds it to the game (ptcgl_import: Decks -> Create a deck ->
+Import with the rarest prints you own -> the deck's name).
 
     pythonw deck_link.py "ptcglmonitor://d#a...~Deck name"
     pythonw deck_link.py            (reads a link from the clipboard)
@@ -81,12 +82,51 @@ def import_list(text, name):
     return entry, not entry.get("new")
 
 
-def main(argv):
+def _toast_class():
     from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel
+
+    class StatusToast(QLabel):
+        """Click-through status line near the bottom of the game window while
+        the import drives it (no focus, no clicks: the game keeps both)."""
+
+        def __init__(self):
+            super().__init__()
+            self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                                | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput
+                                | Qt.WindowType.WindowDoesNotAcceptFocus)
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            self.setStyleSheet("QLabel { background: rgba(16, 22, 32, 0.92); color: white; font-size: 13px;"
+                               " padding: 8px 16px; border: 1px solid rgba(74,159,216,0.7); border-radius: 8px; }")
+            self._hwnd = None
+
+        def show_over(self, hwnd):
+            self._hwnd = hwnd
+            self.say("Adding the deck to Pokémon TCG Live… (Esc stops)")
+            self.show()
+
+        def say(self, message):
+            self.setText(message + ("" if "Esc" in message else "   ·   Esc stops"))
+            self.adjustSize()
+            try:
+                import win32gui
+                left, top, right, bottom = win32gui.GetWindowRect(self._hwnd)
+                self.move(left + (right - left - self.width()) // 2, bottom - int((bottom - top) * 0.06) - self.height())
+            except Exception:
+                pass
+
+    return StatusToast
+
+
+def main(argv):
+    from PySide6.QtCore import QObject, Qt, Signal
     from PySide6.QtGui import QGuiApplication
-    from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                    QVBoxLayout)
     app = QApplication.instance() or QApplication(argv[:1])
+    app.setQuitOnLastWindowClosed(False)  # quits when the dialog finishes (it hides during an import)
+    StatusToast = _toast_class()
     try:
         import theme
         theme.install(app)  # the user's theme, like the dashboard
@@ -110,6 +150,7 @@ def main(argv):
         QPushButton:hover { background: rgba(255,255,255,0.14); }
         QPushButton#primary { background: rgba(74,159,216,0.85); border-color: rgba(74,159,216,1); }
         QPushButton#primary:hover { background: rgba(74,159,216,1); }
+        QCheckBox { color: rgba(220, 228, 240, 0.9); font-size: 12px; spacing: 8px; }
     """)
     box = QVBoxLayout(dialog)
     box.setContentsMargins(18, 16, 18, 16)
@@ -143,6 +184,19 @@ def main(argv):
     summary.setObjectName("muted")
     summary.setToolTip(text.replace("\n", "<br>"))
     box.addWidget(summary)
+    import game_window
+    game_open = bool(game_window.find_game_hwnd())
+    to_game = QCheckBox("Add it to Pokémon TCG Live")
+    to_game.setChecked(game_open)
+    to_game.setEnabled(game_open)
+    to_game.setToolTip("Creates the deck in the game with the rarest prints you own. Esc stops it."
+                       if game_open else "Open Pokémon TCG Live to add it there too")
+    box.addWidget(to_game)
+    rename = QCheckBox("Use this name in the game")
+    rename.setChecked(game_open)
+    rename.setEnabled(game_open)
+    to_game.toggled.connect(rename.setEnabled)
+    box.addWidget(rename)
     status = QLabel("")
     status.setWordWrap(True)
     status.hide()
@@ -153,19 +207,55 @@ def main(argv):
     primary.setObjectName("primary")
     primary.setDefault(True)
 
+    class Relay(QObject):
+        progress = Signal(str)
+        finished = Signal(bool, str)
+
+    relay = Relay()
+    toast = StatusToast()
+    relay.progress.connect(toast.say)
+
+    def finish(saved_note, ok=None, message=""):
+        toast.hide()
+        if ok is None:
+            text_out = saved_note + "The list is on your clipboard: in PTCGL open Decks → Create a deck → Import."
+        elif ok:
+            text_out = saved_note + message
+        else:
+            text_out = (saved_note + message + " The list is on your clipboard: in PTCGL open Decks → "
+                        "Create a deck → Import.")
+        status.setText(text_out)
+        status.show()
+        for widget in (name_field, to_game, rename):
+            widget.setEnabled(False)
+        cancel.hide()
+        primary.setText("Done")
+        primary.setEnabled(True)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        dialog.adjustSize()
+
     def do_import():
         if primary.text() == "Done":
             dialog.accept()
             return
-        entry, had = import_list(text, name_field.text().strip())
+        deck_name = name_field.text().strip()
+        entry, had = import_list(text, deck_name)
         QGuiApplication.clipboard().setText(text)
-        status.setText((f"You already had this list ({entry['name']}). " if had else "Saved to your decklists. ")
-                       + "The list is on your clipboard: in PTCGL open Decks → New deck → Import.")
-        status.show()
-        name_field.setEnabled(False)
-        cancel.hide()
-        primary.setText("Done")
-        dialog.adjustSize()
+        saved_note = f"You already had this list ({entry['name']}). " if had else "Saved to your decklists. "
+        if not (to_game.isChecked() and game_window.find_game_hwnd()):
+            finish(saved_note)
+            return
+        import threading
+        import ptcgl_import
+        primary.setEnabled(False)
+        dialog.hide()  # out of the way of the clicks
+        toast.show_over(game_window.find_game_hwnd())
+        relay.finished.connect(lambda ok, message: finish(saved_note, ok, message))
+        importer = ptcgl_import.PTCGLImporter(text, deck_name if rename.isChecked() else None,
+                                              status=relay.progress.emit)
+        threading.Thread(target=lambda: relay.finished.emit(*importer.run()), daemon=True).start()
 
     primary.clicked.connect(do_import)
     buttons.addWidget(cancel)
@@ -174,8 +264,12 @@ def main(argv):
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()
-    result = dialog.exec()
-    return 0 if result else 1
+    # The app's loop, not dialog.exec(): the dialog hides while the import
+    # drives the game, and hiding would end exec() (and this process).
+    outcome = {}
+    dialog.finished.connect(lambda result: (outcome.setdefault("result", result), app.quit()))
+    app.exec()
+    return 0 if outcome.get("result") else 1
 
 
 if __name__ == "__main__":

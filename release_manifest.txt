@@ -43,6 +43,7 @@ ui_restart.py
 infotip.py
 deck_share.py
 deck_link.py
+ptcgl_import.py
 share_cards_v1.txt
 # UI theme fonts (OFL, theme.py)
 fonts\Geist-Bold.ttf
