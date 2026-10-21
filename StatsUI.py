@@ -7333,7 +7333,8 @@ class StatsWindow(QWidget):
         columns.setSpacing(24)
         self._weight_spins = {}
         current = load_weights()
-        for group, title in (("meta", "META DATA"), ("ladder", "YOUR GAMES"), ("strength", "OPPONENT STRENGTH")):
+        for group, title in (("meta", "TOURNAMENT DATA"), ("ladder", "YOUR GAMES"),
+                             ("strength", "DECK SCORE · LADDER VS TOURNAMENT")):
             col = QGridLayout()
             col.setHorizontalSpacing(10)
             col.setVerticalSpacing(6)
@@ -7381,7 +7382,9 @@ class StatsWindow(QWidget):
         tie_row.addStretch()
         body.addLayout(tie_row)
 
-        note = QLabel("Expansion multipliers apply to both columns; data older than two expansions is ignored. "
+        note = QLabel("Elo above 1400: weight = Master + (Limitless − Master) × (2^((Elo − 1400) / 200) − 1) / 3, "
+                      "full tournament weight from 1800 (1500 +14%, 1600 +33%, 1700 +61%). "
+                      "Expansion multipliers apply to both columns; data older than two expansions is ignored. "
                       "Your games are rescaled to their effective sample size, so weights never invent certainty.")
         note.setObjectName("settingsDesc")
         note.setWordWrap(True)
@@ -8806,7 +8809,7 @@ class StatsWindow(QWidget):
             def ladder_frac(battles):
                 """Share of the (weighted) games that were ladder, not Limitless tournament.
                 Arceus League games at a high Elo count as tournament-like
-                (leagues.elo_tournament_share: 0 at 1500, 1 from 1650)."""
+                (leagues.elo_tournament_share: 0 at 1400, 1 from 1800)."""
                 from leagues import elo_tournament_share
                 ws = [(battle_weight(b, expansions) if use_weights else 1.0,
                        1.0 if b.get("is_tournament") else elo_tournament_share(game_rank(b)))

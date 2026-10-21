@@ -37,7 +37,6 @@ DEFAULT_WEIGHTS = {
         "great": 0.70,
         "ultra": 0.85,
         "master": 1.00,
-        "arceus_low": 0.92,
         "tournament": 3.0,
         "unranked": 0.5,
     },
@@ -46,7 +45,6 @@ DEFAULT_WEIGHTS = {
     "strength": {
         "ladder_evidence": 0.5,
         "ladder_gap": 4.0,
-        "tournament_evidence": 1.0,
         "rank_margin": 15.0,
     },
 }
@@ -62,11 +60,11 @@ LABELS = {
         "era2": ("2 expansions back", "Older data is dropped entirely."),
     },
     "ladder": {
-        "tournament": ("Limitless tournament", "Your games detected as Limitless tournament matches."),
-        "master": ("Master Ball", "Your ranked games at Master Ball, and Arceus League at 1500 Elo. Arceus League "
-                                  "games climb from here to the tournament weight at 1650+ Elo."),
-        "arceus_low": ("Arceus ≤ 1400", "Arceus League games at 1400 Elo or below (low skill): less than a normal "
-                                        "Master game, more than Ultra Ball. 1400-1500 blends to Master."),
+        "tournament": ("Limitless tournament", "Your games detected as Limitless tournament matches. Ladder games "
+                                               "reach this weight at 1800+ Elo."),
+        "master": ("Master Ball / Arceus", "Master Ball and Arceus League games up to 1400 Elo. Above 1400 the "
+                                           "weight climbs toward the Limitless tournament weight, each 100 Elo "
+                                           "more than the last: 1500 +14%, 1600 +33%, 1700 +61%, 1800+ full."),
         "ultra": ("Ultra Ball", None),
         "great": ("Great Ball", None),
         "poke": ("Poké Ball", None),
@@ -75,11 +73,12 @@ LABELS = {
         "unranked": ("No rank recorded", "Your games where the rank wasn't read."),
     },
     "strength": {
-        "ladder_evidence": ("Ladder game worth", "Tournament games one of your ladder games is worth as evidence "
-                                                 "(ladder opponents are weaker, so less informative)."),
-        "ladder_gap": ("Ladder field gap", "Win-% points easier ladder opponents are than a Limitless online field "
-                                           "(at 50%; applied on the log-odds scale)."),
-        "tournament_evidence": ("Your Limitless games worth", "Your own Limitless tournament games, as evidence."),
+        "ladder_evidence": ("Ladder game counts as", "In the deck Score, one ladder game counts as this many "
+                                                     "tournament games (ladder opponents are weaker). Fades to a full "
+                                                     "game as your Elo nears 1800; Limitless games always count 1."),
+        "ladder_gap": ("Ladder opponents easier by", "Win-% points the ladder field is easier than a Limitless "
+                                                     "online field (at 50%; log-odds scale). Fades to 0 as your Elo "
+                                                     "nears 1800."),
         "rank_margin": ("Rank precision", "A deck is ranked once its weighted games give ± this many points at 90%: "
                                           "n = (1.645 × 0.5 / margin)² effective games (15 pts → 30 games)."),
     },

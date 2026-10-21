@@ -50,16 +50,18 @@ def league_name(rank):
     return ""
 
 
-# Arceus League (Master League) shows an Elo since 2026-10-11: you enter at
-# 1500 and can drop below. Ranks from ELO_MIN up are that Elo (the old ladder
-# points never got near it). Skill reading: under 1400 low, 1500 decent,
-# 1600 high, 1700+ the very top. Weights between the anchors are linear:
-#   <= 1400  "arceus_low"  (between Ultra Ball and a normal Master game)
-#      1500  "master"      (a normal Master / Arceus game, 1.0)
-#   >= 1650  "tournament"  (counts like a Limitless tournament game)
+# Master Ball became the Arceus League, which shows an Elo (since
+# 2026-10-11; you enter at 1500). Ranks from ELO_MIN up are that Elo (the old
+# ladder points never got near it). It is a semi-Elo ladder: past ~1400 every
+# 100 points is a clearly harder field, ~1700 is where games become good
+# practice and ~1800 is where tournament players live (players' reports: good
+# practice from 1750-1800, Day 2 players hang around 1800+, ~2000 is the top).
+# So the weight of a game climbs from the Master weight at 1400 to the
+# Limitless tournament weight at 1800, each 100 Elo adding more than the last:
+#   share = (2^((Elo - 1400) / 200) - 1) / 3      0 at 1400, 1 at 1800
+#   1500: 14%   1600: 33%   1700: 61%   1800+: 100%
 ELO_MIN = 1000
-ELO_LOW, ELO_START, ELO_TOURNAMENT = 1400.0, 1500.0, 1650.0
-ARCEUS_LOW_WEIGHT = 0.92
+ELO_BASE, ELO_TOP = 1400.0, 1800.0
 TOURNAMENT_WEIGHT = 3.0
 
 
@@ -70,12 +72,19 @@ def is_elo(rank):
         return False
 
 
-def elo_tournament_share(rank):
-    """How tournament-like the opponents of a game at this Elo are, 0..1:
-    0 up to 1500, 1 from 1650 (Score: high-Elo games aren't 'easier ladder')."""
+def elo_share(rank):
+    """How far an Arceus League Elo is from a Master game (0) to tournament
+    strength (1), on the curve above."""
     if not is_elo(rank):
         return 0.0
-    return min(1.0, max(0.0, (float(rank) - ELO_START) / (ELO_TOURNAMENT - ELO_START)))
+    x = (min(ELO_TOP, max(ELO_BASE, float(rank))) - ELO_BASE) / ((ELO_TOP - ELO_BASE) / 2.0)
+    return (2.0 ** x - 1.0) / 3.0
+
+
+def elo_tournament_share(rank):
+    """How tournament-like the opponents of a game at this Elo are, 0..1
+    (deck Score: an 1800 game isn't 'easier ladder' any more)."""
+    return elo_share(rank)
 
 
 def _ladder_settings():
@@ -96,19 +105,12 @@ def _league_weights():
 
 
 def elo_weight_for(rank):
-    """Weight of an Arceus League game from its Elo (see the anchors above)."""
+    """Weight of an Arceus League game from its Elo: the Master weight up to
+    1400, then the curve above up to the Limitless tournament weight at 1800."""
     ladder = _ladder_settings()
-    low = float(ladder.get("arceus_low", ARCEUS_LOW_WEIGHT))
     start = float(ladder.get("master", LEAGUE_WEIGHTS["master"]))
     top = float(ladder.get("tournament", TOURNAMENT_WEIGHT))
-    value = float(rank)
-    if value <= ELO_LOW:
-        return low
-    if value < ELO_START:
-        return low + (start - low) * (value - ELO_LOW) / (ELO_START - ELO_LOW)
-    if value < ELO_TOURNAMENT:
-        return start + (top - start) * (value - ELO_START) / (ELO_TOURNAMENT - ELO_START)
-    return top
+    return start + (top - start) * elo_share(rank)
 
 
 def rank_weight_for(rank):

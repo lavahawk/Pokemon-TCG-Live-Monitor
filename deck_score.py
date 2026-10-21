@@ -211,7 +211,8 @@ def adjust_personal(rec, ladder_frac, strength):
     of the record the win rate is shifted down by `ladder_gap` points (on the
     log-odds scale, so 90% isn't pushed below 0), and every game counts
     `ladder_evidence` tournament games. Limitless tournament games you played
-    count `tournament_evidence` and aren't shifted.
+    count 1 and aren't shifted; a ladder game at 1800+ Elo counts as one
+    (ladder_frac comes from leagues.elo_tournament_share).
     Returns (wins, losses, ties, details).
     """
     w, l, t = (float(x or 0) for x in (list(rec) + [0, 0, 0])[:3])

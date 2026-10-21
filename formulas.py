@@ -163,5 +163,5 @@ def opponent_strength(adj, strength):
     return (f"{F}your games: win rate − {gap:.1f} pts on the ladder share ({adj['ladder_frac'] * 100:.0f}%), "
             f"then × {adj['evidence']:.2f} as evidence{END}<br>"
             f"{DIM}Ladder opponents are weaker than a Limitless field: shift = logit(50% + gap) on the log-odds "
-            f"scale; one ladder game counts {strength.get('ladder_evidence', 1):g} tournament games, your Limitless "
-            f"games {strength.get('tournament_evidence', 1):g}. Set in Advanced → Preferences → Opponent strength.{END}")
+            f"scale; one ladder game counts {strength.get('ladder_evidence', 1):g} tournament games (both fade out "
+            f"as your Elo nears 1800), your Limitless games 1. Set in Advanced → Preferences → Deck Score.{END}")

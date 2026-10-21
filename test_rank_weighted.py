@@ -77,17 +77,22 @@ def test_personal_prior_is_about_19_games():
 
 
 def test_arceus_league_elo_weights():
-    # Arceus League Elo: <=1400 low (between Ultra and Master), 1500 = Master, 1650+ = a tournament game.
+    # Master Ball / Arceus weight up to 1400 Elo, then a doubling curve to the
+    # Limitless tournament weight at 1800: 1500 14%, 1600 33%, 1700 61%.
     from leagues import elo_tournament_share
-    ultra, master = weights.DEFAULT_WEIGHTS["ladder"]["ultra"], weights.DEFAULT_WEIGHTS["ladder"]["master"]
-    low = rank_weight(1350)
-    assert ultra < low < master and rank_weight(1400) == low
-    assert rank_weight(1500) == master
-    assert master < rank_weight(1600) < TOURNAMENT_WEIGHT
-    assert rank_weight(1650) == rank_weight(1800) == TOURNAMENT_WEIGHT
-    ladder = [rank_weight(r) for r in (1300, 1400, 1450, 1500, 1550, 1600, 1650, 1700)]
+    master = weights.DEFAULT_WEIGHTS["ladder"]["master"]
+    assert rank_weight(1200) == rank_weight(1400) == master
+    share = lambda r: (rank_weight(r) - master) / (TOURNAMENT_WEIGHT - master)
+    for elo, expected in ((1500, 0.138), (1600, 0.333), (1700, 0.609), (1800, 1.0)):
+        assert abs(share(elo) - expected) < 0.002, (elo, share(elo))
+    assert rank_weight(1800) == rank_weight(2100) == TOURNAMENT_WEIGHT
+    ladder = [rank_weight(r) for r in (1300, 1400, 1450, 1500, 1600, 1700, 1750, 1800)]
     assert ladder == sorted(ladder)
-    assert elo_tournament_share(1500) == 0 and elo_tournament_share(1650) == 1 and elo_tournament_share(300) == 0
+    steps = [rank_weight(r + 100) - rank_weight(r) for r in (1400, 1500, 1600, 1700)]
+    assert steps == sorted(steps)                       # each 100 Elo adds more than the last
+    assert elo_tournament_share(1400) == 0 and elo_tournament_share(1800) == 1 and elo_tournament_share(300) == 0
+    assert "arceus_low" not in weights.DEFAULT_WEIGHTS["ladder"]
+    assert "tournament_evidence" not in weights.DEFAULT_WEIGHTS["strength"]
 
 
 if __name__ == "__main__":
