@@ -6,7 +6,7 @@ const html = readFileSync(root + "docs/d/index.html", "utf8");
 const script = html.split("<script>")[1].split("</script>")[0].split("(async () => {")[0];
 const mod = new Function("atob", "TextDecoder", "DecompressionStream", "Blob", "Response",
   script + "; return { decode, exportText };")(atob, TextDecoder, DecompressionStream, Blob, Response);
-const table = readFileSync(root + "docs/d/cards_v1.txt", "utf8").split("\n").filter(l => l.trim() && !l.startsWith("#"));
+const table = readFileSync(root + "docs/d/cards_v1.txt", "utf8").split(/\r?\n/).filter(l => l.trim() && !l.startsWith("#"));
 const cases = JSON.parse(readFileSync(process.argv[2], "utf8"));
 let bad = 0;
 for (const c of cases) {

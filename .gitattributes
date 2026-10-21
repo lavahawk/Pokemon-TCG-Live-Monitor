@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+docs/d/cards_v1.txt text eol=lf
+share_cards_v1.txt text eol=lf

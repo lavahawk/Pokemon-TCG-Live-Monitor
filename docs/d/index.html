@@ -149,7 +149,7 @@ function show(sections, name) {
     const name = decodeURIComponent(rawName).replace(/[\x00-\x1f<>]/g, "").slice(0, 40);
     if (!fragment) throw new Error("this page needs a deck link");
     const tableText = await (await fetch("cards_v1.txt", { cache: "force-cache" })).text();
-    const table = tableText.split("\n").filter(l => l.trim() && !l.startsWith("#"));
+    const table = tableText.split(/\r?\n/).filter(l => l.trim() && !l.startsWith("#"));
     const sections = await decode(token, table);
     show(sections, name);
     const appLink = "ptcglmonitor://d#" + location.hash.slice(1);
