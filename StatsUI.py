@@ -10648,6 +10648,11 @@ class StatsWindow(QWidget):
             self.local_only_checkbox.blockSignals(True)
             self.local_only_checkbox.setChecked(want)
             self.local_only_checkbox.blockSignals(False)
+        # Saved right away like every other preference (it used to wait for
+        # the Save button, so "Off" on screen could still use the AI).
+        provider = self.ai_provider_combo.currentData() or "auto"
+        self._save_app_setting("ai_provider", provider)
+        self._save_app_setting("local_only_mode", provider == "none")
         self._update_ai_provider_fields()
         self.refresh_parser_mode_status()
 
