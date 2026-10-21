@@ -62,6 +62,7 @@ import card_usage
 from deck_score import compute_scores
 import formulas
 import ai_provider
+import theme
 from ui_widgets import DeckFlagButton, DeckTabBar, MineRowDelegate, MINE_ROLE
 from leagues import LEAGUES, league_name
 from app_settings import (
@@ -1868,8 +1869,8 @@ class GlassFrame(QFrame):
         path = QPainterPath()
         path.addRoundedRect(rect, 12, 12)
         grad = QLinearGradient(0, 0, 0, self.height())
-        grad.setColorAt(0.0, QColor(15, 15, 15, a(0.85)))
-        grad.setColorAt(1.0, QColor(10, 10, 10, a(0.88)))
+        grad.setColorAt(0.0, theme.qcolor(15, 15, 15, a(0.85)))
+        grad.setColorAt(1.0, theme.qcolor(10, 10, 10, a(0.88)))
         p.fillPath(path, grad)
         p.setPen(QPen(QColor(255, 255, 255, a(0.10)), 1))
         p.drawPath(path)
@@ -2159,7 +2160,7 @@ class WeightScale(QWidget):
             p.drawText(int(tx), cy - 9 if k % 2 == 0 else cy + 9 + fm.ascent(), text)
         # the chosen weight
         x = self._x(self.value) if self.value > 0 else 10
-        p.setPen(QPen(QColor(12, 16, 24), 1.5))
+        p.setPen(QPen(theme.qcolor(12, 16, 24), 1.5))
         p.setBrush(QColor("#4A9FD8"))
         p.drawEllipse(QPointF(x, cy), 5.5, 5.5)
         p.end()
@@ -2270,7 +2271,7 @@ class RangeBar(QWidget):
             p.setPen(QPen(QColor(255, 213, 79, 210), 2))
             p.drawLine(int(x(self.benchmark)), int(cy - 6), int(x(self.benchmark)), int(cy + 6))
         r = 4.0 + 1.6 * h
-        p.setPen(QPen(QColor(12, 16, 24), 1.5))
+        p.setPen(QPen(theme.qcolor(12, 16, 24), 1.5))
         p.setBrush(self.accent)
         from PySide6.QtCore import QPointF
         p.drawEllipse(QPointF(x(self.mid), cy), r, r)
@@ -6348,19 +6349,19 @@ class StatsWindow(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         bg = QLinearGradient(0, 0, 0, height)
-        bg.setColorAt(0, QColor(18, 23, 33))
-        bg.setColorAt(1, QColor(11, 14, 20))
+        bg.setColorAt(0, theme.qcolor(18, 23, 33))
+        bg.setColorAt(1, theme.qcolor(11, 14, 20))
         p.setPen(QPen(QColor(255, 255, 255, 28), 1))
         p.setBrush(bg)
         p.drawRoundedRect(QRectF(0.5, 0.5, width - 1, height - 1), 14, 14)
 
-        title = QFont("Segoe UI", 18)
+        title = QFont(theme.family("ui"), 18)
         title.setBold(True)
         p.setFont(title)
         p.setPen(QColor(240, 244, 250))
         p.drawText(QRectF(margin, margin - 4, width - 2 * margin, 30), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    entry.get("name") or "Decklist")
-        small = QFont("Segoe UI", 9)
+        small = QFont(theme.family("ui"), 9)
         p.setFont(small)
         p.setPen(QColor(150, 162, 180))
         total = sum(c["qty"] for c in cards)
@@ -6369,12 +6370,12 @@ class StatsWindow(QWidget):
                    f"{total} cards" + (f"  ·  exported {stamp}" if stamp else ""))
 
         y = margin + head_h
-        section_font = QFont("Segoe UI", 9)
+        section_font = QFont(theme.family("ui"), 9)
         section_font.setBold(True)
         section_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
-        badge_font = QFont("Segoe UI", 10)
+        badge_font = QFont(theme.family("ui"), 10)
         badge_font.setBold(True)
-        tile_font = QFont("Segoe UI", 8)
+        tile_font = QFont(theme.family("ui"), 8)
         for name, group in sections:
             p.setFont(section_font)
             p.setPen(QColor(120, 182, 236))
@@ -6408,7 +6409,7 @@ class StatsWindow(QWidget):
                 # copy-count badge
                 badge = QRectF(x + w - 34, cy + h - 30, 28, 24)
                 p.setPen(QPen(QColor(255, 255, 255, 70), 1))
-                p.setBrush(QColor(12, 16, 24, 225))
+                p.setBrush(theme.qcolor(12, 16, 24, 225))
                 p.drawRoundedRect(badge, 7, 7)
                 p.setFont(badge_font)
                 p.setPen(QColor(255, 255, 255))
@@ -7444,6 +7445,7 @@ class StatsWindow(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
 
         layout.addWidget(self._create_weights_card())
+        layout.addWidget(self._create_appearance_prefs_card())
         layout.addWidget(self._create_overlay_prefs_card())
         layout.addWidget(self._create_sound_prefs_card())
         layout.addWidget(self._create_import_card())
@@ -8089,7 +8091,7 @@ class StatsWindow(QWidget):
         if muted:
             fg = QColor("#9BA8BC")
         item.setForeground(fg)
-        bg = QColor(18, 25, 36, 225) if row % 2 == 0 else QColor(12, 18, 28, 225)
+        bg = theme.qcolor(18, 25, 36, 225) if row % 2 == 0 else theme.qcolor(12, 18, 28, 225)
         item.setBackground(bg)
         table.setItem(row, col, item)
 
@@ -10072,7 +10074,7 @@ class StatsWindow(QWidget):
         self._th_profile = profile
 
         page = ToolsPage(profile, self, "trainerhill.com")
-        page.setBackgroundColor(QColor(16, 20, 28))  # no white flash while loading
+        page.setBackgroundColor(theme.qcolor(16, 20, 28))  # no white flash while loading
         view = QWebEngineView()
         view.setPage(page)
         view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -10703,6 +10705,48 @@ class StatsWindow(QWidget):
                 text = "No API key is saved. " + text
         if hasattr(self, "parser_mode_status_label"):
             self.parser_mode_status_label.setText(text)
+
+    def _create_appearance_prefs_card(self):
+        """Advanced -> Preferences · Appearance: the UI theme (theme.py).
+        Saved immediately; applies when the dashboard and overlay next start."""
+        card = self.create_card("Preferences · Appearance")
+        body = QVBoxLayout()
+        body.setContentsMargins(12, 0, 12, 12)
+        body.setSpacing(6)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        label = QLabel("Theme")
+        label.setObjectName("settingsDesc")
+        row.addWidget(label)
+        combo = QComboBox()
+        combo.setObjectName("metaCombo")
+        for key, (title, _type, _palette, _shape) in theme.THEMES.items():
+            combo.addItem(title, key)
+        saved = theme.theme_key(load_app_settings())
+        combo.setCurrentIndex(max(0, combo.findData(saved)))
+        row.addWidget(combo)
+        row.addStretch()
+        body.addLayout(row)
+        note = QLabel()
+        note.setObjectName("settingsDesc")
+        note.setWordWrap(True)
+
+        def show_note(_index=0):
+            key = combo.currentData()
+            text = ("The original look." if key == "legacy" else
+                    "Fonts, colours and corners from the Vercel Geist and GitHub Primer design systems.")
+            if key != saved:
+                text += " Restart the dashboard and overlay to apply it."
+            note.setText(text)
+
+        def changed(_index):
+            self._save_app_setting("ui_theme", combo.currentData())
+            show_note()
+        combo.currentIndexChanged.connect(changed)
+        show_note()
+        body.addWidget(note)
+        card.layout().addLayout(body)
+        return card
 
     def _create_overlay_prefs_card(self):
         """Advanced → Preferences · Overlay: what the in-game mini GUI shows.
@@ -13271,6 +13315,7 @@ class StatsWindow(QWidget):
 def main():
     """Run the stats window standalone"""
     app = QApplication(sys.argv)
+    theme.install(app)  # before any widget: legacy does nothing
     
     window = StatsWindow()
     window.show()

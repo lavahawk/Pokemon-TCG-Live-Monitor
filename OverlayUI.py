@@ -1529,6 +1529,8 @@ class MinimalOverlay(QWidget):
 def main():
     """Run the overlay"""
     app = QApplication(sys.argv)
+    import theme
+    theme.install(app)  # before any widget: legacy does nothing
     
     # Set application properties
     app.setApplicationName("TCG Live Monitor")

@@ -34,6 +34,8 @@ import os
 import random
 import time
 
+import theme
+
 from PySide6.QtCore import Qt, QTimer, QRect, QRectF, QPointF
 from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QWidget
@@ -848,7 +850,7 @@ class PetWidget(QWidget):
 
     @staticmethod
     def _pixel_text(p, text, x, y, color, size):
-        font = QFont("Consolas", size)
+        font = QFont(theme.family("mono"), size)
         font.setBold(True)
         p.setFont(font)
         p.setPen(color)

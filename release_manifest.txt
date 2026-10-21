@@ -38,6 +38,27 @@ deck_popup.py
 deck_confirm.py
 sounds.py
 pet.py
+theme.py
+# UI theme fonts (OFL, theme.py)
+fonts\Geist-Bold.ttf
+fonts\Geist-Medium.ttf
+fonts\Geist-OFL.txt
+fonts\Geist-Regular.ttf
+fonts\Geist-SemiBold.ttf
+fonts\GeistMono-Bold.ttf
+fonts\GeistMono-Medium.ttf
+fonts\GeistMono-Regular.ttf
+fonts\GeistMono-SemiBold.ttf
+fonts\JetBrainsMono-Bold.ttf
+fonts\JetBrainsMono-Medium.ttf
+fonts\JetBrainsMono-OFL.txt
+fonts\JetBrainsMono-Regular.ttf
+fonts\JetBrainsMono-SemiBold.ttf
+fonts\MonaSans-Bold.ttf
+fonts\MonaSans-Medium.ttf
+fonts\MonaSans-OFL.txt
+fonts\MonaSans-Regular.ttf
+fonts\MonaSans-SemiBold.ttf
 adblock.py
 deck_analytics.py
 deck_score.py
