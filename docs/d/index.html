@@ -4,50 +4,83 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Shared deck</title>
+<meta name="description" content="A Pokémon TCG Live decklist shared with Pokemon TCG Live Monitor.">
+<title>shared deck</title>
 <style>
-  :root { --bg: #0e131b; --card: #151c27; --line: rgba(255,255,255,.09); --text: #e8eef6; --muted: #9aa8bb;
-          --accent: #4a9fd8; --ok: #66bb6a; --bad: #ef9a9a; }
+  :root { --bg: #0c0d0f; --fg: #d8dbe0; --dim: #6c7380; --rule: #23262c; --accent: #e8c547; --ok: #8fd18f;
+          --bad: #ef8f8f; --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace; }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) { --bg: #f6f5f1; --fg: #1d1f23; --dim: #7b7f88; --rule: #dcdad3; --accent: #9a6f00;
+                                      --ok: #2e7d32; --bad: #b3261e; }
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
-  main { max-width: 560px; margin: 0 auto; padding: 40px 16px 56px; }
-  .eyebrow { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .12em; }
-  h1 { font-size: 26px; margin: 6px 0 4px; font-weight: 650; overflow-wrap: anywhere; }
-  .counts { color: var(--muted); font-size: 13px; }
-  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 8px; }
-  button, a.button { appearance: none; border: 1px solid var(--line); background: rgba(255,255,255,.06); color: var(--text);
-           font: inherit; font-size: 13px; padding: 9px 16px; border-radius: 7px; cursor: pointer; text-decoration: none; }
-  button:hover, a.button:hover { background: rgba(255,255,255,.11); }
-  .primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  .primary:hover { background: #5aaee6; }
-  .note { color: var(--muted); font-size: 12px; min-height: 18px; }
-  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-top: 18px; }
-  h2 { font-size: 11px; letter-spacing: .12em; color: var(--muted); margin: 0 0 8px; font-weight: 700; }
-  ul { list-style: none; padding: 0; margin: 0; }
-  li { display: flex; gap: 10px; padding: 3px 0; border-top: 1px solid rgba(255,255,255,.04); }
-  li:first-child { border-top: 0; }
-  .qty { width: 22px; text-align: right; color: var(--accent); font-weight: 650; font-variant-numeric: tabular-nums; }
-  .set { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
-  .error { color: var(--bad); }
-  footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
-  footer a { color: var(--muted); }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.6 var(--mono); }
+  main { max-width: 760px; margin: 0 auto; padding: 18px 16px 48px; }
+  a { color: inherit; }
+  header { display: flex; justify-content: space-between; gap: 12px; white-space: nowrap; }
+  header .brand { font-weight: 700; letter-spacing: .04em; }
+  header nav a { color: var(--dim); text-decoration: none; margin-left: 14px; }
+  header nav a:hover { color: var(--fg); }
+  .rule { color: var(--rule); overflow: hidden; white-space: nowrap; user-select: none; }
+  h1 { font-size: 22px; line-height: 1.3; margin: 14px 0 2px; font-weight: 700; overflow-wrap: anywhere; }
+  .dim { color: var(--dim); }
+  .ok { color: var(--ok); }
+  .bad { color: var(--bad); }
+  .actions { margin: 14px 0 4px; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+  button, .btn { font: inherit; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer;
+                 text-decoration: none; }
+  button::before, .btn::before { content: "["; color: var(--dim); }
+  button::after, .btn::after { content: "]"; color: var(--dim); }
+  button:hover, .btn:hover { color: var(--accent); }
+  .primary { color: var(--accent); }
+  pre { margin: 0; font: inherit; white-space: pre-wrap; }
+  .list { margin-top: 18px; }
+  .row { display: flex; gap: 10px; }
+  .row .q { width: 2ch; text-align: right; color: var(--accent); flex: none; }
+  .row .n { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: clip; }
+  .row .n::after { content: " ............................................................"; color: var(--rule); }
+  .row .s { color: var(--dim); flex: none; }
+  .head { margin-top: 14px; color: var(--dim); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 8px; margin-top: 22px;
+          opacity: 0; transition: opacity .6s ease; }
+  .grid.on { opacity: 1; }
+  .card { position: relative; aspect-ratio: 63 / 88; background: var(--rule); border-radius: 4px; overflow: hidden; }
+  .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .card b { position: absolute; right: 4px; bottom: 4px; min-width: 22px; padding: 0 5px; text-align: center;
+            background: rgba(12,13,15,.86); color: #fff; border-radius: 3px; font-weight: 700; }
+  .card i { position: absolute; inset: 6px; font-style: normal; font-size: 11px; color: var(--dim); }
+  footer { margin-top: 30px; color: var(--dim); }
+  .cursor::after { content: "▍"; color: var(--accent); animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (max-width: 480px) { header nav a:first-child { display: none; } h1 { font-size: 19px; } }
 </style>
 </head>
 <body>
 <main>
-  <div class="eyebrow">SHARED DECK</div>
-  <h1 id="name">Loading…</h1>
-  <div class="counts" id="counts"></div>
-  <div class="actions" id="actions" hidden>
-    <a class="button primary" id="open">Open in the app</a>
-    <button id="copy">Copy list for PTCGL</button>
+  <header>
+    <span class="brand">PTCGL MONITOR</span>
+    <nav><a href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor#readme">about</a><a href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor/releases/latest">get the app</a></nav>
+  </header>
+  <div class="rule" aria-hidden="true">────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
+  <div id="out" aria-live="polite">
+    <div class="t dim">&gt; shared deck</div>
+    <h1 class="t" id="name">loading…</h1>
+    <div class="t dim" id="counts"></div>
   </div>
-  <div class="note" id="note"></div>
-  <div id="sections"></div>
-  <footer>
-    The list lives in the link itself; nothing is stored or sent anywhere.
-    Made with <a href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor">Pokemon TCG Live Monitor</a>.
-  </footer>
+  <div class="actions" id="actions" hidden>
+    <button class="primary" id="copy">copy list</button>
+    <a class="btn" id="open">open in app</a>
+    <button id="limitless">view on limitless ↗</button>
+  </div>
+  <div class="t dim" id="note"></div>
+  <div class="list" id="list"></div>
+  <div class="grid" id="grid" aria-label="Cards"></div>
+  <footer class="t">the list lives in the link. nothing is stored or sent anywhere.</footer>
+  <form id="imggen" method="post" action="https://limitlesstcg.com/tools/imggen" target="_blank" hidden>
+    <input type="hidden" name="_token" value=""><input type="hidden" name="input" id="imggen-input">
+    <input type="hidden" name="sort" value="on">
+  </form>
 </main>
 <script>
 // Mirrors deck_share.py (version a = varint stream, b = the same raw-deflated).
@@ -116,56 +149,127 @@ function exportText(sections) {
   return parts.join("\n\n") + `\n\nTotal Cards: ${total}`;
 }
 
-function show(sections, name) {
+// ── page ─────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const pretty = name => name.replace(/\{(\w)\}/g, (m, s) => ENERGY[s.toUpperCase()] || s);
+const IMAGE_SETS = { "PR-SV": "SVP", "PR-SW": "SWSHP" };  // same as decklists.card_image_url
+function cardImage(set, number) {
+  const code = IMAGE_SETS[set.toUpperCase()] || set.toUpperCase();
+  const m = /^(\d+)(.*)$/.exec(number);
+  const padded = m ? m[1].padStart(3, "0") + m[2] : number;
+  return `https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/tpci/${code}/${code}_${padded}_R_EN_SM.png`;
+}
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function render(sections, name) {
   const total = sections.flat().reduce((n, c) => n + c.qty, 0);
   if (total < 40 || total > 70) throw new Error("the link doesn't hold a full deck");
-  document.getElementById("name").textContent = name || "Shared deck";
-  document.title = (name || "Shared deck") + " · decklist";
-  document.getElementById("counts").textContent =
-    SECTIONS.map((s, i) => `${sections[i].reduce((n, c) => n + c.qty, 0)} ${s}`).join(" · ") + ` · ${total} cards`;
-  const holder = document.getElementById("sections");
+  $("name").textContent = name || "shared deck";
+  document.title = (name || "shared deck") + " · decklist";
+  $("counts").textContent = SECTIONS.map((s, i) =>
+    `${sections[i].reduce((n, c) => n + c.qty, 0)} ${s.toLowerCase()}`).join(" · ") + ` · ${total} cards`;
+  const list = $("list"), grid = $("grid");
   SECTIONS.forEach((title, i) => {
     if (!sections[i].length) return;
-    const box = document.createElement("section");
-    const h = document.createElement("h2");
-    h.textContent = title.toUpperCase();
-    const ul = document.createElement("ul");
+    const count = sections[i].reduce((n, c) => n + c.qty, 0);
+    list.append(el("div", "t head", `── ${title.toUpperCase()} (${count}) ${"─".repeat(Math.max(4, 40 - title.length))}`));
     for (const c of sections[i]) {
-      const li = document.createElement("li");
-      const q = document.createElement("span"); q.className = "qty"; q.textContent = c.qty;
-      const n = document.createElement("span"); n.textContent = c.name.replace(/\{(\w)\}/g, (m, s) => ENERGY[s.toUpperCase()] || s);
-      const s = document.createElement("span"); s.className = "set"; s.textContent = `${c.set} ${c.number}`;
-      li.append(q, n, s); ul.append(li);
+      const row = el("div", "row t");
+      row.append(el("span", "q", c.qty), el("span", "n", pretty(c.name)), el("span", "s", `${c.set} ${c.number}`));
+      list.append(row);
+      const card = el("div", "card");
+      const img = new Image();
+      img.loading = "lazy";
+      img.alt = `${c.qty} × ${pretty(c.name)} (${c.set} ${c.number})`;
+      img.src = cardImage(c.set, c.number);
+      img.onerror = () => { img.remove(); card.append(el("i", "", `${pretty(c.name)}\n${c.set} ${c.number}`)); };
+      card.append(img, el("b", "", c.qty));
+      grid.append(card);
     }
-    box.append(h, ul); holder.append(box);
   });
 }
 
+// Top-down typing: every .t line types out in order (skipped for reduced motion).
+async function typeIn() {
+  const lines = [...document.querySelectorAll(".t")].filter(n => n.offsetParent !== null || n.tagName === "FOOTER");
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const jobs = lines.map(node => {
+    const parts = [];
+    const walk = n => n.nodeType === 3 ? parts.push([n, n.textContent]) : n.childNodes.forEach(walk);
+    walk(node);
+    node.style.visibility = "hidden";  // untyped lines (and their dot leaders) stay out of sight
+    return { node, parts };
+  });
+  const frame = () => new Promise(r => requestAnimationFrame(r));
+  for (const [index, job] of jobs.entries()) {
+    job.node.style.visibility = "";
+    if (job.node.classList.contains("row")) {
+      if (index % 2) await frame();  // list rows: two per frame, top to bottom
+      continue;
+    }
+    job.parts.forEach(([n]) => { n.textContent = ""; });
+    job.node.classList.add("cursor");
+    for (const [n, text] of job.parts) {
+      for (let i = 0; i < text.length; i += 3) { n.textContent = text.slice(0, i + 3); await frame(); }
+    }
+    job.node.classList.remove("cursor");
+  }
+}
+
+async function copyList(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+}
+
 (async () => {
-  const note = document.getElementById("note");
+  const note = $("note");
   try {
-    const fragment = decodeURIComponent(location.hash.slice(1) || "");
-    const [token, rawName = ""] = location.hash.slice(1).split("~");
+    const hash = location.hash.slice(1);
+    if (!hash) throw new Error("this page needs a deck link");
+    const [token, rawName = ""] = hash.split("~");
     const name = decodeURIComponent(rawName).replace(/[\x00-\x1f<>]/g, "").slice(0, 40);
-    if (!fragment) throw new Error("this page needs a deck link");
     const tableText = await (await fetch("cards_v1.txt", { cache: "force-cache" })).text();
     const table = tableText.split(/\r?\n/).filter(l => l.trim() && !l.startsWith("#"));
     const sections = await decode(token, table);
-    show(sections, name);
-    const appLink = "ptcglmonitor://d#" + location.hash.slice(1);
-    const open = document.getElementById("open");
-    open.href = appLink;
-    document.getElementById("actions").hidden = false;
-    document.getElementById("copy").onclick = async () => {
-      await navigator.clipboard.writeText(exportText(sections));
-      note.textContent = "Copied. In Pokémon TCG Live: Decks → New deck → Import.";
+    const text = exportText(sections);
+    render(sections, name);
+    $("actions").hidden = false;
+    $("open").href = "ptcglmonitor://d#" + hash;
+    $("copy").onclick = async () => {
+      note.innerHTML = (await copyList(text))
+        ? '<span class="ok">copied.</span> in pokémon tcg live: decks → create a deck → import'
+        : '<span class="bad">couldn\'t copy</span> - select the list below instead';
     };
-    note.textContent = "Opening the app… If nothing happens, copy the list and import it in Pokémon TCG Live.";
-    location.href = appLink;  // the app asks before importing anything
+    $("limitless").onclick = () => { $("imggen-input").value = text; $("imggen").submit(); };
+    // Copy right away when the browser allows it; otherwise on the first click.
+    if (await copyList(text)) {
+      note.innerHTML = '<span class="ok">list copied.</span> in pokémon tcg live: decks → create a deck → import';
+    } else {
+      note.textContent = "click anywhere to copy the list for pokémon tcg live";
+      const once = async () => {
+        document.removeEventListener("pointerdown", once, true);
+        if (await copyList(text)) {
+          note.innerHTML = '<span class="ok">list copied.</span> in pokémon tcg live: decks → create a deck → import';
+        }
+      };
+      document.addEventListener("pointerdown", once, true);
+    }
+    await typeIn();
+    $("grid").classList.add("on");
+    // Hand the deck to the app when it's installed. Chromium ignores an unknown
+    // scheme quietly; Firefox and Safari would show an error page, so there it
+    // waits for the "open in app" button.
+    const chromium = !!(navigator.userAgentData && navigator.userAgentData.brands.length);
+    if (chromium) location.href = "ptcglmonitor://d#" + hash;
   } catch (err) {
-    document.getElementById("name").textContent = "Can't open this deck";
-    note.className = "note error";
-    note.textContent = String(err.message || err);
+    $("name").textContent = "can't open this deck";
+    note.className = "bad";
+    note.textContent = String(err.message || err).toLowerCase();
   }
 })();
 </script>
