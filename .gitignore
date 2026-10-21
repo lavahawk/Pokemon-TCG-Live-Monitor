@@ -159,3 +159,6 @@ DevVault/
 
 # Hint counters (infotip.py)
 .ui_hints.json
+
+# Deck links this app made (deck_share.py)
+.own_share_links

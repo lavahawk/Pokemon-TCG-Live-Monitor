@@ -116,6 +116,13 @@ Name: "{autodesktop}\Pokemon TCG Live Stats"; Filename: "{app}\runtime\pythonw.e
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#RunValue}"; ValueData: """{app}\runtime\pythonw.exe"" ""{app}\TCGLiveMonitor.py"" --headless"; Tasks: autostart; Check: not WizardSilent
 
+; Shared deck links (deck_share.py / deck_link.py): ptcglmonitor:// opens the import box. The monitor
+; also re-points these keys at its own copy on start; uninstall removes them.
+Root: HKCU; Subkey: "Software\Classes\ptcglmonitor"; ValueType: string; ValueName: ""; ValueData: "URL:Pokemon TCG Live Monitor deck link"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\ptcglmonitor"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\ptcglmonitor\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\icon.ico"",0"
+Root: HKCU; Subkey: "Software\Classes\ptcglmonitor\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\runtime\pythonw.exe"" ""{app}\deck_link.py"" ""%1"""
+
 [Run]
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\TCGLiveMonitor.py"" --headless"; WorkingDir: "{app}"; Description: "Start the monitor now"; Flags: postinstall nowait skipifsilent
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\StatsUI.py"""; WorkingDir: "{app}"; Description: "Open the Stats Dashboard"; Flags: postinstall nowait skipifsilent unchecked

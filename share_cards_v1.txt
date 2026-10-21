@@ -1,0 +1,841 @@
+# deck_share v1 card table - FROZEN: never edit or reorder (links index into it). New cards go in share_cards_v2.txt.
+Boss's Orders MEG 114
+Night Stretcher ASC 196
+Lillie's Determination MEG 119
+Poké Pad POR 81
+Ultra Ball MEG 131
+Buddy-Buddy Poffin TEF 144
+Fezandipiti ex ASC 142
+Meowth ex POR 62
+Special Red Card CRI 82
+Psychic Energy MEE 13
+Budew ASC 16
+Darkness Energy MEE 15
+Munkidori TWM 95
+Crispin SCR 133
+Unfair Stamp TWM 165
+Fire Energy MEE 10
+Rare Candy MEG 125
+Shaymin DRI 10
+Air Balloon ASC 181
+Dreepy TWM 128
+Drakloak TWM 129
+Dawn PFL 87
+Dragapult ex TWM 130
+Judge POR 76
+Switch MEG 130
+Team Rocket's Petrel DRI 176
+Lillie's Clefairy ex JTG 56
+Hilda WHT 84
+Dudunsparce TEF 129
+Dunsparce JTG 120
+Grass Energy MEE 9
+Team Rocket's Watchtower DRI 180
+Secret Box TWM 163
+Telepathic Psychic Energy POR 88
+Latias ex SSP 76
+Risky Ruins MEG 127
+Lana's Aid TWM 155
+Rosa's Encouragement POR 84
+Pokégear 3.0 SVI 186
+Crushing Hammer POR 71
+Mega Kangaskhan ex MEG 104
+Ciphermaniac's Codebreaking TEF 145
+Sacred Ash DRI 168
+Duskull PRE 35
+Dusknoir PRE 37
+Fighting Energy MEE 14
+Dusclops PRE 36
+Moltres PFL 14
+Water Energy MEE 11
+Bug Catching Set TWM 143
+Energy Switch MEG 115
+Cyrano SSP 170
+Battle Cage PFL 85
+Brave Bangle WHT 80
+Hero's Cape TEF 152
+Teal Mask Ogerpon ex TWM 25
+Area Zero Underdepths SCR 131
+Psyduck ASC 39
+Kieran TWM 154
+Wally's Compassion MEG 132
+Jamming Tower TWM 153
+Yveltal MEG 88
+Xerosic's Machinations SFA 64
+Pecharunt ex SFA 39
+Forest of Vitality MEG 117
+Metagross CRI 61
+Gravity Mountain SSP 177
+Enriching Energy SSP 191
+Black Belt's Training JTG 143
+Wondrous Patch PFL 94
+Dipplin TWM 18
+Applin TWM 17
+Fighting Gong MEG 116
+Mist Energy TEF 161
+Gwynn PBL 78
+Team Rocket's Transceiver DRI 178
+Jumbo Ice Cream PFL 91
+Dudunsparce ex JTG 121
+Kadabra MEG 55
+Alakazam MEG 56
+Binding Mochi PRE 95
+N's Zoroark ex JTG 98
+N's Zorua JTG 97
+Handheld Fan TWM 150
+Festival Grounds TWM 149
+Chien-Pao SSP 56
+Metal Energy MEE 16
+Energy Recycler DRI 164
+N's Zekrom ASC 155
+Wellspring Mask Ogerpon ex TWM 64
+N's PP Up JTG 153
+Solrock MEG 75
+Lunatone MEG 74
+Lightning Energy MEE 12
+Snorunt ASC 46
+Prism Tower CRI 80
+Premium Power Pro MEG 124
+Ignition Energy WHT 86
+Fan Rotom SCR 118
+Blaziken ex JTG 24
+Torchic DRI 40
+Combusken DRI 41
+Rabsca TEF 24
+Rellor TEF 23
+Meganium MEG 10
+Team Rocket's Factory DRI 173
+Grookey TWM 14
+Thwackey TWM 15
+Abra MEG 54
+Bayleef MEG 9
+Lucky Helmet TWM 158
+N's Castle JTG 152
+Tool Scrapper ASC 212
+Patrat CRI 70
+Prime Catcher TEF 157
+Tatsugiri TWM 131
+Goldeen TWM 44
+Enhanced Hammer TWM 148
+Seaking PRE 21
+Growing Grass Energy POR 86
+Legacy Energy TWM 167
+Genesect ex BLK 67
+Genesect SFA 40
+Academy at Night SFA 54
+Chikorita ASC 8
+Slowpoke SCR 57
+Slowking SCR 58
+Kyurem SFA 47
+N's Reshiram JTG 116
+Gladion's Final Battle PBL 77
+Riolu MEG 76
+Mega Lucario ex MEG 77
+Rocky Fighting Energy POR 87
+Metang TEF 114
+Briar SCR 132
+Precious Trolley SSP 185
+Beldum TEF 113
+Eri TEF 146
+Boomerang Energy TWM 166
+Glass Trumpet SCR 135
+Drilbur PBL 46
+Mega Excadrill ex PBL 65
+Iron Leaves ex TEF 25
+Froslass TWM 53
+Mega Froslass ex ASC 47
+Raging Bolt ex TEF 123
+Mega Lopunny ex PFL 84
+Buneary PFL 83
+Brock's Scouting JTG 146
+Team Rocket's Articuno DRI 51
+Neo Upper Energy TEF 162
+Celebi MEG 12
+Poltchageist PBL 5
+Mew ex 30C 66
+Annihilape SSP 100
+Chi-Yu TWM 39
+Nighttime Mine ASC 197
+N's Darumaka JTG 26
+N's Darmanitan JTG 27
+Hydrapple ex SCR 14
+Prism Energy ASC 216
+Janine's Secret Art PRE 112
+Banette PBL 34
+Dhelmise PBL 39
+Makuhita MEG 72
+Hariyama MEG 73
+Colress's Tenacity SFA 57
+Team Rocket's Energy DRI 182
+Shuppet PBL 33
+Energy Retrieval SVI 171
+Toucannon PBL 68
+Pikipek PBL 66
+Sinistcha PBL 6
+Team Rocket's Proton DRI 177
+Team Rocket's Ariana DRI 171
+Team Rocket's Giovanni DRI 174
+Surfing Beach MEG 129
+Bloodmoon Ursaluna ex TWM 141
+Maximum Belt TEF 154
+Transformation Tome CRI 83
+Froakie CRI 20
+Frogadier CRI 21
+Staryu POR 20
+Mega Starmie ex POR 21
+Tapu Bulu SFA 6
+Team Rocket's Archer DRI 170
+Energy Search POR 72
+Iron Crown ex TEF 81
+Trumbeak PBL 67
+Dunsparce TEF 128
+Mega Skarmory ex POR 55
+Salvatore TEF 160
+Toxel PFL 67
+Toxtricity PFL 68
+Marnie's Impidimp DRI 134
+Marnie's Grimmsnarl ex DRI 136
+Marnie's Morgrem DRI 135
+Spikemuth Gym DRI 169
+Noctowl SCR 115
+Hoothoot SCR 114
+Zeraora DRI 78
+Surfer SSP 187
+Mega Signal MEG 121
+Mega Greninja ex CRI 22
+Abra TWM 80
+Spiky Energy JTG 159
+Explorer's Guidance TEF 147
+Flutter Mane TEF 78
+Cornerstone Mask Ogerpon ex TWM 112
+Smoochum SSP 75
+Dedenne SSP 87
+Lumiose City POR 77
+Team Rocket's Mimikyu DRI 87
+Greninja ex 30C 21
+Roto-Stick PRE 127
+Pecharunt SVP 149
+Miracle Headset SSP 183
+Lillie's Pearl JTG 151
+Team Rocket's Porygon DRI 153
+Team Rocket's Porygon2 DRI 154
+Team Rocket's Murkrow DRI 127
+Team Rocket's Honchkrow ASC 127
+Dwebble DRI 11
+Crustle DRI 12
+Dark Bell PBL 75
+Elgyem BLK 40
+Spiritomb PBL 35
+Carvanha PFL 60
+Mega Sharpedo ex PFL 61
+Bubbly Water Energy CRI 84
+Strange Timepiece MEG 128
+Brilliant Blender SSP 164
+Carmine TWM 145
+Passimian SSP 111
+Team Rocket's Mewtwo ex DRI 81
+Team Rocket's Tarountula DRI 19
+Team Rocket's Spidops DRI 20
+Dolliv DRI 22
+Arboliva ex DRI 23
+Smoliv DRI 21
+Beedrill ex CRI 3
+Weedle CRI 1
+Kakuna CRI 2
+Pokémon Center Lady MEG 123
+AZ's Tranquility CRI 76
+Hassel TWM 151
+Cynthia's Gible DRI 102
+Cynthia's Power Weight DRI 162
+Cynthia's Garchomp ex DRI 104
+Cynthia's Gabite DRI 103
+Cynthia's Roselia DRI 7
+Cynthia's Roserade DRI 8
+Tarragon POR 85
+Enamorus TWM 93
+Cynthia's Spiritomb DRI 129
+Bronzong TEF 69
+Grand Tree SCR 136
+Bronzor TEF 68
+Redeemable Ticket JTG 156
+Mega Absol ex MEG 86
+Ruffian JTG 157
+Max Rod PRE 116
+Sparkling Crystal SCR 142
+Tera Orb SSP 189
+Punk Helmet PFL 92
+Koraidon ex ASC 121
+Hop's Choice Band JTG 148
+Hop's Snorlax JTG 117
+Postwick JTG 154
+Hop's Bag JTG 147
+Powerglass SFA 63
+Philippe CRI 79
+Magnetic Metal Energy CRI 85
+Greninja ex TWM 106
+Hop's Cramorant JTG 138
+Charcadet SSP 32
+Ceruledge ex SSP 36
+Hop's Phantump ASC 95
+Hop's Trevenant ASC 96
+Bianca's Devotion TEF 142
+Paldean Tauros SSP 18
+N's Plan BLK 83
+Pokémon Catcher POR 82
+Hand Trimmer TEF 150
+Ethan's Adventure DRI 165
+Unown 30C 72
+Drilbur TEF 85
+Chi-Yu PBL 59
+Piplup PFL 27
+Empoleon ex PFL 70
+Frillish WHT 44
+Stunfisk ASC 62
+Ethan's Cyndaquil DRI 32
+Ethan's Quilava DRI 33
+Ethan's Typhlosion DRI 34
+Litwick PBL 36
+N's Purrloin JTG 96
+Voltaic Lightning Energy PBL 84
+Togekiss SSP 72
+Relicanth TEF 84
+Scoop Up Cyclone TWM 162
+Mega Manectric ex MEG 50
+Team Rocket's Sneasel DRI 128
+Morty's Conviction TEF 155
+Larry's Skill PRE 115
+Victini SSP 21
+Chikorita MEG 8
+Chandelure TWM 38
+Canari ASC 185
+Hop's Wooloo JTG 135
+Mega Mawile ex MEG 94
+Hop's Dubwool JTG 136
+Tynamo ASC 59
+Eelektrik ASC 60
+Basic {D} Energy MEE 7
+Basic {P} Energy MEE 5
+Basic {R} Energy MEE 2
+Basic {G} Energy SVE 1
+Basic {G} Energy MEE 1
+Basic {R} Energy SVE 2
+Basic {W} Energy SVE 3
+Basic {W} Energy MEE 3
+Basic {L} Energy SVE 4
+Basic {L} Energy MEE 4
+Basic {P} Energy SVE 5
+Basic {F} Energy SVE 6
+Basic {F} Energy MEE 6
+Basic {D} Energy SVE 7
+Basic {M} Energy SVE 8
+Basic {M} Energy MEE 8
+Drapion POR 52
+Lampent PBL 37
+Togepi SSP 70
+Cofagrigus SSP 83
+Team Rocket's Kangaskhan ex ASC 162
+Mega Chandelure ex PBL 38
+Bloodmoon Ursaluna PRE 54
+Dusk Ball SSP 175
+Fossil Quarry PBL 76
+Spectrier ASC 98
+Bulbasaur MEG 1
+Ivysaur MEG 2
+Mega Venusaur ex MEG 3
+Darkness Energy MEE 7
+Great Haul Net CRI 78
+Blaziken DRI 42
+Barbaracle POR 43
+Binacle POR 42
+Bastiodon PBL 62
+Antique Armor Fossil PBL 72
+Brute Bonnet TWM 118
+Electrike MEG 49
+Duraludon SCR 106
+Archaludon ex SSP 130
+Manectric PBL 24
+Bouffalant SCR 119
+Community Center TWM 146
+Lisia's Appeal SSP 179
+Lucian TWM 157
+Mega Darkrai ex PBL 48
+Mega Zygarde ex POR 47
+Fire Energy MEE 2
+Terapagos ex SCR 128
+Purrloin WHT 55
+Steven's Metagross ex DRI 145
+Steven's Beldum DRI 143
+Steven's Metang DRI 144
+Mega Eelektross ex ASC 61
+Full Metal Lab TEF 148
+Pawmot PFL 34
+Shieldon PBL 61
+Mega Meganium ex ASC 10
+Maractus JTG 8
+Okidogi TWM 111
+Regigigas PRE 86
+Zoroark WHT 62
+Rillaboom TWM 16
+Comfey SCR 63
+Mystery Garden MEG 122
+Iono's Wattrel JTG 54
+Iono's Kilowattrel JTG 55
+Mega Slowbro ex PBL 31
+Eevee SSP 143
+Lively Stadium SSP 180
+Totodile TEF 39
+Super Potion JTG 158
+Jellicent ex WHT 45
+Hop's Zacian ex JTG 111
+Pikachu ex SSP 57
+Counter Gain SSP 169
+Naveen POR 79
+Rust Syndicate Grunt PBL 81
+Water Energy MEE 3
+Joltik SCR 50
+Mega Diancie ex PFL 41
+Minccino CRI 72
+Cinccino ex CRI 73
+Mega Gengar ex PFL 56
+Gastly POR 48
+Psychic Energy MEE 5
+Iron Defender MEG 118
+Ethan's Pichu DRI 71
+Flareon ex PRE 14
+Yveltal 30C 100
+Team Rocket's Wobbuffet DRI 82
+Haunter PFL 55
+Eevee ex PRE 75
+Cinderace MEG 28
+Volcanion ex JTG 31
+Leafeon ex PRE 6
+Archaludon PFL 75
+Core Memory POR 70
+Shadowy Darkness Energy PBL 83
+Babiri Berry SSP 163
+Galvantula SFA 2
+Beldum CRI 59
+Fighting Energy MEE 6
+Haxorus BLK 70
+Mega Audino ex ASC 172
+Gengar ex 30C 90
+Heatran TWM 123
+Acerola's Mischief MEG 113
+Deoxys CRI 34
+Hydreigon ex SSP 119
+Dratini ASC 150
+Mega Dragonite ex ASC 152
+Metal Energy MEE 8
+Dragonair ASC 151
+Jacinthe POR 75
+Mega Abomasnow ex MEG 36
+Snover MEG 35
+Clefairy POR 30
+Levincia JTG 150
+Okidogi ASC 122
+Firebreather PFL 89
+Deino WHT 65
+Mega Charizard X ex PFL 13
+Jirachi ex 30C 102
+Charmander PFL 11
+Charmeleon PFL 12
+Chi-Yu MEG 31
+Zweilous WHT 66
+Grimsley's Move PFL 90
+Oricorio ex PFL 18
+Snorunt TWM 51
+Glalie TWM 52
+Armarouge PBL 12
+Doublade POR 57
+Honedge POR 56
+Aegislash POR 58
+Dialga MEG 95
+Sylveon ex 30C 71
+Iris's Fighting Spirit JTG 149
+Electrike PBL 23
+Grass Energy MEE 1
+Backtrack Badge PBL 74
+Blowtorch PFL 86
+Yanma DRI 2
+Yanmega ex DRI 3
+Togetic SSP 71
+Light Ball ASC 191
+Team Rocket's Venture Bomb DRI 179
+Sylveon PRE 40
+Team Rocket's Zubat DRI 120
+Espeon ex PRE 34
+Team Rocket's Golbat DRI 121
+Team Rocket's Crobat ex DRI 122
+Applin SCR 12
+Gravity Gemstone SCR 137
+Team Rocket's Porygon-Z DRI 155
+Kyogre MEG 34
+Okidogi ex SFA 36
+Ethan's Ho-Oh ex DRI 39
+Heavy Baton TEF 151
+Ting-Lu TWM 110
+Misty's Vitality PBL 80
+Dangerous Laser SFA 58
+Iono's Tadbulb JTG 52
+Iono's Bellibolt ex JTG 53
+Finizen TEF 48
+Palafin ex TWM 61
+Palafin TWM 60
+Wailmer PBL 15
+Wailord ex PBL 16
+Kofu SCR 138
+Switch 30C 127
+Mega Charizard Y ex ASC 22
+Lampent WHT 17
+Blissey ex TWM 134
+Accompanying Flute TWM 142
+Iono's Voltorb JTG 47
+Mega Zeraora ex PBL 27
+Cubchoo BLK 25
+Raging Bolt SCR 111
+Chansey TWM 133
+Rowlet POR 10
+Dartrix POR 11
+Scatterbug SSP 5
+Vivillon POR 9
+Spewpa POR 8
+Ethan's Slugma DRI 35
+Ethan's Magcargo DRI 36
+Decidueye ex POR 12
+Exeggcute 30C 1
+Waitress ASC 215
+Genesect PFL 8
+Alolan Exeggutor 30C 2
+Hyper Aroma TWM 152
+Fennekin CRI 11
+Zekrom ex BLK 34
+Feebas SSP 41
+Milotic ex SSP 42
+Iron Thorns ex TWM 77
+Nitro Fire Energy CRI 86
+Eevee TWM 135
+Hoothoot PRE 77
+Numel ASC 27
+Mega Camerupt ex MEG 22
+Delphox CRI 13
+Koraidon SSP 116
+Lucario 30C 83
+Ogre's Mask TWM 159
+Hearthflame Mask Ogerpon ex TWM 40
+Seviper PFL 62
+Braixen CRI 12
+Larvesta SSP 24
+Volcarona BLK 16
+Marill ASC 83
+Mega Feraligatr ex ASC 43
+Scream Tail ex TWM 94
+Erika's Tangela ASC 7
+Erika's Bellsprout ASC 4
+Erika's Weepinbell ASC 5
+Erika's Victreebel ASC 6
+Sinistcha TWM 22
+Azumarill SSP 74
+Sinistcha ex TWM 23
+Bayleef ASC 9
+Feraligatr TEF 41
+Ethan's Sudowoodo DRI 93
+Fezandipiti TWM 96
+Ethan's Pinsir DRI 1
+Perilous Jungle TEF 156
+Skrelp CRI 58
+Mega Dragalge ex CRI 65
+Chespin CRI 5
+Chesnaught CRI 7
+Quilladin CRI 6
+Ninetales CRI 9
+Paldean Tauros PFL 48
+Tauros DRI 152
+Shuckle MEG 11
+Mamoswine ex JTG 79
+Croconaw TEF 40
+Swinub JTG 77
+Jolteon ex PRE 30
+Lightning Energy MEE 4
+Prinplup PFL 28
+Bronzor PRE 66
+Erika's Oddish ASC 1
+Erika's Gloom ASC 2
+Erika's Vileplume ex ASC 3
+Roxie's Performance CRI 81
+Lacey SCR 139
+Harlequin WHT 83
+Ceruledge SSP 35
+Heatmor WHT 19
+Magearna JTG 107
+Misty's Gyarados DRI 49
+Misty's Magikarp DRI 48
+Misty's Psyduck DRI 45
+Misty's Starmie DRI 47
+Misty's Staryu DRI 46
+Repel MEG 126
+Scramble Switch SSP 186
+Tremendous Bomb PBL 82
+Reshiram ex WHT 20
+Uxie SSP 78
+Misty's Lapras DRI 50
+Galvantula ex SCR 51
+Piloswine JTG 78
+Deduction Kit SSP 171
+Alolan Exeggutor ex SSP 133
+Poké Pad 30C 126
+Mega Heracross ex PFL 4
+Vulpix CRI 8
+Aurorus POR 24
+Poké Vital A SFA 62
+Espeon 30C 69
+Antique Sail Fossil POR 69
+Trapinch SSP 104
+Flygon ex SSP 106
+Team Rocket's Nidoran♂ DRI 117
+Team Rocket's Nidoking ex DRI 119
+Croconaw ASC 42
+Cook TWM 147
+Mr. Mime TEF 63
+Energy Coin BLK 81
+Vibrava SSP 105
+Team Rocket's Nidorino DRI 118
+Buneary MEG 107
+Morpeko ex PBL 55
+Neutralization Zone SFA 60
+Magnemite MEG 45
+Magneton SSP 59
+Vulpix SSP 16
+Rellor DRI 24
+Shinx POR 26
+Luxio POR 27
+Luxray ex TWM 68
+Heatran PBL 7
+Azelf SSP 80
+Zarude SVP 199
+Call Bell SSP 165
+Tapu Koko ASC 67
+Yveltal ex POR 53
+Haunter POR 49
+Victini 30C 13
+Sylveon ex SSP 86
+Kirlia MEG 59
+Ralts MEG 58
+Mega Gardevoir ex MEG 60
+Zorua WHT 61
+Decidueye SFA 5
+Gengar POR 50
+Reshiram PFL 17
+Umbreon ex 30C 92
+Hoothoot TEF 126
+Bunnelby POR 64
+Diggersby POR 65
+Scorbunny MEG 26
+Slakoth SSP 145
+Slaking ex SSP 147
+Vigoroth SSP 146
+Mega Latias ex MEG 100
+Cinderace ex SCR 28
+Raboot MEG 27
+Tyranitar JTG 95
+Capsakid SSP 12
+Scovillain ex SSP 37
+Scyther TEF 1
+Scizor ex TEF 111
+Latios MEG 101
+Larvitar PRE 47
+Pupitar PRE 48
+Gastly PFL 54
+Marnie's Morpeko DRI 137
+Absol PFL 63
+Ho-Oh CRI 10
+Piloswine PFL 24
+Luxray POR 28
+Seel POR 18
+Dewgong POR 19
+Snivy POR 4
+Bergmite CRI 23
+Avalugg CRI 24
+Serperior POR 6
+Awakening Drum TEF 141
+Wailord JTG 41
+Team Rocket's Arbok DRI 113
+Team Rocket's Ekans DRI 112
+Alomomola BLK 24
+Survival Brace TWM 164
+Clemont's Quick Wit SSP 167
+Serperior ex BLK 3
+Kecleon SSP 150
+Friends in Paldea PRE 109
+Servine POR 5
+Archaludon SCR 107
+Walking Wake ex TEF 50
+Drayton SSP 174
+Emolga TWM 69
+Perrin TWM 160
+Banette JTG 60
+Vaporeon ex PRE 23
+Energy Swatter POR 73
+Rayquaza ASC 153
+Mega Hawlucha ex ASC 116
+Magmar JTG 20
+Magmortar JTG 21
+Team Rocket's Meowth DRI 149
+Team Rocket's Persian ex DRI 150
+Lugia 30C 121
+Team Rocket's Nidoran♀ DRI 114
+Team Rocket's Nidoqueen DRI 116
+Team Rocket's Nidorina DRI 115
+Lillie's Cutiefly JTG 66
+Lillie's Ribombee JTG 67
+Terapagos SSP 161
+Skarmory PBL 60
+Team Rocket's Larvitar DRI 94
+Camerupt ASC 28
+Urbain ASC 214
+Drilbur SSP 108
+Team Rocket's Chingling DRI 85
+Lopunny MEG 108
+Mew 30C 65
+Heliolisk ASC 64
+Helioptile SSP 154
+Klinklang SCR 101
+Stunfisk ex ASC 114
+Lapras ex SCR 32
+Emma CRI 77
+Poké Ball POR 80
+Team Rocket's Moltres ex DRI 31
+Eternatus PFL 69
+Azumarill ex ASC 84
+Salandit POR 15
+Salazzle ex POR 16
+Crobat CRI 51
+Zubat SFA 27
+Deoxys CRI 32
+Scraggy WHT 57
+Iono's Electrode JTG 48
+Cheren WHT 81
+Fletchinder POR 13
+Fletchling POR 66
+Talonflame POR 14
+Cottonee WHT 4
+Whimsicott ex WHT 5
+Mamoswine PFL 25
+Fennel BLK 82
+Meloetta ex BLK 44
+Gastrodon SSP 107
+Shellos SSP 46
+Sandygast TWM 91
+Palossand ex SSP 91
+Cofagrigus WHT 40
+Yamask WHT 39
+Team Rocket's Blipbug DRI 15
+Team Rocket's Orbeetle DRI 89
+Team Rocket's Diglett ASC 100
+Team Rocket's Dugtrio ASC 101
+Team Rocket's Dottler DRI 88
+Magnezone MEG 47
+Jasmine's Gaze SSP 178
+Pikachu ex 30C 54
+Chewtle SCR 43
+Drednaw SCR 44
+Orthworm ex SCR 110
+Delibird CRI 18
+Wo-Chien SSP 15
+Miraidon TEF 121
+Tatsugiri ex SSP 142
+Ekans TEF 100
+Arbok TEF 101
+Bruxish SSP 49
+Sizzlipede TEF 36
+Centiskorch SSP 28
+Mawile ASC 144
+Flabébé TWM 86
+Floette TWM 87
+Florges TWM 88
+Farigiraf ex TEF 108
+Alolan Diglett SSP 122
+Alolan Dugtrio SSP 123
+Sandile BLK 57
+Krokorok BLK 58
+Krookodile PFL 66
+Exeggcute SSP 1
+Bagon JTG 112
+Salamence ex 30C 109
+Shelgon JTG 113
+Girafarig TWM 83
+Litten TEF 32
+Incineroar ex TEF 34
+Koraidon TEF 119
+Roaring Moon TEF 109
+Turtwig TEF 10
+Torterra ex TEF 12
+Grotle TEF 11
+Iron Valiant TEF 79
+Miraidon ex TEF 122
+Torracat TEF 33
+Sneasel MEP 20
+Weavile MEP 21
+Spinarak POR 1
+Ariados TWM 5
+Volbeat TWM 9
+Snivy BLK 1
+Servine BLK 2
+Cramorant TWM 58
+Walking Wake TWM 63
+Scream Tail TEF 77
+Great Tusk TEF 97
+Sandy Shocks TEF 98
+Poltchageist TWM 20
+Mega Gallade ex CRI 48
+Xerneas CRI 42
+Iron Boulder SCR 71
+Iron Boulder ex TEF 99
+Iron Leaves TWM 19
+Reboot Pod TEF 158
+Fomantis PBL 3
+Lurantis ex PBL 4
+Jynx PBL 32
+Rhyhorn SCR 74
+Rhyperior SCR 76
+Rhydon SCR 75
+Girafarig TEF 66
+N's Vanillite ASC 49
+N's Vanilluxe ASC 51
+N's Vanillish ASC 50
+Raboot SCR 27
+Nincada MEG 16
+Ninjask MEG 17
+Shedinja MEG 61
+Morpeko TWM 72
+Zeraora SCR 55
+Lumiose Galette POR 78
+Sacred Charm PFL 93
+Emboar WHT 13
+Tepig ASC 29
+Night Stretcher SSP 251
+Night Stretcher SFA 61
+Pecharunt ex SFA 95
+Haunter MEP 27
+Meowth ex POR 121
+Fezandipiti ex SFA 92
+Rare Candy MEG 175
+Rare Candy PGO 69
+Boss's Orders PAL 248
+Ultra Ball BRS 186
+Buddy-Buddy Poffin TWM 223
+Janine's Secret Art SFA 88
+Boss's Orders RCL 189
+Ultra Ball CRZ 146
+Shadowy {D} Energy PBL 83
+Dawn PFL 129
+Team Rocket's Petrel DRI 226
+N's Zoroark ex JTG 175
+Munkidori SFA 72
+N's Zoroark ex JTG 185
+Fezandipiti ex SFA 38
+Budew PRE 4
+Munkidori PRE 44
+Dragapult ex TWM 200
+Crushing Hammer SSH 159
+Judge LOT 209
+Energy Recycler POR 108

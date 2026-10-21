@@ -41,6 +41,9 @@ pet.py
 theme.py
 ui_restart.py
 infotip.py
+deck_share.py
+deck_link.py
+share_cards_v1.txt
 # UI theme fonts (OFL, theme.py)
 fonts\Geist-Bold.ttf
 fonts\Geist-Medium.ttf

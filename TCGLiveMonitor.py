@@ -568,6 +568,20 @@ class Monitor:
 
     # ── clipboard ──
     def handle_clipboard(self, text):
+        # A shared deck link copied from a chat (works even when the web
+        # page is down): open the import box. Links you made yourself are skipped.
+        try:
+            import deck_share
+            if deck_share.looks_like_link(text):
+                if not deck_share.is_own_link(text):
+                    import ui_restart
+                    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    subprocess.Popen([ui_restart.gui_python(), os.path.join(BASE_DIR, "deck_link.py"), text.strip()],
+                                     cwd=BASE_DIR, creationflags=flags, close_fds=True)
+                    log("Shared deck link on the clipboard: opened the import box.")
+                return
+        except Exception as exc:
+            log(f"Deck link handling failed: {exc}")
         # Your own deck exported from PTCGL (Export → Copy to clipboard):
         # remembered for the In Person tab's "Print your decklist".
         try:
@@ -760,6 +774,12 @@ def main():
         log("Another monitor instance is already running - exiting.")
         return 0
     write_text(PID_FILE, os.getpid())
+    try:
+        import deck_link
+        if deck_link.register():
+            log("Registered ptcglmonitor:// deck links.")
+    except Exception as exc:
+        log(f"Deck link registration failed: {exc}")
 
     try:
         from game_window import ensure_dpi_aware

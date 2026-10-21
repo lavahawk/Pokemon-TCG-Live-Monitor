@@ -484,6 +484,18 @@ def _play_limitless_notification_sound():
         pass
 
 
+def _list_or_link(text):
+    """A pasted decklist as is; a shared deck link (deck_share) as its list."""
+    text = (text or "").strip()
+    if "#" in text or (text[:1] in "ab" and " " not in text and len(text) > 8):
+        try:
+            import deck_share
+            return deck_share.parse(text)[0]
+        except Exception:
+            pass
+    return text
+
+
 def _par_text(par):
     """'50%', or 'par 44.1%' when ties count as losses."""
     return "50%" if abs(par - 0.5) < 0.0005 else f"par {par * 100:.1f}%"
@@ -5839,6 +5851,7 @@ class StatsWindow(QWidget):
             self.open_trainerhill_tool(path)
 
         header(entry["name"].upper())
+        menu.addAction("Share link", lambda: self._copy_share_link(entry, deck_name, button))
         menu.addAction("View list", lambda: self._view_decklist(entry, deck_name))
         menu.addAction("View as picture", lambda: self._view_decklist_picture(entry, deck_name))
         menu.addAction("Print decklist", lambda: self._print_decklist(entry, deck_name))
@@ -5861,6 +5874,22 @@ class StatsWindow(QWidget):
         menu.addAction("Unlink", lambda: self._link_decklist(deck_name, None))
         button.setMenu(menu)
         return button
+
+    def _copy_share_link(self, entry, deck_name, anchor):
+        """Copy a link that holds the whole list (deck_share): it opens the
+        app for anyone who has it, and the web page shows the list otherwise."""
+        import deck_share
+        try:
+            link = deck_share.share_url(entry.get("text") or "", deck_name)
+        except deck_share.ShareError as exc:
+            infotip.show_text(QCursor.pos(), f"Can't share this list: {exc}", anchor)
+            return
+        deck_share.remember_own(link)
+        QApplication.clipboard().setText(link)
+        infotip.show_text(QCursor.pos(), infotip.tip(
+            "<b>Link copied</b> · paste it anywhere",
+            "Opens this list in Pokemon TCG Live Monitor, or shows it on the web for anyone without the app."),
+            anchor)
 
     def _link_decklist(self, deck_name, lid):
         from decklists import link_decklist
@@ -5924,7 +5953,7 @@ class StatsWindow(QWidget):
         choices = QListWidget()
         col.addWidget(choices, 1)
 
-        manual_btn = QPushButton("▸ Paste a list manually")
+        manual_btn = QPushButton("▸ Paste a list or link")
         manual_btn.setObjectName("ghost")
         manual_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         col.addWidget(manual_btn)
@@ -5977,7 +6006,7 @@ class StatsWindow(QWidget):
         choices.setVisible(bool(stored))
 
         def check_clipboard():
-            text = (QApplication.clipboard().text() or "").strip()
+            text = _list_or_link(QApplication.clipboard().text())
             if not is_ptcgl_decklist(text):
                 return
             set_status(text)
@@ -5995,17 +6024,17 @@ class StatsWindow(QWidget):
             update_link()
 
         def update_link(*_):
-            text = edit.toPlainText().strip() if edit.isVisible() else ""
+            text = _list_or_link(edit.toPlainText()) if edit.isVisible() else ""
             link.setEnabled(is_ptcgl_decklist(text) or choices.currentItem() is not None)
 
         def toggle_manual():
             show = not edit.isVisible()
             edit.setVisible(show)
-            manual_btn.setText(("▾ " if show else "▸ ") + "Paste a list manually")
+            manual_btn.setText(("▾ " if show else "▸ ") + "Paste a list or link")
             update_link()
 
         def accept():
-            text = edit.toPlainText().strip() if edit.isVisible() and edit.toPlainText().strip() else (
+            text = _list_or_link(edit.toPlainText()) if edit.isVisible() and edit.toPlainText().strip() else (
                 choices.currentItem().data(Qt.ItemDataRole.UserRole) if choices.currentItem() else "")
             if not is_ptcgl_decklist(text):
                 status.setText("<span style='color:#EF9A9A'>That isn't a PTCGL deck export "
