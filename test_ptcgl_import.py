@@ -46,10 +46,15 @@ def test_minimize_request_is_taken_once():
         P.MINIMIZE_FILE = original
 
 
-def test_regions_are_fractions():
-    for region in (P.NAV, P.DECK_GRID, P.DIALOG, P.RIGHT_PANEL, P.EDITOR):
-        x0, y0, x1, y1 = region
-        assert 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1
+def test_regions_fit_any_window():
+    for size in ((1280, 720), (1920, 1080), (5120, 1440), (1024, 768)):
+        screen = P.Screen.from_image(__import__("numpy").zeros((size[1], size[0], 3), "uint8"))
+        for region in (P.NAV, P.DECK_GRID, P.DIALOG, P.RIGHT_PANEL, P.EDITOR, (0.1, 0.2, 0.3, 0.4)):
+            x0, y0, x1, y1 = screen.rect(region)
+            assert 0 <= x0 < x1 <= size[0] and 0 <= y0 < y1 <= size[1], (size, region)
+    wide = P.Screen.from_image(__import__("numpy").zeros((1440, 5120, 3), "uint8"))
+    assert wide.rect(P.RIGHT_PANEL)[0] == 5120 - int(1.3 * 1440)  # anchored right, sized by height
+    assert wide.rect(P.DIALOG)[0] == (5120 - 1440) // 2
 
 
 if __name__ == "__main__":

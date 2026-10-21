@@ -4,11 +4,11 @@ Decks -> Create a deck -> Import settings "Rarest owned" -> Import (from the
 clipboard) -> rename the new deck (optional).
 
 Every target is found by reading the screen (Tesseract OCR) inside a region
-given as fractions of the game's client area, then clicked where its text
-was found - never at fixed pixels. PTCGL pins its menus to the window edges,
-so proportions alone break on other aspect ratios (a 32:9 fullscreen and a
-16:9 window put "DECKS" in different places); reading the text works on
-both. Each step waits for the screen it expects and gives up with a clear
+relative to the game's client area, then clicked where its text was found -
+never at fixed pixels. PTCGL sizes its UI by window height and pins menus to
+the window edges, so a region is anchored to an edge (or the centre) with a
+width in window heights: the same small area on a 32:9 fullscreen and a
+16:9 window, which also keeps OCR fast. Each step waits for the screen it expects and gives up with a clear
 reason instead of clicking blind.
 
 Clicks go only to the game while it's in the foreground (AutoClicker's
@@ -29,16 +29,21 @@ import numpy as np
 
 import game_window
 
-# Regions (x0, y0, x1, y1) as fractions of the client area.
-NAV = (0.0, 0.0, 0.62, 0.11)          # HOME DECKS PROFILE ... (top-left)
-DECK_GRID = (0.0, 0.08, 0.68, 0.75)   # deck tiles incl. "Create a deck"
-DIALOG = (0.2, 0.15, 0.8, 0.9)        # centred dialogs
-RIGHT_PANEL = (0.55, 0.0, 1.0, 0.45)  # deck editor header / rename panel
-EDITOR = (0.0, 0.0, 0.7, 0.2)         # "CARD LIBRARY"
+# Regions: (anchor, width in window heights, y0, y1) with anchor L(eft edge),
+# R(ight edge) or C(entre), y as fractions of the height; or plain fractions
+# (x0, y0, x1, y1). Widths measured on 1280x720, 1920x1080 and 5120x1440.
+NAV = ("L", 0.8, 0.0, 0.11)           # HOME DECKS PROFILE ... (top-left)
+DECK_GRID = ("L", 1.0, 0.08, 0.75)    # deck tiles incl. "Create a deck", RECENTS
+DIALOG = ("C", 1.0, 0.15, 0.9)        # centred dialogs
+RIGHT_PANEL = ("R", 1.3, 0.0, 0.45)   # deck editor header / rename panel
+EDITOR = ("L", 0.6, 0.0, 0.2)         # "CARD LIBRARY"
 
 WAIT_MENU_S = 120     # how long to wait for the main menu (e.g. a match is on)
 STEP_S = 12           # how long each screen may take to appear
-OCR_HEIGHT = 2160     # OCR runs on crops scaled as if the window were this tall
+OCR_HEIGHT = 1800     # whole-region reads run on crops scaled as if the window were this tall
+LINE_OCR_HEIGHT = 2160  # line-by-line reads (small labels) need bigger text
+CLICK_SETTLE_S = 0.35  # after a click, before looking again
+POLL_S = 0.25
 
 user32 = ctypes.windll.user32
 
@@ -63,6 +68,15 @@ def take_minimize_request(max_age=15.0):
         return fresh
     except OSError:
         return False
+
+
+_HIDE_FOR_CAPTURE = set()  # our own overlay windows that screen capture can't skip
+
+
+def hide_during_capture(hwnd, remove=False):
+    """Register a window (e.g. the "Importing…" overlay) to be hidden for the
+    instant of each screen capture, where Windows can't exclude it."""
+    (_HIDE_FOR_CAPTURE.discard if remove else _HIDE_FOR_CAPTURE.add)(int(hwnd))
 
 
 class ImportStopped(Exception):
@@ -91,8 +105,17 @@ class Screen:
         x, y = win32gui.ClientToScreen(hwnd, (0, 0))
         self.origin = (x, y)
         self.size = (w, h)
-        with mss.mss() as grabber:
-            shot = grabber.grab({"left": x, "top": y, "width": w, "height": h})
+        hidden = [hwnd_ for hwnd_ in list(_HIDE_FOR_CAPTURE) if user32.IsWindowVisible(hwnd_)]
+        for hwnd_ in hidden:
+            user32.ShowWindow(hwnd_, 0)  # SW_HIDE
+        if hidden:
+            time.sleep(0.05)  # let the compositor drop them
+        try:
+            with mss.mss() as grabber:
+                shot = grabber.grab({"left": x, "top": y, "width": w, "height": h})
+        finally:
+            for hwnd_ in hidden:
+                user32.ShowWindow(hwnd_, 4)  # SW_SHOWNOACTIVATE
         self.image = np.asarray(shot)[:, :, :3]  # BGR
         self._words = {}
 
@@ -106,13 +129,23 @@ class Screen:
         screen._words = {}
         return screen
 
-    def _prepared(self, region):
-        """(gray crop upscaled to ~2160p text size, scale, x0, y0) of `region`."""
+    def rect(self, region):
+        """(x0, y0, x1, y1) client px of a region (see NAV etc.)."""
+        w, h = self.size
+        if isinstance(region[0], str):
+            anchor, width, top, bottom = region
+            span = min(w, int(width * h))
+            x0 = {"L": 0, "R": w - span, "C": (w - span) // 2}[anchor]
+            return x0, int(top * h), x0 + span, int(bottom * h)
+        return int(region[0] * w), int(region[1] * h), int(region[2] * w), int(region[3] * h)
+
+    def _prepared(self, region, ocr_height=OCR_HEIGHT):
+        """(gray crop upscaled to ~1800p text size, scale, x0, y0) of `region`."""
         import cv2
         w, h = self.size
-        x0, y0, x1, y1 = int(region[0] * w), int(region[1] * h), int(region[2] * w), int(region[3] * h)
+        x0, y0, x1, y1 = self.rect(region)
         gray = cv2.cvtColor(self.image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
-        scale = min(3.0, max(1.0, OCR_HEIGHT / float(max(1, h))))
+        scale = min(3.0, max(1.0, ocr_height / float(max(1, h))))
         return cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC), scale, x0, y0
 
     @staticmethod
@@ -129,11 +162,16 @@ class Screen:
             return self._words[region]
         tess = self._tesseract()
         gray, scale, x0, y0 = self._prepared(region)
-        found = []
-        for img in (gray, 255 - gray):  # light-on-dark bars and dark-on-light panels
+        from concurrent.futures import ThreadPoolExecutor
+
+        def read(img):
             data = tess.image_to_data(img, config="--psm 11", output_type=tess.Output.DICT)
-            found += self._parse(data, 30, lambda bx, by, bw, bh: (x0 + bx / scale, y0 + by / scale,
-                                                                   bw / scale, bh / scale))
+            return self._parse(data, 30, lambda bx, by, bw, bh: (x0 + bx / scale, y0 + by / scale,
+                                                                 bw / scale, bh / scale))
+        # Light-on-dark bars and dark-on-light panels, read side by side
+        # (Tesseract runs as separate processes).
+        with ThreadPoolExecutor(2) as pool:
+            found = [w for part in pool.map(read, (gray, 255 - gray)) for w in part]
         self._words[region] = found
         return found
 
@@ -151,7 +189,7 @@ class Screen:
         """Boxes that look like single lines of text (gradient + horizontal
         closing), in the prepared crop's pixels."""
         import cv2
-        gray, scale, _x0, _y0 = self._prepared(region)
+        gray, scale, _x0, _y0 = self._prepared(region, LINE_OCR_HEIGHT)
         h_ui = self.size[1] * scale
         grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
         mask = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
@@ -197,15 +235,19 @@ class Screen:
         if hit or not deep:
             return hit
         gray, scale, boxes = self._line_boxes(region)
-        x0, y0 = int(region[0] * self.size[0]), int(region[1] * self.size[1])
+        x0, y0 = self.rect(region)[:2]
         want = max(1.5, len(phrase) * 0.62)  # width / height of the phrase in this UI font
         boxes.sort(key=lambda b: abs(b[2] / float(b[3]) - want) / want)
-        for box in boxes[:30]:
-            if abs(box[2] / float(box[3]) - want) / want > 2.0:  # a whole button can hold the label
-                break
-            hit = self._find(phrase, self.read_line(gray, box, scale, x0, y0), min_score)
-            if hit:
-                return hit
+        # A whole button can hold the label, so the shape test is loose.
+        boxes = [b for b in boxes if abs(b[2] / float(b[3]) - want) / want <= 2.0][:60]
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(6) as pool:
+            for start in range(0, len(boxes), 6):  # six lines at a time, stop at the first hit
+                batch = boxes[start:start + 6]
+                for words in pool.map(lambda b: self.read_line(gray, b, scale, x0, y0), batch):
+                    hit = self._find(phrase, words, min_score)
+                    if hit:
+                        return hit
         return None
 
     @staticmethod
@@ -285,7 +327,7 @@ class PTCGLImporter:
             raise ImportStopped("Stopped: Pokémon TCG Live is no longer in front.")
         from AutoClicker import AutoClicker
         AutoClicker.physical_click(screen.origin[0] + point[0], screen.origin[1] + point[1])
-        time.sleep(0.6)
+        time.sleep(CLICK_SETTLE_S)
 
     def _wait_for(self, phrase, region, timeout=STEP_S, say=None):
         deadline = time.time() + timeout
@@ -296,7 +338,7 @@ class PTCGLImporter:
                 return screen, point
             if time.time() > deadline:
                 raise ImportStopped(say or f"Couldn't find \"{phrase.title()}\" in Pokémon TCG Live.")
-            time.sleep(0.6)
+            time.sleep(POLL_S)
 
     # ── steps ─────────────────────────────────────────────────────────────
     def _open_decks(self):
@@ -313,7 +355,7 @@ class PTCGLImporter:
                 exit_button = screen.find("EXIT", (0.5, 0.6, 0.65, 0.9))
                 if exit_button:
                     self._click(screen, exit_button)
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                     continue
             library = screen.find("CARD LIBRARY", EDITOR, deep=False)
             if library:
@@ -321,7 +363,7 @@ class PTCGLImporter:
                 # arrow left of "Card Library" does (offset scales with height).
                 self._say("Leaving the deck editor…")
                 self._click(screen, (max(4, library[0] - 0.145 * screen.size[1]), library[1]))
-                time.sleep(1.0)
+                time.sleep(0.5)
                 continue
             nav = screen.find("DECKS", NAV, deep=False)
             if nav:
@@ -419,7 +461,15 @@ class PTCGLImporter:
         self._key(0x23)        # End
         self._key(0x08, 40)    # Backspace the old name
         self._type(self.name[:30])
-        screen, done = self._wait_for("DONE", RIGHT_PANEL)
+        # Done sits on the row of buttons just under the name field, right of
+        # the heading's centre: read only that strip (fast, few look-alikes).
+        heading = _heading
+        strip = (max(0.0, (heading[0] - 0.2 * h) / w), (heading[1] + 0.04 * h) / h, 1.0,
+                 min(1.0, (heading[1] + 0.3 * h) / h))
+        try:
+            screen, done = self._wait_for("DONE", strip, timeout=3)
+        except ImportStopped:
+            screen, done = self._wait_for("DONE", RIGHT_PANEL)
         self._click(screen, done)
 
     # ── run ───────────────────────────────────────────────────────────────
@@ -430,7 +480,7 @@ class PTCGLImporter:
             if not self.hwnd:
                 return False, "Pokémon TCG Live isn't running."
             request_minimize_dashboard()
-            time.sleep(1.2)  # the overlay polls once a second
+            time.sleep(1.05)  # the overlay polls once a second
             if not self._focus():
                 return False, "Couldn't bring Pokémon TCG Live to the front."
             self._open_decks()

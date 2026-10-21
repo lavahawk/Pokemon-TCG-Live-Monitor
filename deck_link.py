@@ -83,40 +83,110 @@ def import_list(text, name):
 
 
 def _toast_class():
+    import ctypes
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QLabel
+    from PySide6.QtGui import QColor, QPainter
+    from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-    class StatusToast(QLabel):
-        """Click-through status line near the bottom of the game window while
-        the import drives it (no focus, no clicks: the game keeps both)."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    FLAGS = (Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
+             | Qt.WindowType.WindowTransparentForInput | Qt.WindowType.WindowDoesNotAcceptFocus)
 
-        def __init__(self):
-            super().__init__()
-            self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
-                                | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput
-                                | Qt.WindowType.WindowDoesNotAcceptFocus)
-            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            self.setStyleSheet("QLabel { background: rgba(16, 22, 32, 0.92); color: white; font-size: 13px;"
-                               " padding: 8px 16px; border: 1px solid rgba(74,159,216,0.7); border-radius: 8px; }")
+    def prepare(widget):
+        widget.setWindowFlags(FLAGS)
+        widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def place(widget, x, y, w, h):
+        """Physical pixels (this process is per-monitor DPI aware), so it
+        lines up with the game at any Windows scaling."""
+        HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW = -1, 0x0010, 0x0040
+        user32.SetWindowPos(ctypes.c_void_p(int(widget.winId())), ctypes.c_void_p(HWND_TOPMOST),
+                            int(x), int(y), int(w), int(h), SWP_NOACTIVATE | SWP_SHOWWINDOW)
+
+    def exclude_from_capture(widget):
+        """Hide from screen capture (Windows 10 2004+), so the import's OCR
+        still sees the game. Needs a plain window: per-pixel transparency
+        (WA_TranslucentBackground) is refused, whole-window opacity is fine."""
+        return bool(user32.SetWindowDisplayAffinity(ctypes.c_void_p(int(widget.winId())), 0x11))
+
+    class Dim(QWidget):
+        def paintEvent(self, _event):
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), QColor(6, 8, 12))
+            painter.end()
+
+    class ImportShade:
+        """While the import drives the game: the game dimmed, and a card with
+        "Importing… please don't use the mouse or keyboard" and the current
+        step. Both windows are click-through and focus-less (the game keeps
+        every click and key) and excluded from screen capture. Where that
+        isn't available, ptcgl_import hides them for each capture instead."""
+
+        def __init__(self, deck_name=""):
+            self.dim = Dim()
+            prepare(self.dim)
+            self.dim.setWindowOpacity(0.45)
+            self.card = QWidget()
+            prepare(self.card)
+            self.card.setWindowOpacity(0.96)
+            self.card.setObjectName("shadeCard")
+            self.card.setStyleSheet(
+                "QWidget#shadeCard { background: rgb(14, 18, 26); border: 1px solid rgba(74,159,216,0.8); }"
+                "QLabel { background: transparent; color: rgba(232,238,246,0.96); }"
+                "QLabel#shadeTitle { font-size: 11px; font-weight: 700; letter-spacing: 2px;"
+                " color: rgba(168,182,204,0.9); }"
+                "QLabel#shadeName { font-size: 18px; font-weight: 700; }"
+                "QLabel#shadeStep { font-size: 13px; color: rgb(116,186,236); }"
+                "QLabel#shadeHint { font-size: 12px; color: rgba(200,212,228,0.75); }")
+            box = QVBoxLayout(self.card)
+            box.setContentsMargins(24, 18, 24, 18)
+            box.setSpacing(6)
+            title = QLabel("IMPORTING INTO POKÉMON TCG LIVE")
+            title.setObjectName("shadeTitle")
+            name = QLabel(deck_name or "Shared deck")
+            name.setObjectName("shadeName")
+            self.step = QLabel("Starting…")
+            self.step.setObjectName("shadeStep")
+            hint = QLabel("Please don't use the mouse or keyboard until it's done  ·  Esc stops")
+            hint.setObjectName("shadeHint")
+            for label in (title, name, self.step, hint):
+                box.addWidget(label)
             self._hwnd = None
 
         def show_over(self, hwnd):
+            import ptcgl_import
             self._hwnd = hwnd
-            self.say("Adding the deck to Pokémon TCG Live… (Esc stops)")
-            self.show()
+            for widget in (self.dim, self.card):
+                widget.show()
+                if not exclude_from_capture(widget):
+                    ptcgl_import.hide_during_capture(int(widget.winId()))
+            self._place()
 
-        def say(self, message):
-            self.setText(message + ("" if "Esc" in message else "   ·   Esc stops"))
-            self.adjustSize()
+        def _place(self):
             try:
                 import win32gui
-                left, top, right, bottom = win32gui.GetWindowRect(self._hwnd)
-                self.move(left + (right - left - self.width()) // 2, bottom - int((bottom - top) * 0.06) - self.height())
+                _l, _t, w, h = win32gui.GetClientRect(self._hwnd)
+                x, y = win32gui.ClientToScreen(self._hwnd, (0, 0))
             except Exception:
-                pass
+                return
+            place(self.dim, x, y, w, h)
+            ratio = self.card.devicePixelRatioF() or 1.0
+            hint = self.card.sizeHint()
+            cw, ch = int(hint.width() * ratio), int(hint.height() * ratio)
+            place(self.card, x + (w - cw) // 2, y + (h - ch) // 2, cw, ch)
 
-    return StatusToast
+        def say(self, message):
+            self.step.setText(message)
+            self._place()
+
+        def hide(self):
+            import ptcgl_import
+            for widget in (self.dim, self.card):
+                ptcgl_import.hide_during_capture(int(widget.winId()), remove=True)
+                widget.hide()
+
+    return ImportShade
 
 
 def main(argv):
@@ -126,7 +196,7 @@ def main(argv):
                                    QVBoxLayout)
     app = QApplication.instance() or QApplication(argv[:1])
     app.setQuitOnLastWindowClosed(False)  # quits when the dialog finishes (it hides during an import)
-    StatusToast = _toast_class()
+    ImportShade = _toast_class()
     try:
         import theme
         theme.install(app)  # the user's theme, like the dashboard
@@ -136,28 +206,80 @@ def main(argv):
 
     dialog = QDialog()
     dialog.setWindowTitle("Shared deck")
-    dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
-    dialog.setMinimumWidth(380)
+    dialog.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                          | Qt.WindowType.Dialog)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    dialog.setMinimumWidth(400)
+    # Same glass panel, buttons and checkboxes as the dashboard (StatsUI).
     dialog.setStyleSheet("""
-        QDialog { background: rgb(18, 24, 34); }
-        QLabel { color: rgba(232, 238, 246, 0.95); font-size: 12px; }
+        QFrame#glassContainer { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                    stop:0 rgba(15, 15, 15, 0.94), stop:1 rgba(10, 10, 10, 0.96));
+                                border: 1px solid rgba(255, 255, 255, 0.10); border-radius: 12px; }
+        QLabel { color: rgba(232, 238, 246, 0.95); font-size: 12px; background: transparent; }
         QLabel#title { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: rgba(168, 182, 204, 0.85); }
         QLabel#muted { color: rgba(200, 212, 228, 0.65); font-size: 11px; }
-        QLineEdit { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;
-                    color: white; padding: 6px 8px; font-size: 14px; font-weight: 600; }
-        QPushButton { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
-                      border-radius: 6px; color: white; padding: 6px 16px; font-size: 12px; }
-        QPushButton:hover { background: rgba(255,255,255,0.14); }
-        QPushButton#primary { background: rgba(74,159,216,0.85); border-color: rgba(74,159,216,1); }
-        QPushButton#primary:hover { background: rgba(74,159,216,1); }
-        QCheckBox { color: rgba(220, 228, 240, 0.9); font-size: 12px; spacing: 8px; }
+        QLineEdit { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px;
+                    color: white; padding: 7px 9px; font-size: 15px; font-weight: 600;
+                    selection-background-color: rgba(74,159,216,0.5); }
+        QLineEdit:focus { border-color: rgba(74,159,216,0.7); }
+        QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255, 255, 255, 0.06),
+                                                  stop:1 rgba(255, 255, 255, 0.02));
+                      border: 1px solid rgba(255, 255, 255, 0.10); border-radius: 6px;
+                      color: rgba(255, 255, 255, 0.9); padding: 6px 18px; font-size: 12px; }
+        QPushButton:hover { background: rgba(255, 255, 255, 0.10); border-color: rgba(255, 255, 255, 0.18); }
+        QPushButton#primary { background: rgba(74,159,216,0.75); border-color: rgba(74,159,216,0.9); color: white;
+                              font-weight: 600; }
+        QPushButton#primary:hover { background: rgba(74,159,216,0.95); }
+        QPushButton#close { background: transparent; border: none; color: rgba(200,212,228,0.6); padding: 0;
+                            font-size: 14px; }
+        QPushButton#close:hover { color: white; }
+        QCheckBox { color: rgba(235,242,250,0.88); font-size: 12px; spacing: 8px; background: transparent; }
+        QCheckBox:disabled { color: rgba(235,242,250,0.38); }
+        QCheckBox::indicator { width: 14px; height: 14px; border-radius: 4px;
+                               border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.05); }
+        QCheckBox::indicator:checked { background: rgba(74,159,216,0.75); border-color: rgba(74,159,216,0.85); }
+        QCheckBox::indicator:disabled { border-color: rgba(255,255,255,0.08); }
     """)
-    box = QVBoxLayout(dialog)
-    box.setContentsMargins(18, 16, 18, 16)
+    from PySide6.QtWidgets import QFrame
+    outer = QVBoxLayout(dialog)
+    outer.setContentsMargins(0, 0, 0, 0)
+    panel = QFrame()
+    panel.setObjectName("glassContainer")
+    outer.addWidget(panel)
+    box = QVBoxLayout(panel)
+    box.setContentsMargins(20, 14, 16, 18)
     box.setSpacing(10)
+    head = QHBoxLayout()
     title = QLabel("SHARED DECK")
     title.setObjectName("title")
-    box.addWidget(title)
+    head.addWidget(title)
+    head.addStretch()
+    close_x = QPushButton("✕")
+    close_x.setObjectName("close")
+    close_x.setFixedSize(22, 22)
+    close_x.setCursor(Qt.CursorShape.PointingHandCursor)
+    close_x.clicked.connect(dialog.reject)
+    head.addWidget(close_x)
+    box.addLayout(head)
+
+    class _Drag(QObject):
+        """Move the frameless box by dragging anywhere on its background."""
+
+        def eventFilter(self, obj, event):
+            from PySide6.QtCore import QEvent
+            kind = event.type()
+            if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self.offset = event.globalPosition().toPoint() - dialog.frameGeometry().topLeft()
+            elif kind == QEvent.Type.MouseMove and getattr(self, "offset", None) is not None \
+                    and event.buttons() & Qt.MouseButton.LeftButton:
+                dialog.move(event.globalPosition().toPoint() - self.offset)
+            elif kind == QEvent.Type.MouseButtonRelease:
+                self.offset = None
+            return False
+
+    drag = _Drag(dialog)
+    panel.installEventFilter(drag)
+    title.installEventFilter(drag)
     buttons = QHBoxLayout()
     buttons.addStretch()
 
@@ -212,11 +334,11 @@ def main(argv):
         finished = Signal(bool, str)
 
     relay = Relay()
-    toast = StatusToast()
-    relay.progress.connect(toast.say)
+    toast = None
 
     def finish(saved_note, ok=None, message=""):
-        toast.hide()
+        if toast is not None:
+            toast.hide()
         if ok is None:
             text_out = saved_note + "The list is on your clipboard: in PTCGL open Decks → Create a deck → Import."
         elif ok:
@@ -237,6 +359,7 @@ def main(argv):
         dialog.adjustSize()
 
     def do_import():
+        nonlocal toast
         if primary.text() == "Done":
             dialog.accept()
             return
@@ -251,6 +374,8 @@ def main(argv):
         import ptcgl_import
         primary.setEnabled(False)
         dialog.hide()  # out of the way of the clicks
+        toast = ImportShade(deck_name)
+        relay.progress.connect(toast.say)
         toast.show_over(game_window.find_game_hwnd())
         relay.finished.connect(lambda ok, message: finish(saved_note, ok, message))
         importer = ptcgl_import.PTCGLImporter(text, deck_name if rename.isChecked() else None,
