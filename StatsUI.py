@@ -3258,8 +3258,8 @@ class MetaFetcher(QThread):
 
 
 class TitleBarButton(QPushButton):
-    """Title-bar button with a painted icon (font glyphs like ⛶ / 🗗 render as
-    boxes on some systems)."""
+    """Title-bar button with a painted icon (font glyphs for maximize /
+    restore render as boxes on some systems)."""
 
     def __init__(self, kind, parent=None):
         super().__init__("", parent)
@@ -4333,7 +4333,7 @@ class StatsWindow(QWidget):
             self._data_status.setText(f"<span style='color:#EF9A9A'>Export failed: {exc}</span>")
             return
         where = f"your {cloud} folder" if folder else os.path.dirname(path)
-        self._data_status.setText(f"<span style='color:#81C784'>✓ Exported {result['battles']} battles and "
+        self._data_status.setText(f"<span style='color:#81C784'>Exported {result['battles']} battles and "
                                   f"{result['logs']} battle logs</span> to {where}: <b>{os.path.basename(path)}</b>. "
                                   "Your OpenAI key isn't included.")
         if upload_page:
@@ -4372,7 +4372,7 @@ class StatsWindow(QWidget):
         except Exception as exc:
             self._data_status.setText(f"<span style='color:#EF9A9A'>Import failed: {exc}</span>")
             return
-        self._data_status.setText(f"<span style='color:#81C784'>✓ Restored {result['battles']} battles "
+        self._data_status.setText(f"<span style='color:#81C784'>Restored {result['battles']} battles "
                                   f"({result['files']} files).</span> Restart the app to load everything. "
                                   f"Your previous data is in {result['backup']}.")
         self._deck_dashboards_dirty = True
@@ -5947,10 +5947,10 @@ class StatsWindow(QWidget):
 
         def set_status(found=None):
             if found:
-                status.setText(f"<span style='color:#66BB6A;font-weight:700'>✓ Decklist found on your clipboard</span>"
+                status.setText(f"<span style='color:#66BB6A;font-weight:700'>Decklist found on your clipboard</span>"
                                f"<br><span style='color:#8A97AA'>{auto_name(found)} · {card_count(found)} cards"
                                f"</span>")
-                dialog.set_pill_text(f"✓ {auto_name(found)} · {card_count(found)} cards", found=True)
+                dialog.set_pill_text(f"{auto_name(found)} · {card_count(found)} cards", found=True)
             else:
                 status.setText("<span style='color:#6BB6E8'>●</span> Waiting for a list… In Pokémon TCG Live: "
                                "<b>Decks → this deck → Export → Copy to clipboard</b>. It shows up here by itself."
@@ -6063,7 +6063,7 @@ class StatsWindow(QWidget):
         col.addWidget(view)
         copy = QPushButton("Copy list")
         copy.setObjectName("settingsBtn")
-        copy.clicked.connect(lambda: (QApplication.clipboard().setText(entry.get("text") or ""), copy.setText("Copied ✓")))
+        copy.clicked.connect(lambda: (QApplication.clipboard().setText(entry.get("text") or ""), copy.setText("Copied")))
         col.addWidget(copy)
         dialog.open_panel()
 
@@ -6254,7 +6254,7 @@ class StatsWindow(QWidget):
         def copy():
             if state["pixmap"] is not None:
                 QApplication.clipboard().setPixmap(state["pixmap"])
-                copy_btn.setText("Copied ✓")
+                copy_btn.setText("Copied")
                 QTimer.singleShot(1600, lambda: copy_btn.setText("Copy image"))
 
         save_btn.clicked.connect(save)
@@ -6609,7 +6609,7 @@ class StatsWindow(QWidget):
         def on_status(value):
             if value == "clicked":
                 poll.stop()
-                status.setText(f"✓ Your {state['count']} cards are in the cart - optimize and check out below "
+                status.setText(f"Your {state['count']} cards are in the cart - optimize and check out below "
                                "(sign in once; it's remembered).")
             elif value == "timeout" or state["polls"] > 45:
                 poll.stop()
@@ -7817,7 +7817,8 @@ class StatsWindow(QWidget):
         battle_mgmt_layout.setSpacing(8)
         battle_mgmt_layout.setContentsMargins(12, 8, 12, 12)
         
-        battles_label = QLabel(f"Last {BATTLE_MGMT_LIMIT} battles · 🏆 tournament")
+        battles_label = QLabel(f"Last {BATTLE_MGMT_LIMIT} battles")
+        battles_label.setToolTip("Times in gold are tournament games")
         battles_label.setObjectName("settingsDesc")
         battles_label.setWordWrap(True)
         battle_mgmt_layout.addWidget(battles_label)
@@ -8545,7 +8546,7 @@ class StatsWindow(QWidget):
                     self.in_person_status.setText(f"Couldn't save {name}.")
                     return
                 self._last_pdf = path
-                self._pdf_label.setText(f"✓ Saved {name} to Downloads")
+                self._pdf_label.setText(f"Saved {name} to Downloads")
                 self._pdf_bar.setVisible(True)
                 if getattr(self, "_print_after_pdf", False):
                     self._print_after_pdf = False
@@ -12669,8 +12670,6 @@ class StatsWindow(QWidget):
                     time_str = time_obj.strftime("%b %d · %H:%M")
                 except Exception:
                     time_str = timestamp
-                if is_tournament:
-                    time_str = f"🏆 {time_str}"
 
                 items = [
                     self._make_battle_mgmt_item(battle_id, time_str, editable=False),
@@ -12683,7 +12682,10 @@ class StatsWindow(QWidget):
                     self._make_battle_mgmt_item(battle_id, "", editable=False),
                 ]
                 log_name = os.path.basename(log_file) if log_file else ""
-                items[0].setToolTip(f"Battle #{battle_id} · {timestamp}" + (f"\n{log_name}" if log_name else ""))
+                items[0].setToolTip(f"Battle #{battle_id} · {timestamp}" + (" · tournament" if is_tournament else "")
+                                    + (f"\n{log_name}" if log_name else ""))
+                if is_tournament:
+                    items[0].setForeground(QColor("#FFD54F"))  # tournament game (was a trophy emoji)
                 for column, item in enumerate(items):
                     table.setItem(row, column, item)
 

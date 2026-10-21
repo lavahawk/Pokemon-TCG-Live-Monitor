@@ -33,19 +33,15 @@ def estimate(post, weighted=True):
     level = int(round(post.get("level", 0.9) * 100))
     tail = (100 - level) // 2
     n0 = max(0.0, a + b - float(post.get("games") or 0))  # the prior's worth in games
+    par = post.get("par", 0.5)
     lines = [
-        f"{F}Estimate = (W + n₀ × par) / (W + L + n₀) = {a:.1f} / {a + b:.1f} = {_pct(a / (a + b))}{END}",
-        f"{F}n₀ = {n0:.0f}{END}  {DIM}= m(1 − m) / sd² − 1 with sd = how much real win rates "
-        f"spread (pilot skill + deck strength, measured on Limitless){END}",
+        f"{F}Estimate = (W + n₀ × even) / (W + L + n₀) = {a:.1f} / {a + b:.1f} = {_pct(a / (a + b))}{END}",
         f"{F}Range = {tail}th–{100 - tail}th percentile of Beta({a:.1f}, {b:.1f}){END}",
-        f"{F}Chance > par = P(Beta({a:.1f}, {b:.1f}) > {post.get('par', 0.5):.3f}) = {_pct(post['p_above_even'])}{END}",
-        f"{F}par = (1 − T) / 2 + T × tie share = {_pct(post.get('par', 0.5))}{END}  "
-        f"{DIM}(an even contest under your tie rule; T = tie rate, shrunk toward 12%){END}",
-        f"{DIM}W, L = wins and losses{' after weighting' if weighted else ''}. Like starting "
-        f"{n0 / 2:.0f}-{n0 / 2:.0f}: past ~{n0:.0f} games your results outweigh it.{END}",
+        f"{DIM}W, L = {'weighted ' if weighted else ''}wins and losses; n₀ = {n0:.0f}, like starting "
+        f"{n0 / 2:.0f}-{n0 / 2:.0f}, so early streaks don't overstate the deck.{END}",
     ]
-    if weighted:
-        lines.append(game_weights())
+    if abs(par - 0.5) >= 0.0005:
+        lines.append(f"{DIM}Even = {_pct(par)} because ties count as losses.{END}")
     return "<br>".join(lines)
 
 
@@ -90,31 +86,25 @@ def effective_games(row, pilot_sd=None):
 
 def score(res, info, is_mine=False, names=None, archetype=None):
     names = names or {}
-    mu, k_s, k_m = info.get("mu", 0.5), info.get("k_s", 0), info.get("k_m", 0)
+    mu, k_m = info.get("mu", 0.5), info.get("k_m", 0)
     lines = [
         f"{F}Score = Σ share × matchup estimate{END}  {DIM}(mirror = even, {_pct(info.get('par', 0.5))}){END}",
         f"{F}matchup estimate = (k·θ + wins) / (k + games),  k = {k_m:.0f}{END}",
         f"{F}θ (deck strength) = {_pct(res.get('strength', 0))} ± {res.get('strength_sd', 0) * 100:.1f}{END}  "
-        f"{DIM}from all its matchups, starting at "
-        + (f"{archetype}'s Score ({_pct(res.get('prior_mean', mu))} as strength)" if is_mine and archetype else
-           f"par ({_pct(res.get('prior_mean', info.get('par', 0.5)))})" if is_mine else
-           f"the typical archetype ({_pct(mu)}, worth {k_s:.0f} games)") + END,
+        f"{DIM}starts at "
+        + (f"{archetype}'s strength" if is_mine and archetype else
+           "even" if is_mine else
+           f"the typical deck ({_pct(mu)})") + END,
     ]
     if res.get("in_person") and info.get("beta_link"):
-        lines.append(f"{F}+ in-person: logit(Top 32 rate) = logit({info.get('q0', 0) * 100:.1f}%) + "
-                     f"{info['beta_link']:.0f} × (θ − {_pct(mu)}){END}  {DIM}Day 2 → Top 32 results (Worlds and "
-                     f"current-format events weighted up) also inform θ; the {info['beta_link']:.0f} is fitted.{END}")
+        lines.append(f"{DIM}In-person Top 32 results also inform θ.{END}")
     adj = res.get("adjust")
     if is_mine and adj:
         lines.append(opponent_strength(adj, info.get("strength") or {}))
     terms = res.get("terms") or []
     if terms:
-        parts = [f"{names.get(k, k)} {s * 100:.1f}% × {p * 100:.0f}%" for k, s, p, _n in terms[:4]]
-        lines.append(f"{DIM}biggest terms: " + " + ".join(parts) + " + …" + END)
-    lines.append(f"{DIM}k and the typical deck are fitted to all Limitless data. Unfaced opponents count at θ.{END}")
-    if is_mine:
-        lines.append(f"{DIM}Starts at {archetype or 'an average deck'}'s strength "
-                     f"± {info.get('strength_sd', 0) * 100:.1f}, so a few games move it only a little.{END}")
+        parts = [f"{names.get(k, k)} {s * 100:.0f}% × {p * 100:.0f}%" for k, s, p, _n in terms[:2]]
+        lines.append(f"{DIM}Largest: " + " + ".join(parts) + " + …" + END)
     return "<br>".join(lines)
 
 
