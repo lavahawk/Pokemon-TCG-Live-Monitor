@@ -19,10 +19,9 @@ from PySide6.QtWidgets import QAbstractButton, QStyledItemDelegate, QTabBar
 
 FLAG_STYLES = {
     # kind: (accent, tooltip when off, tooltip when on)
-    "pin": ("#4A9FD8", "Pin to the front of the deck tabs", "Unpin"),
-    "star": ("#F9A825", "Star: include in the Meta analysis", "Unstar: remove from the Meta analysis"),
-    "ignore": ("#EF5350", "Ignore: leave out of the dashboard and overall stats (for fun / test decks)",
-               "Stop ignoring: count this deck in the dashboard again"),
+    "pin": ("#4A9FD8", "Pin to front", "Unpin"),
+    "star": ("#F9A825", "Add to Meta tab", "Remove from Meta tab"),
+    "ignore": ("#EF5350", "Hide from stats", "Show in stats"),
 }
 
 
@@ -309,3 +308,24 @@ class MineRowDelegate(QStyledItemDelegate):
             if index.column() == 0:
                 painter.fillRect(QRectF(option.rect.left(), option.rect.top(), 4, option.rect.height()), MINE_ACCENT)
         super().paint(painter, option, index)
+
+
+class EditHintDelegate(QStyledItemDelegate):
+    """Shows a faint pencil in an editable cell while it's hovered, so
+    "click to edit" needs no sentence."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        from PySide6.QtWidgets import QStyle
+        if not (option.state & QStyle.StateFlag.State_MouseOver) or not (index.flags() & Qt.ItemFlag.ItemIsEditable):
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        colour = QColor(214, 225, 240, 140)
+        painter.setPen(QPen(colour, 1.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        r = option.rect
+        x, y = r.right() - 14, r.center().y() + 4
+        painter.drawLine(QPointF(x, y), QPointF(x + 7, y - 7))      # shaft
+        painter.drawLine(QPointF(x, y), QPointF(x + 2.5, y - 0.6))  # tip
+        painter.drawLine(QPointF(x, y), QPointF(x + 0.6, y - 2.5))
+        painter.restore()

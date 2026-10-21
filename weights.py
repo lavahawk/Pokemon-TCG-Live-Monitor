@@ -50,37 +50,39 @@ DEFAULT_WEIGHTS = {
 }
 
 # Labels + help for the Preferences panel: key -> (label, tooltip)
+M = "<!--more-->"  # infotip.MORE (literal: this module must not import Qt)
+
 LABELS = {
     "meta": {
-        "in_person": ("In-person events", "limitlesstcg.com Regionals, ICs, Special Events (current format only)."),
-        "worlds": ("World Championship", "Replaces the in-person weight for Worlds (current format only)."),
-        "japan": ("Japan (Bo1)", "Multiplier for Japanese City League results (best-of-one)."),
-        "online": ("Online events", "play.limitlesstcg.com tournaments."),
+        "in_person": ("In-person events", "Regionals, Internationals, Special Events (current format)."),
+        "worlds": ("World Championship", "Used instead of the in-person weight for Worlds."),
+        "japan": ("Japan (Bo1)", "Japanese City League results (best-of-one)."),
+        "online": ("Online events", "Online tournaments on play.limitlesstcg.com."),
         "era1": ("1 expansion back", "Data from before the newest expansion."),
         "era2": ("2 expansions back", "Older data is dropped entirely."),
     },
     "ladder": {
-        "tournament": ("Limitless tournament", "Your games detected as Limitless tournament matches. Ladder games "
-                                               "reach this weight at 1800+ Elo."),
-        "master": ("Master Ball / Arceus", "Master Ball and Arceus League games up to 1400 Elo. Above 1400 the "
-                                           "weight climbs toward the Limitless tournament weight, each 100 Elo "
-                                           "more than the last: 1500 +14%, 1600 +33%, 1700 +61%, 1800+ full."),
+        "tournament": ("Limitless tournament", "Games detected as Limitless tournament matches." + M
+                       + "Ladder games reach this weight at 1800+ Elo."),
+        "master": ("Master Ball / Arceus", "Master Ball and Arceus games, up to 1400 Elo." + M
+                   + "Above 1400 the weight climbs toward the tournament weight, each 100 Elo "
+                     "more than the last: 1500 +14%, 1600 +33%, 1700 +61%, 1800+ full."),
         "ultra": ("Ultra Ball", None),
         "great": ("Great Ball", None),
         "poke": ("Poké Ball", None),
         "quick": ("Quick Ball", None),
         "nest": ("Nest Ball", None),
-        "unranked": ("No rank recorded", "Your games where the rank wasn't read."),
+        "unranked": ("No rank recorded", "Games where the rank wasn't read."),
     },
     "strength": {
-        "ladder_evidence": ("Ladder game counts as", "In the deck Score, one ladder game counts as this many "
-                                                     "tournament games (ladder opponents are weaker). Fades to a full "
-                                                     "game as your Elo nears 1800; Limitless games always count 1."),
-        "ladder_gap": ("Ladder opponents easier by", "Win-% points the ladder field is easier than a Limitless "
-                                                     "online field (at 50%; log-odds scale). Fades to 0 as your Elo "
-                                                     "nears 1800."),
-        "rank_margin": ("Rank precision", "A deck is ranked once its weighted games give ± this many points at 90%: "
-                                          "n = (1.645 × 0.5 / margin)² effective games (15 pts → 30 games)."),
+        "ladder_evidence": ("Ladder game counts as", "One ladder game counts as this many tournament games." + M
+                            + "Used in the deck Score, since ladder opponents are weaker. Fades to a full "
+                              "game as your Elo nears 1800; Limitless games always count 1."),
+        "ladder_gap": ("Ladder opponents easier by", "Win-% points ladder is easier than online events." + M
+                       + "Measured at 50% on a log-odds scale. Fades to 0 as your Elo nears 1800."),
+        "rank_margin": ("Rank precision", "Decks rank once their win rate is known within ± this many points." + M
+                        + "At 90% confidence: n = (1.645 × 0.5 / margin)² effective games "
+                          "(15 pts = 30 games)."),
     },
 }
 

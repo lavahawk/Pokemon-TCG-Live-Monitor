@@ -620,9 +620,9 @@ class MinimalOverlay(QWidget):
             title, text = "LOCAL MODE", how
             primary = ("Open Advanced", self.open_api_key_setting)
         elif provider in ("hosted", "compatible"):
-            title, text = "MANUAL MODE", ("AI deck detection isn't available"
-                                          + (" (the built-in AI couldn't be reached). " if provider == "hosted"
-                                             else ": add a base URL and model in Advanced. ") + how)
+            title, text = "MANUAL MODE", ("AI unavailable"
+                                          + (" (built-in AI unreachable). " if provider == "hosted"
+                                             else ": set a base URL and model. ") + how)
             primary = ("Open Advanced", self.open_api_key_setting)
         else:
             title, text = "MANUAL MODE", "No AI is set up. " + how
@@ -1120,7 +1120,7 @@ class MinimalOverlay(QWidget):
         # Stats text label — double-click opens a mini reset popup
         self.stats_label = QLabel("Elo:-- | Max:-- | 0-0")
         self.stats_label.setObjectName("stats")
-        self.stats_label.setToolTip("Double-click to reset today's W/L count")
+        self.stats_label.setToolTip("Double-click to reset today")
         self.stats_label.mouseDoubleClickEvent = lambda e: self.confirm_reset_today_stats()
         stats_layout.addWidget(self.stats_label)
         
@@ -1592,6 +1592,8 @@ def main():
     app = QApplication(sys.argv)
     import theme
     theme.install(app)  # before any widget: legacy does nothing
+    import infotip
+    infotip.install(app)  # two-stage hover tips
     
     # Set application properties
     app.setApplicationName("TCG Live Monitor")

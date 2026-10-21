@@ -156,3 +156,6 @@ DevVault/
 
 # UI restart note (ui_restart.py)
 .ui_restart.json
+
+# Hint counters (infotip.py)
+.ui_hints.json

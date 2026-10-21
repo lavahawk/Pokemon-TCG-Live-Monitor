@@ -9,6 +9,11 @@ END = "</span>"
 DIM = "<span style='color:#8A97AA'>"
 
 
+def head(title):
+    """Small caps section heading inside a tip's details."""
+    return f"<span style='color:#8A97AA; font-size:9px; font-weight:700; letter-spacing:1px'>{title.upper()}</span>"
+
+
 def _pct(x):
     return f"{x * 100:.1f}%"
 
@@ -36,9 +41,8 @@ def estimate(post, weighted=True):
         f"{F}Chance > par = P(Beta({a:.1f}, {b:.1f}) > {post.get('par', 0.5):.3f}) = {_pct(post['p_above_even'])}{END}",
         f"{F}par = (1 − T) / 2 + T × tie share = {_pct(post.get('par', 0.5))}{END}  "
         f"{DIM}(an even contest under your tie rule; T = tie rate, shrunk toward 12%){END}",
-        f"{DIM}W, L = wins and losses{' after weighting' if weighted else ''}; ties split by your tie rule. "
-        f"The prior is like starting {n0 / 2:.0f}-{n0 / 2:.0f} at par: "
-        f"a 3-0 start isn't proof of a great deck; past ~{n0:.0f} games your results outweigh it.{END}",
+        f"{DIM}W, L = wins and losses{' after weighting' if weighted else ''}. Like starting "
+        f"{n0 / 2:.0f}-{n0 / 2:.0f}: past ~{n0:.0f} games your results outweigh it.{END}",
     ]
     if weighted:
         lines.append(game_weights())
@@ -88,7 +92,7 @@ def score(res, info, is_mine=False, names=None, archetype=None):
     names = names or {}
     mu, k_s, k_m = info.get("mu", 0.5), info.get("k_s", 0), info.get("k_m", 0)
     lines = [
-        f"{F}Score = Σ share × matchup estimate{END}  {DIM}(each opponent by its meta share; mirror = par {_pct(info.get('par', 0.5))}){END}",
+        f"{F}Score = Σ share × matchup estimate{END}  {DIM}(mirror = even, {_pct(info.get('par', 0.5))}){END}",
         f"{F}matchup estimate = (k·θ + wins) / (k + games),  k = {k_m:.0f}{END}",
         f"{F}θ (deck strength) = {_pct(res.get('strength', 0))} ± {res.get('strength_sd', 0) * 100:.1f}{END}  "
         f"{DIM}from all its matchups, starting at "
@@ -107,13 +111,10 @@ def score(res, info, is_mine=False, names=None, archetype=None):
     if terms:
         parts = [f"{names.get(k, k)} {s * 100:.1f}% × {p * 100:.0f}%" for k, s, p, _n in terms[:4]]
         lines.append(f"{DIM}biggest terms: " + " + ".join(parts) + " + …" + END)
-    lines.append(f"{DIM}k, the typical deck and its spread are fitted to all Limitless data "
-                 f"(empirical Bayes), not chosen by hand. Unfaced opponents count at θ. Range = 90% "
-                 f"of the uncertainty in θ and every matchup.{END}")
+    lines.append(f"{DIM}k and the typical deck are fitted to all Limitless data. Unfaced opponents count at θ.{END}")
     if is_mine:
-        lines.append(f"{DIM}Your deck counts as a version of {archetype or 'an average deck'}: it starts at that "
-                     f"strength ± {info.get('strength_sd', 0) * 100:.1f} (how much decks differ), so a handful of "
-                     f"games moves it only a little. Your games use your Preferences weights.{END}")
+        lines.append(f"{DIM}Starts at {archetype or 'an average deck'}'s strength "
+                     f"± {info.get('strength_sd', 0) * 100:.1f}, so a few games move it only a little.{END}")
     return "<br>".join(lines)
 
 
@@ -142,10 +143,8 @@ def own_score(own, info):
     worth = max(m * (1 - m) / (sd * sd) - 1, 0)
     return (f"{F}same Score formula; θ starts at par {_pct(m)} ± {sd * 100:.1f} "
             f"(worth ≈ {worth:.0f} games){END}<br>"
-            f"{DIM}Own games only: nothing borrowed from the Limitless archetype. The ± is how much real results "
-            f"spread (deck differences + player skill, both measured on Limitless). Your games outweigh that "
-            f"starting point once you have more than ≈ {worth:.0f}, so this shows YOUR results with the deck - "
-            f"including your piloting - rather than the deck's strength.{END}")
+            f"{DIM}Nothing borrowed from Limitless: past ≈ {worth:.0f} games this is your results with the deck, "
+            f"piloting included.{END}")
 
 
 def conversion(conv):
@@ -160,8 +159,5 @@ def conversion(conv):
 
 def opponent_strength(adj, strength):
     gap = adj["gap"] * 100
-    return (f"{F}your games: win rate − {gap:.1f} pts on the ladder share ({adj['ladder_frac'] * 100:.0f}%), "
-            f"then × {adj['evidence']:.2f} as evidence{END}<br>"
-            f"{DIM}Ladder opponents are weaker than a Limitless field: shift = logit(50% + gap) on the log-odds "
-            f"scale; one ladder game counts {strength.get('ladder_evidence', 1):g} tournament games (both fade out "
-            f"as your Elo nears 1800), your Limitless games 1. Set in Advanced → Preferences → Deck Score.{END}")
+    return (f"{F}ladder games ({adj['ladder_frac'] * 100:.0f}%): − {gap:.1f} pts, × {adj['evidence']:.2f} weight{END}<br>"
+            f"{DIM}Ladder opponents are weaker than a Limitless field (fades out toward 1800 Elo).{END}")

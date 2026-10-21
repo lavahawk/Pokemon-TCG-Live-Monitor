@@ -9,16 +9,18 @@ that would collide are skipped, so axis text never overlaps.
 Interaction:
 - hover: crosshair snaps to the nearest point and shows a tooltip
 - drag: zoom into the selected stretch
-- double-click / right-click: back to the default (auto) view
+- double-click: back to the default (auto) view
+- right-click: open the hover box's details, again to pin it
 - wheel: scrolls the page, like the rest of the dashboard
 """
 
 import math
+import time
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QVariantAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, Signal, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QFont, QFontMetrics, QFontDatabase
-from PySide6.QtWidgets import QWidget, QScrollArea, QSizePolicy
+from PySide6.QtWidgets import QApplication, QWidget, QScrollArea, QSizePolicy
 
 
 TEXT = QColor(226, 235, 246, 150)
@@ -95,7 +97,83 @@ def _fmt_time(value):
     return f"{hour}:{value:%M} {'AM' if value.hour < 12 else 'PM'}"
 
 
-class SeriesChart(QWidget):
+class _TipStages:
+    """Two-stage hover box for painted charts (like infotip): the first
+    lines show on hover with a small ⋯ when there is more. Right-click (or
+    Shift) slides the rest open; a second right-click pins the box on that
+    point so the pointer can move away; a click or a third right-click
+    closes it."""
+
+    TIP_GROW_S = 0.18
+    CUE = "⋯"
+
+    def _tip_init(self):
+        self._tip_level = 0  # 0 summary, 1 details, 2 pinned
+        self._tip_opened = 0.0
+        self._tip_timer = QTimer(self)
+        self._tip_timer.setInterval(16)
+        self._tip_timer.timeout.connect(self._tip_tick)
+
+    def _tip_tick(self):
+        if self._hover < 0:
+            self._tip_timer.stop()
+        self.update()
+
+    def _tip_reset(self):
+        """Pointer on another point: back to the summary."""
+        if self._tip_level < 2 or self._hover < 0:
+            self._tip_level = 0
+
+    def _tip_has_more(self):
+        return False
+
+    def _tip_advance(self):
+        """Right-click on the chart. True when the tip used it."""
+        if self._hover < 0 or not self._tip_has_more():
+            return False
+        if self._tip_level == 0:
+            self._tip_opened = time.monotonic()
+        self._tip_level = (self._tip_level + 1) % 3
+        self._tip_timer.start()
+        self.update()
+        return True
+
+    def _tip_unpin(self):
+        if self._tip_level == 2:
+            self._tip_level = 0
+            self.update()
+            return True
+        return False
+
+    def _tip_stage(self, has_more):
+        """grow 0..1 (eased) of the details; repaints while it animates."""
+        if not has_more:
+            return 0.0
+        if self._tip_level == 0 and QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+            self._tip_level, self._tip_opened = 1, time.monotonic()
+        if self._tip_level == 0:
+            return 0.0
+        grow = min(1.0, (time.monotonic() - self._tip_opened) / self.TIP_GROW_S)
+        if grow < 1.0:
+            if not self._tip_timer.isActive():
+                self._tip_timer.start()
+        else:
+            self._tip_timer.stop()
+        return 1 - (1 - grow) ** 3  # ease out
+
+    def _paint_cue(self, p, box, fm):
+        p.setPen(QColor(214, 225, 240, 120))
+        p.drawText(QRectF(box.right() - 22, box.bottom() - fm.height() - 4, 16, fm.height()),
+                   Qt.AlignmentFlag.AlignRight, self.CUE)
+
+    def _paint_divider(self, p, x, y, w):
+        pinned = self._tip_level == 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(74, 159, 216, 150) if pinned else QColor(255, 255, 255, 26))
+        p.drawRect(QRectF(x, y, w, 1))
+
+
+class SeriesChart(_TipStages, QWidget):
     """Index-spaced line chart with hover tooltips and drag-to-zoom.
 
     set_data(points, auto_view) where each point is a dict:
@@ -140,6 +218,7 @@ class SeriesChart(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setFont(chart_font())
+        self._tip_init()
 
     # ── data ─────────────────────────────────────────────────────────
     def set_data(self, points, auto_view=None, animate=True):
@@ -404,16 +483,24 @@ class SeriesChart(QWidget):
             p.drawText(QRectF(x, y, w + 1, fm.height()), Qt.AlignmentFlag.AlignLeft, label)
             placed_left = x
 
+    TIP_SUMMARY_LINES = 2
+
     def _paint_tooltip(self, p, plot, anchor, lines):
         if not lines:
+            self._tip_timer.stop()
             return
         bold = QFont(self.font())
         bold.setBold(True)
         bold.setPixelSize(self.font().pixelSize() + 2 if self.font().pixelSize() > 0 else 12)
         fm_b, fm = QFontMetrics(bold), QFontMetrics(self.font())
+        lines = list(lines)
+        more = lines[self.TIP_SUMMARY_LINES:]
+        grow = self._tip_stage(bool(more))
         widths = [fm_b.horizontalAdvance(lines[0])] + [fm.horizontalAdvance(s) for s in lines[1:]]
-        w = max(widths) + 20
-        h = fm_b.height() + fm.height() * (len(lines) - 1) + 14
+        w = max(widths) + 20 + (fm.horizontalAdvance(self.CUE) + 6 if more else 0)
+        line_gap = 6 * grow
+        shown_more = fm.height() * len(more) * grow
+        h = fm_b.height() + fm.height() * (len(lines) - 1 - len(more)) + line_gap + shown_more + 14
         x = anchor.x() + 12
         if x + w > self.width() - 4:
             x = anchor.x() - w - 12
@@ -429,9 +516,21 @@ class SeriesChart(QWidget):
         p.setFont(self.font())
         p.setPen(QColor(214, 225, 240, 200))
         line_y = y + 7 + fm_b.height()
-        for line in lines[1:]:
+        for line in lines[1:len(lines) - len(more)]:
             p.drawText(QRectF(x + 10, line_y, w - 20, fm.height()), Qt.AlignmentFlag.AlignLeft, line)
             line_y += fm.height()
+        if more and grow <= 0:
+            self._paint_cue(p, box, fm)
+        if more and grow > 0:
+            self._paint_divider(p, x + 10, line_y + 3, w - 20)
+            line_y += line_gap
+            p.save()
+            p.setClipRect(QRectF(x, line_y, w, shown_more + 1))
+            p.setPen(QColor(200, 212, 228, 190))
+            for line in more:
+                p.drawText(QRectF(x + 10, line_y, w - 20, fm.height()), Qt.AlignmentFlag.AlignLeft, line)
+                line_y += fm.height()
+            p.restore()
 
     # ── interaction ──────────────────────────────────────────────────
     @staticmethod
@@ -448,11 +547,23 @@ class SeriesChart(QWidget):
         index = self._index_at(plot, pos.x())
         first, last = self.view
         index = index if first <= index <= last else -1
+        if self._tip_level == 2 and self._hover >= 0 and self._drag_from is None:
+            return  # pinned on its point
         if index != self._hover or self._drag_from is not None:
+            if index != self._hover:
+                self._tip_reset()
             self._hover = index
             self.update()
 
+    def _tip_has_more(self):
+        if not (0 <= self._hover < len(self.points)):
+            return False
+        return len(self.points[self._hover].get("tip") or []) > self.TIP_SUMMARY_LINES
+
     def leaveEvent(self, event):
+        if self._tip_level == 2 and self._hover >= 0:
+            return super().leaveEvent(event)  # pinned: stays open
+        self._tip_timer.stop()
         if self._hover != -1:
             self._hover = -1
             self.update()
@@ -460,7 +571,9 @@ class SeriesChart(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:
-            self.reset_view()
+            self._tip_advance()  # details / pin (double-click or Reset zoom resets the view)
+            return
+        if self._tip_unpin():
             return
         if event.button() == Qt.MouseButton.LeftButton and self.points:
             self._drag_from = self._pos(event).x()
@@ -514,7 +627,7 @@ def series_style(slot):
     return QColor(SERIES_COLORS[slot % len(SERIES_COLORS)]), slot >= len(SERIES_COLORS)
 
 
-class TrendChart(QWidget):
+class TrendChart(_TipStages, QWidget):
     """Shares or counts of several archetypes per day (TrainerHill meta trend).
 
     set_data(dates, series, mode, stacked): dates are ISO strings; each series
@@ -543,6 +656,7 @@ class TrendChart(QWidget):
         self.setMinimumSize(320, 260)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setCursor(Qt.CursorShape.CrossCursor)
+        self._tip_init()
         self.setFont(chart_font())
 
     def set_data(self, dates, series, mode="share", stacked=False, animate=True):
@@ -730,7 +844,8 @@ class TrendChart(QWidget):
     def _paint_tooltip(self, p, plot, x):
         i = self._hover
         rows = sorted(((float(s["values"][i] or 0), s) for s in self.series), key=lambda t: -t[0])
-        shown = rows[:12]
+        grow = self._tip_stage(len(rows) > 5)
+        shown = rows[:5] if grow <= 0 else rows[:12]
         bold = QFont(self.font())
         bold.setBold(True)
         fm, fm_b = QFontMetrics(self.font()), QFontMetrics(bold)
@@ -761,7 +876,9 @@ class TrendChart(QWidget):
             p.setPen(TEXT_STRONG)
             p.drawText(QRectF(bx + 10, ly, w - 20, fm.height()), Qt.AlignmentFlag.AlignRight, value)
             ly += fm.height()
-        if extra:
+        if extra and grow <= 0:
+            self._paint_cue(p, QRectF(bx, by, w, h), fm)
+        elif extra:
             p.setPen(TEXT)
             p.drawText(QRectF(bx + 22, ly, w - 30, fm.height()), Qt.AlignmentFlag.AlignLeft, f"+{extra} more")
 
@@ -774,12 +891,28 @@ class TrendChart(QWidget):
         n = len(self.dates)
         i = 0 if n == 1 else round((x - plot.left()) / plot.width() * (n - 1))
         i = max(0, min(n - 1, i))
+        if self._tip_level == 2 and self._hover >= 0:
+            return  # pinned on its day
         if i != self._hover:
             self._hover = i
+            self._tip_reset()
             self.update()
 
+    def _tip_has_more(self):
+        return self._hover >= 0 and len(self.series) > 5
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self._tip_advance()
+            return
+        self._tip_unpin()
+        super().mousePressEvent(event)
+
     def leaveEvent(self, _event):
+        if self._tip_level == 2 and self._hover >= 0:
+            return
         self._hover = -1
+        self._tip_timer.stop()
         self.update()
 
     def wheelEvent(self, event):

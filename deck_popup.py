@@ -23,9 +23,10 @@ from PySide6.QtCore import Qt, QTimer, QVariantAnimation, QEasingCurve, QPointF,
 from PySide6.QtGui import QColor, QCursor, QPainter, QPainterPath, QPen, QPixmap, QStandardItemModel, QStandardItem, QIcon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QToolButton, QCompleter,
-    QStyledItemDelegate, QStyle,
+    QStyledItemDelegate, QStyle, QGraphicsOpacityEffect,
 )
 
+import infotip
 from deck_confirm import OTHER, canonical_name, deck_icon_paths, deck_suggestions, mark_handled, play_chime
 
 BLUE = QColor(74, 159, 216)
@@ -44,6 +45,7 @@ NO_HOVER_S = 20.0       # a sure pick nobody hovered fades after this, menu seen
 SURE_CONFIDENCE = 90    # at or above: show only the pick; the choices appear on hover
 LOW_CONFIDENCE = 50     # below this the card asks instead of fading on the menu
 ICON_PX = 18
+KEYS_HINT_STUCK_MS = 4000  # no typing this long in search: show the key hint regardless
 
 
 class ChoiceButton(QPushButton):
@@ -85,7 +87,6 @@ class ChoiceButton(QPushButton):
             mark.setObjectName("choiceMark")
             mark.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             row.addWidget(mark)
-        self.setToolTip(f"Save “{deck}” as the opponent's deck")
 
 
 SHARE_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -182,6 +183,8 @@ class DeckConfirmPopup(QWidget):
         self._shown_at = 0.0
         self._fade_deadline = None
         self._leaving = False
+        self._hover_effect = None
+        self._hover_anim = None
         self._build()
 
         self._intro = QVariantAnimation(self, duration=280, easingCurve=QEasingCurve.Type.OutCubic)
@@ -237,7 +240,7 @@ class DeckConfirmPopup(QWidget):
 
         self.field = QLineEdit()
         self.field.setObjectName("field")
-        self.field.setPlaceholderText("Search meta decks or type a name…")
+        self.field.setPlaceholderText("Search or type a deck…")
         self.field.returnPressed.connect(self._submit)
         self.model = QStandardItemModel(self)
         self.completer = QCompleter(self.model, self.field)
@@ -289,6 +292,15 @@ class DeckConfirmPopup(QWidget):
         self.hint.linkActivated.connect(lambda _l: self._set_mode("edit", prefill=""))
         root.addWidget(self.hint)
 
+        # Faint key hint under the search field; fades in when search opens.
+        self.keys_hint = infotip.HintLabel("", "deck_popup_keys", self)
+        self.keys_hint.setObjectName("hint")
+        self.keys_hint.setVisible(False)
+        root.addWidget(self.keys_hint)
+        self._typing_timer = QTimer(self, singleShot=True, interval=KEYS_HINT_STUCK_MS)
+        self._typing_timer.timeout.connect(self._keys_stuck)
+        self.field.textEdited.connect(self._typed)
+
         # Manual mode: say why the deck isn't detected, link to the API key setting.
         self.manual_note = QLabel()
         self.manual_note.setObjectName("manualNote")
@@ -297,6 +309,32 @@ class DeckConfirmPopup(QWidget):
         self.manual_note.linkActivated.connect(self._open_settings)
         root.addWidget(self.manual_note)
         self.setStyleSheet(CARD_STYLE)
+
+    def _typed(self, _text=""):
+        self._typing_timer.start()
+
+    def _keys_stuck(self):
+        if self.mode == "edit" and self.keys_hint.isVisible():
+            self.keys_hint.reveal(always=True)
+
+    def _hover_hint_applies(self):
+        return self.mode == "show" and bool(self.hint.text()) and "href" not in self.hint.text()
+
+    def _set_hover_hint(self, on, animate=True):
+        """"Wrong? Click to fix" is hidden until the card is hovered."""
+        if self._hover_effect is None:
+            self._hover_effect = QGraphicsOpacityEffect(self.hint)
+            self.hint.setGraphicsEffect(self._hover_effect)
+            self._hover_anim = QVariantAnimation(self, duration=180)
+            self._hover_anim.valueChanged.connect(lambda v: self._hover_effect.setOpacity(float(v)))
+        target = 1.0 if (on or not self._hover_hint_applies()) else 0.0
+        self._hover_anim.stop()
+        if not animate:
+            self._hover_effect.setOpacity(target)
+            return
+        self._hover_anim.setStartValue(self._hover_effect.opacity())
+        self._hover_anim.setEndValue(target)
+        self._hover_anim.start()
 
     def _open_settings(self, _link=None):
         if self.open_settings is not None:
@@ -423,10 +461,11 @@ class DeckConfirmPopup(QWidget):
             self._set_name(self.current or "Unknown")
             self._fill_choices()
             if has_choices:
-                self.hint.setText("Click the right deck to confirm  ·  <a href='other' style='color:#B8C2CC;'>"
+                self.hint.setText("<a href='other' style='color:#B8C2CC;'>"
                                   "Other…</a>")
             else:
                 self.hint.setText("Wrong? Click to fix" if self.current else "Click to set the deck")
+                self._set_hover_hint(self.underMouse(), animate=False)
         elif mode == "edit":
             self.accent = AMBER if (self.request or {}).get("needs_input") else BLUE
             asked = (self.request or {}).get("needs_input")
@@ -437,11 +476,13 @@ class DeckConfirmPopup(QWidget):
             self.field.selectAll()
             if manual_choices:
                 self._fill_choices()
-            if manual:
-                self.hint.setText("Best guesses above  ·  or search below, Enter to save"
-                                  if manual_choices else "Search meta decks  ·  Enter to save")
-            else:
-                self.hint.setText("Enter to save  ·  Esc to cancel" if not asked else "Enter to save")
+            self.hint.setText("")
+            keys = "↵ Save" if (manual or asked) else "↵ Save   Esc Cancel"
+            self.keys_hint.setText(keys)
+            self.keys_hint.setVisible(True)
+            self.keys_hint.conceal()
+            self.keys_hint.reveal()
+            self._typing_timer.start()
             if focus:
                 self.activateWindow()
                 self.raise_()
@@ -457,14 +498,17 @@ class DeckConfirmPopup(QWidget):
             self.caption.setText("SAVED")
             self.hint.setText("")
         self.hint.setVisible(bool(self.hint.text()))
+        if mode != "show" or has_choices:
+            self._set_hover_hint(True, animate=False)
+        if mode != "edit":
+            self.keys_hint.setVisible(False)
+            self._typing_timer.stop()
         link = "<a href='settings' style='color:#F0B43C;'>{}</a>"
         note = {
-            "no_key": "AI deck detection is off (manual mode). " + link.format("Add an OpenAI key in Advanced"),
-            "local_only": "Local mode: guessed from the cards played only (no AI). " + link.format("Change in Advanced"),
-            "ai_failed": "The AI couldn't be reached, so the deck is asked instead. "
-                         + link.format("Check the key in Advanced"),
-            "ai_budget": "AI deck detection is paused: this month's AI usage limit is reached. "
-                         "It starts again on the 1st.",
+            "no_key": "No AI · guessed from cards played. " + link.format("Settings ↗"),
+            "local_only": "Local mode · guessed from cards played. " + link.format("Settings ↗"),
+            "ai_failed": "AI unreachable · pick the deck. " + link.format("Check key ↗"),
+            "ai_budget": "AI paused until the 1st (monthly limit).",
         }.get(manual) if mode in ("edit", "new") else None
         self.manual_note.setText(note or "")
         self.manual_note.setVisible(bool(note))
@@ -506,11 +550,13 @@ class DeckConfirmPopup(QWidget):
         if self.mode == "show" and getattr(self, "_compact", False):
             self._compact = False
             self._set_mode("show")
+        self._set_hover_hint(True)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         if self.mode == "show" and self._sure() and not getattr(self, "_compact", False):
             self._collapse_timer.start()
+        self._set_hover_hint(False)
         super().leaveEvent(event)
 
     def _maybe_collapse(self):
@@ -574,6 +620,7 @@ class DeckConfirmPopup(QWidget):
         if not text:
             self._shaker.start()
             return
+        self.keys_hint.used()
         known = canonical_name(text, self.names)
         if known:
             self._save(known)

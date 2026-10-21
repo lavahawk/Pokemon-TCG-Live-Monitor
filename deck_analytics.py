@@ -308,11 +308,8 @@ def confidence_text(low, high, games):
         half = 50.0
     if half != half:
         half = 50.0
-    if tier == "low":
-        return f"{n} game{s} (range +/-{half:.0f} pts) - wide; treat it as a hint."
-    if tier == "medium":
-        return f"{n} game{s} (range +/-{half:.0f} pts) - taking shape but can still move."
-    return f"{n} game{s} (range +/-{half:.0f} pts) - a fairly stable estimate."
+    meter, word = {"low": ("▮▯▯", "wide"), "medium": ("▮▮▯", "settling")}.get(tier, ("▮▮▮", "stable"))
+    return f"{meter} {n} game{s} · ±{half:.0f} pts · {word}"
 
 
 def verdict_from_probability(p_above):

@@ -63,7 +63,8 @@ from deck_score import compute_scores
 import formulas
 import ai_provider
 import theme
-from ui_widgets import DeckFlagButton, DeckTabBar, MineRowDelegate, MINE_ROLE
+import infotip
+from ui_widgets import DeckFlagButton, DeckTabBar, EditHintDelegate, MineRowDelegate, MINE_ROLE
 from leagues import LEAGUES, league_name
 from app_settings import (
     clear_api_key,
@@ -144,8 +145,7 @@ def _pct_range(low, high):
     return f"{low * 100:.0f}–{high * 100:.0f}%"
 
 
-RANGE_EXPLAINED = ("Confidence range ({level}%): where the true win rate most likely sits. "
-                   "It narrows as you play more games.")
+RANGE_EXPLAINED = "Range ({level}%): where the true win rate likely sits. It narrows as you play."
 
 
 def _range_dates(items, key="t"):
@@ -2008,6 +2008,79 @@ class HoverCard(QFrame):
         border.setAlpha(int(28 + 120 * self._h))
         p.setPen(QPen(border, 1.0))
         p.drawRoundedRect(rect, 10, 10)
+        if getattr(self, "clickable", False) and self._h > 0.01:
+            arrow = QColor(self._accent)
+            arrow.setAlpha(int(200 * self._h))
+            p.setPen(QPen(arrow, 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            x, y = rect.right() - 13, rect.top() + 7
+            p.drawLine(QPointF(x, y + 6), QPointF(x + 6, y))
+            p.drawLine(QPointF(x + 2, y), QPointF(x + 6, y))
+            p.drawLine(QPointF(x + 6, y), QPointF(x + 6, y + 4))
+        p.end()
+
+
+class EloWeightCurve(QWidget):
+    """Advanced → Preferences: how a ladder game's weight climbs from the
+    Master Ball weight (1400 Elo and below) to the Limitless tournament
+    weight (1800+), drawn instead of written out."""
+
+    MARKS = (1500, 1600, 1700)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(64)
+        self.setMinimumWidth(240)
+        self.setMaximumWidth(360)
+
+    @staticmethod
+    def share(elo):
+        from leagues import ELO_BASE, ELO_TOP
+        x = (min(ELO_TOP, max(ELO_BASE, float(elo))) - ELO_BASE) / ((ELO_TOP - ELO_BASE) / 2.0)
+        return (2.0 ** x - 1.0) / 3.0
+
+    def paintEvent(self, _event):
+        from PySide6.QtGui import QPainterPath
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        font = p.font()
+        font.setPixelSize(9)
+        p.setFont(font)
+        left, right, top, bottom = 52, self.width() - 8, 8, self.height() - 14
+        lo_elo, hi_elo = 1300, 1900
+
+        def x_of(elo):
+            return left + (elo - lo_elo) / (hi_elo - lo_elo) * (right - left)
+
+        def y_of(share):
+            return bottom - share * (bottom - top)
+
+        muted = QColor(214, 225, 240, 120)
+        p.setPen(QPen(QColor(255, 255, 255, 22), 1))
+        p.drawLine(QPointF(left, y_of(0)), QPointF(right, y_of(0)))
+        p.drawLine(QPointF(left, y_of(1)), QPointF(right, y_of(1)))
+        p.setPen(muted)
+        p.drawText(QRectF(0, y_of(1) - 6, left - 6, 12), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                   "Limitless")
+        p.drawText(QRectF(0, y_of(0) - 6, left - 6, 12), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                   "Master")
+        for elo in (1400, 1800):
+            p.drawText(QRectF(x_of(elo) - 20, bottom + 2, 40, 12), Qt.AlignmentFlag.AlignCenter, f"{elo}")
+        path = QPainterPath(QPointF(x_of(lo_elo), y_of(0)))
+        for elo in range(lo_elo, hi_elo + 1, 10):
+            path.lineTo(x_of(elo), y_of(self.share(elo)))
+        accent = QColor("#4A9FD8")
+        p.setPen(QPen(accent, 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        p.setPen(Qt.PenStyle.NoPen)
+        for elo in self.MARKS:
+            share = self.share(elo)
+            p.setBrush(accent)
+            p.drawEllipse(QPointF(x_of(elo), y_of(share)), 2.6, 2.6)
+            p.setPen(QColor(214, 225, 240, 170))
+            p.drawText(QRectF(x_of(elo) - 26, y_of(share) - 15, 30, 12),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{share * 100:.0f}%")
+            p.setPen(Qt.PenStyle.NoPen)
         p.end()
 
 
@@ -2082,7 +2155,6 @@ class ResultStrip(QWidget):
         p.end()
 
     def mouseMoveEvent(self, event):
-        from PySide6.QtWidgets import QToolTip
         pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
         hit = -1
         for i in range(len(self.games)):
@@ -2094,10 +2166,11 @@ class ResultStrip(QWidget):
             self._hover = hit
             self.update()
             if hit >= 0:
-                QToolTip.showText(event.globalPosition().toPoint() if hasattr(event, "globalPosition") else event.globalPos(),
-                                  self.games[hit][1], self)
+                x, y, s = self._cell(hit)
+                infotip.show_text(event.globalPosition().toPoint() if hasattr(event, "globalPosition") else event.globalPos(),
+                                  self.games[hit][1], self, QRect(x - 2, 0, s + 4, self.height()))
             else:
-                QToolTip.hideText()
+                infotip.hide_text()
 
     def leaveEvent(self, event):
         self._hover = -1
@@ -2186,9 +2259,10 @@ class RangeBar(QWidget):
     scale at rest)."""
 
     def __init__(self, low, mid, high, accent, benchmark=None, height=None,
-                 show_scale=False, benchmark_label=None, level=0.9, par=0.5, domain=None):
+                 show_scale=False, benchmark_label=None, level=0.9, par=0.5, domain=None, uncertain=False):
         super().__init__()
         self.low, self.mid, self.high = low, mid, high  # fractions 0..1
+        self.uncertain = uncertain  # few games: band drawn hatched instead of solid
         self.par = par
         # Axis: a shared zoomed window (Meta table), or "auto" = zoomed around
         # this range, par and the benchmark (deck cards). None = 0-100%.
@@ -2252,9 +2326,19 @@ class RangeBar(QWidget):
                 tick += 0.05
             p.setPen(Qt.PenStyle.NoPen)
         band = QColor(self.accent)
-        band.setAlpha(int(105 + 90 * h))
-        p.setBrush(band)
-        p.drawRoundedRect(int(x(self.low)), int(cy - 3), max(3, int(x(self.high) - x(self.low))), 6, 3, 3)
+        band_rect = (int(x(self.low)), int(cy - 3), max(3, int(x(self.high) - x(self.low))), 6)
+        if self.uncertain:
+            from PySide6.QtGui import QBrush
+            band.setAlpha(int(40 + 40 * h))
+            p.setBrush(band)
+            p.drawRoundedRect(*band_rect, 3, 3)
+            band.setAlpha(int(150 + 80 * h))
+            p.setBrush(QBrush(band, Qt.BrushStyle.BDiagPattern))
+            p.drawRoundedRect(*band_rect, 3, 3)
+        else:
+            band.setAlpha(int(105 + 90 * h))
+            p.setBrush(band)
+            p.drawRoundedRect(*band_rect, 3, 3)
         # range runs past the zoomed axis: small chevron at that edge
         for beyond, edge, sign in ((self.low < d0 - 1e-9, x0, -1), (self.high > d1 + 1e-9, x0 + w, 1)):
             if beyond:
@@ -2386,10 +2470,7 @@ class MatrixDeckPicker(QDialog):
         mine_head = QLabel("YOUR DECKS")
         mine_head.setObjectName("matrixPickHead")
         mine_col.addWidget(mine_head)
-        mine_hint = QLabel("Extra ★ rows: your games vs each archetype.")
-        mine_hint.setObjectName("matrixPickHint")
-        mine_hint.setWordWrap(True)
-        mine_col.addWidget(mine_hint)
+        mine_head.setToolTip("Extra ★ rows: your games vs each archetype")
         self.mine_list = QListWidget()
         self.mine_list.setObjectName("matrixPickList")
         self.mine_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -2397,7 +2478,7 @@ class MatrixDeckPicker(QDialog):
         for m in my_decks:
             item = QListWidgetItem(icon_for(m.get("deck", ""), m.get("icons", []), size=20),
                                    f"{m.get('deck', '')}  ({m.get('raw_games', 0)})")
-            item.setToolTip(f"{m.get('deck', '')} · {m.get('raw_games', 0)} games")
+            item.setToolTip(f"{m.get('deck', '')} · {m.get('raw_games', 0)} games · ★ row")
             item.setData(Qt.ItemDataRole.UserRole, m.get("deck"))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if m.get("deck") in picked_mine else Qt.CheckState.Unchecked)
@@ -2445,7 +2526,7 @@ class MatrixDeckPicker(QDialog):
         footer = QHBoxLayout()
         reset = QPushButton("Reset to automatic")
         reset.setObjectName("limitlessBtn")
-        reset.setToolTip(f"Top {top_n} most-played archetypes (Matrix size) and your ★ starred decks (when Show my decks is on).")
+        reset.setToolTip(f"Top {top_n} archetypes plus your ★ decks")
         reset.clicked.connect(self._reset)
         footer.addWidget(reset)
         footer.addStretch()
@@ -3686,6 +3767,7 @@ class StatsWindow(QWidget):
         app = QApplication.instance()
         if app is not None and "QToolTip" not in (app.styleSheet() or ""):
             app.setStyleSheet((app.styleSheet() or "") + TOOLTIP_STYLE)  # dark, rounded hover tips
+        infotip.install(app)  # two-stage hover tips (summary first, details on a longer rest)
         self.is_minimized = False
         self.console_hidden = False  # Track console visibility state
         self.monitor_console_hwnd = None  # Handle to monitor's console window
@@ -4186,9 +4268,9 @@ class StatsWindow(QWidget):
         body = QVBoxLayout()
         body.setContentsMargins(12, 4, 12, 12)
         body.setSpacing(8)
-        desc = QLabel("One file with your battles, settings, decklists, HUD buddy, window layout, screen "
-                      "calibration and battle logs. Import it on a new PC (or after a reinstall) to pick up where "
-                      "you left off. Your OpenAI key isn't included - enter it again on the new PC.")
+        desc = QLabel("Back up everything, or move it to a new PC.")
+        desc.setToolTip("One file with your battles, settings, decklists, HUD buddy, window layout, screen "
+                        "calibration and battle logs.")
         desc.setObjectName("settingsDesc")
         desc.setWordWrap(True)
         body.addWidget(desc)
@@ -4252,7 +4334,8 @@ class StatsWindow(QWidget):
             return
         where = f"your {cloud} folder" if folder else os.path.dirname(path)
         self._data_status.setText(f"<span style='color:#81C784'>✓ Exported {result['battles']} battles and "
-                                  f"{result['logs']} battle logs</span> to {where}: <b>{os.path.basename(path)}</b>")
+                                  f"{result['logs']} battle logs</span> to {where}: <b>{os.path.basename(path)}</b>. "
+                                  "Your OpenAI key isn't included.")
         if upload_page:
             webbrowser.open(upload_page)
         if upload_page or not folder:
@@ -4637,18 +4720,19 @@ class StatsWindow(QWidget):
         est = post.get("mean", 0.5) * 100.0
         deck_accent = self._confidence_accent(post.get("p_above_even") if games else None)
         level = int(round(post.get("level", 0.9) * 100))
-        tip = (f"<b>Estimated win rate: {est:.0f}%</b><br>"
-               f"Range {_pct_range(post.get('low', 0), post.get('high', 1))}. {RANGE_EXPLAINED.format(level=level)}<br>"
-               f"<span style='color:#8A97AA'>Actual {analysis.get('record')} ({(observed or 0) * 100:.0f}%). "
-               f"{post.get('games', 0):.1f} effective games.</span><br>"
-               + (formulas.estimate(post) if post.get("alpha") else ""))
+        details = (f"Range {_pct_range(post.get('low', 0), post.get('high', 1))} · "
+                   f"{post.get('games', 0):.1f} weighted games<br>"
+                   f"{formulas.DIM}{RANGE_EXPLAINED.format(level=level)}{formulas.END}")
         if limitless_wr is not None:
-            tip += f"<br><span style='color:#FFD54F'>▍</span> Limitless average for this archetype: {limitless_wr * 100:.1f}%"
+            details += f"<br><span style='color:#FFD54F'>▍</span> Limitless average: {limitless_wr * 100:.1f}%"
+        if post.get("alpha"):
+            details += "<br>" + formulas.estimate(post)
+        tip = infotip.tip(f"<b>Estimated {est:.0f}%</b> · actual {analysis.get('record')} "
+                          f"({(observed or 0) * 100:.0f}%)", details)
         top.addWidget(self._create_estimate_card(
             "WIN RATE", f"{est:.0f}%" if games else "--", deck_accent,
             post.get("low", 0), post.get("mean", 0.5), post.get("high", 1),
-            ("Older format: not counted" if post.get("games", 0) <= 0 else
-             f"Range {_pct_range(post.get('low', 0), post.get('high', 1))}") if games else "No games yet",
+            ("Older format: not counted" if post.get("games", 0) <= 0 else None) if games else "No games yet",
             tip, benchmark=limitless_wr, benchmark_label="Limitless", par=post.get("par", 0.5),
         ), 0, 0)
 
@@ -4658,13 +4742,11 @@ class StatsWindow(QWidget):
         if score and score.get("eff_games", 0) > 0:
             sc = score["score"] * 100.0
             ranked = score_info.get("ranked", 0)
-            caption = (f"{'Would rank' if score.get('ranked') else 'Predicted'} {self._rank_text(score)} of {ranked}"
-                       if score.get("rank") else f"range {_pct_range(score['low'], score['high'])}")
+            caption = f"{self._rank_text(score, with_range=False)} of {ranked}" if score.get("rank") else None
             meta_card = self._create_estimate_card(
                 "META SCORE", f"{sc:.0f}", self._confidence_accent(score["p_above_even"]),
                 score["low"], score["score"], score["high"], caption,
-                self._score_tooltip(analysis.get("deck_name", ""), score, score_info, True)
-                + "<br><i>Click to see it in the Meta tab.</i>",
+                self._score_tooltip(analysis.get("deck_name", ""), score, score_info, True),
                 par=score.get("par", 0.5),
             )
             meta_card.make_clickable(lambda d=analysis.get("deck_name", ""): self._show_deck_in_meta(d, "blended"))
@@ -4672,23 +4754,23 @@ class StatsWindow(QWidget):
         elif meta_adj:
             adj = meta_adj["mean"] * 100.0
             diff = (observed or 0) * 100.0 - adj
-            mix = ("Your opponents were close to the real meta mix."
+            mix = ("Your opponents matched the meta mix."
                    if abs(diff) < 2 else
                    f"Your opponents were {'easier' if diff > 0 else 'tougher'} than the meta "
                    f"({(observed or 0) * 100:.0f}% raw → {adj:.0f}%).")
-            tip = (f"<b>Expected win rate vs today's meta: {adj:.0f}%</b><br>"
-                   f"Range {_pct_range(meta_adj['low'], meta_adj['high'])}.<br>"
-                   f"<span style='color:#8A97AA'>Your matchups re-weighted by how common each deck is on Limitless. "
-                   f"{mix} Decks you haven't faced count at your overall rate.</span>")
+            tip = infotip.tip(
+                f"<b>{adj:.0f}% expected vs today's meta</b>",
+                f"Range {_pct_range(meta_adj['low'], meta_adj['high'])} · {mix}<br>"
+                f"{formulas.DIM}Your matchups weighted by how common each deck is on Limitless; "
+                f"unfaced decks count at your overall rate.{formulas.END}")
             top.addWidget(self._create_estimate_card(
                 "VS THE META", f"{adj:.0f}%", self._confidence_accent(meta_adj.get("p_above_even")),
-                meta_adj["low"], meta_adj["mean"], meta_adj["high"],
-                f"Range {_pct_range(meta_adj['low'], meta_adj['high'])}", tip,
+                meta_adj["low"], meta_adj["mean"], meta_adj["high"], None, tip,
             ), 0, 1)
         else:
             top.addWidget(self._create_estimate_card(
-                "VS THE META", "--", "#AAB7CB", 0, None, 0, "needs Limitless meta data",
-                "Open the Meta tab once to load meta shares."), 0, 1)
+                "VS THE META", "--", "#AAB7CB", 0, None, 0, "Needs meta data",
+                "Open the Meta tab once to load it."), 0, 1)
 
         # 3. Verdict
         p_even = post.get("p_above_even", 0.5)
@@ -4700,21 +4782,21 @@ class StatsWindow(QWidget):
         early = bool(games) and n_eff < self.VERDICT_GAMES and not decided
         if early:
             verdict = "Too early"
-        tip = (f"<b>{p_even * 100:.0f}% chance</b> this deck does better than an even contest "
-               f"({_par_text(post.get('par', 0.5))}).<br>"
-               f"<span style='color:#8A97AA'>{analysis.get('confidence_note', '')}</span><br>"
-               + formulas.verdict(p_even, post.get("par", 0.5)))
+        par_text = _par_text(post.get("par", 0.5))
+        details = (f"{analysis.get('confidence_note', '')}<br>" + formulas.verdict(p_even, post.get("par", 0.5)))
         if analysis.get("p_beats_limitless") is not None:
-            tip += (f"<br>{analysis['p_beats_limitless'] * 100:.0f}% chance you beat the Limitless average "
-                    f"({limitless_wr * 100:.1f}%).")
+            details += (f"<br>{analysis['p_beats_limitless'] * 100:.0f}% chance you beat the Limitless average "
+                        f"({limitless_wr * 100:.1f}%)")
         if early:
-            tip = (f"<b>Too early for a verdict:</b> {n_eff:.0f} effective games, and the likely range still "
-                   f"includes {_par_text(post.get('par', 0.5))}. Verdicts start at {self.VERDICT_GAMES} games "
-                   f"(or sooner once the range clears it).<br>" + tip)
+            tip = infotip.tip(f"<b>Too early</b> · {n_eff:.0f} of {self.VERDICT_GAMES} weighted games",
+                              f"The range still includes {par_text}. A verdict comes at {self.VERDICT_GAMES} games, "
+                              f"or sooner once the range clears it.<br>{details}")
+        else:
+            tip = infotip.tip(f"<b>{p_even * 100:.0f}% chance</b> it's above {par_text}", details)
         top.addWidget(self._create_estimate_card(
             "VERDICT", verdict, self._confidence_accent(p_even if games and not early else None), 0, None, 0,
-            (f"~{self.VERDICT_GAMES - n_eff:.0f} more games for a verdict" if early else
-             f"{p_even * 100:.0f}% chance it's above {_par_text(post.get('par', 0.5))}") if games else "", tip), 0, 2)
+            (f"{self.VERDICT_GAMES - n_eff:.0f} more games" if early else
+             f"{p_even * 100:.0f}% above {par_text}") if games else "", tip), 0, 2)
         for col in range(3):
             top.setColumnStretch(col, 1)
 
@@ -4724,24 +4806,22 @@ class StatsWindow(QWidget):
         outer.addLayout(adv)
         own = (score or {}).get("own")
         if own and score.get("eff_games", 0) > 0:
-            own_rank = f" · {self._rank_text(own, with_range=False)}" if own.get("rank") else ""
-            caption = (f"Your games only (no Limitless data) · would rank {self._rank_text(own, with_range=False)} "
-                       f"of {score_info.get('ranked', 0)}" if own.get("rank") else "Your games only (no Limitless data)")
+            caption = (f"{self._rank_text(own, with_range=False)} of {score_info.get('ranked', 0)}"
+                       if own.get("rank") else None)
             own_card = self._create_mini_stat(
                 "SCORE · YOUR GAMES", f"{own['score'] * 100:.0f} ±{(own['high'] - own['low']) * 50:.1f}", "#B39DDB",
-                f"<b>Own games only: {own['score'] * 100:.1f}</b> · range {_pct_range(own['low'], own['high'])}"
-                + (f" · {'would rank' if own.get('ranked') else 'predicted'} {self._rank_text(own)} of "
-                   f"{score_info.get('ranked', 0)}" if own_rank else "")
-                + "<br>" + formulas.own_score(own, score_info)
-                + "<br><i>Click to see it in the Meta tab.</i>", caption=caption)
+                infotip.tip(f"<b>{own['score'] * 100:.1f}</b> from your games only"
+                            + (f" · {self._rank_text(own)} of {score_info.get('ranked', 0)}" if own.get("rank") else ""),
+                            f"Range {_pct_range(own['low'], own['high'])}<br>" + formulas.own_score(own, score_info)),
+                caption=caption)
             own_card.make_clickable(lambda d=analysis.get("deck_name", ""): self._show_deck_in_meta(d, "own"))
             adv.addWidget(own_card, 0, 0)
         else:
             rw = rank_summary.get("weighted_winrate", 0.0) * 100.0
             adv.addWidget(self._create_mini_stat(
                 "RANK-WEIGHTED", f"{rw:.0f}%" if games else "--", self.NEUTRAL,
-                "Win rate where games at higher ranks count more"
-                + (f" (avg rank {rank_summary['avg_rank']:.0f})." if rank_summary.get("avg_rank") is not None else ".")), 0, 0)
+                "Higher-rank games count more"
+                + (f" · avg rank {rank_summary['avg_rank']:.0f}" if rank_summary.get("avg_rank") is not None else "")), 0, 0)
         form = analysis.get("recent_form") or {}
         strip = ResultStrip(form.get("games_list", [])) if form.get("games") else None
         if strip is not None:
@@ -4750,9 +4830,7 @@ class StatsWindow(QWidget):
         adv.addWidget(self._create_mini_stat(
             f"LAST {form.get('games', 0)}" if form.get("games") else "RECENT",
             f"{form['wins']}-{form['games'] - form['wins']}" if form.get("games") else "--",
-            self.NEUTRAL, "Oldest on the left, newest on the right. Hover a square for the game, "
-                          "click it to jump to it below.",
-            extra_widget=strip), 0, 1)
+            self.NEUTRAL, "", extra_widget=strip), 0, 1)
         if limitless_wr is not None:
             edge = est - limitless_wr * 100.0
             p_beat = analysis.get("p_beats_limitless")
@@ -4761,17 +4839,18 @@ class StatsWindow(QWidget):
             # Coloured only when the difference is likely real (P >= 70% / <= 30%).
             adv.addWidget(self._create_mini_stat(
                 "VS LIMITLESS", f"{edge:+.0f} pts", self._confidence_accent(p_beat),
-                f"Your estimate ({est:.0f}%) vs this archetype's Limitless average ({limitless_wr * 100:.1f}%).<br>"
-                f"Likely range {lo_edge:+.0f} to {hi_edge:+.0f} pts"
-                + (f" · {p_beat * 100:.0f}% chance you're above it." if p_beat is not None else ".")
-                + "<br><span style='color:#8A97AA'>Limitless records are mostly best-of-three match results, "
-                  "your ladder games best-of-one, so treat small differences as noise.</span>"), 0, 2)
+                infotip.tip(
+                    f"<b>{edge:+.0f} pts</b> vs the Limitless average ({limitless_wr * 100:.1f}%)",
+                    f"Likely {lo_edge:+.0f} to {hi_edge:+.0f} pts"
+                    + (f" · {p_beat * 100:.0f}% chance you're above it" if p_beat is not None else "")
+                    + f"<br>{formulas.DIM}Limitless is mostly best-of-three, the ladder best-of-one: "
+                      f"small gaps are noise.{formulas.END}")), 0, 2)
         else:
             adv.addWidget(self._create_mini_stat("VS LIMITLESS", "--", "#AAB7CB",
-                                                 "No Limitless archetype matched this deck name."), 0, 2)
+                                                 "No Limitless archetype matches this deck name"), 0, 2)
         faced = self._create_mini_stat(
             "META FACED", f"{(meta_adj or {}).get('coverage', 0) * 100:.0f}%", self.NEUTRAL,
-            "Share of the current meta you've played at least once with this deck. Click for the matchups.")
+            "Share of the meta you've faced with this deck")
         faced.make_clickable(lambda c=faced: self._scroll_to_matchups(c))
         adv.addWidget(faced, 0, 3)
         for col in range(4):
@@ -4811,12 +4890,16 @@ class StatsWindow(QWidget):
             color = {"W": win_c, "L": loss_c, "T": tie_c}[kind]
             label = {"W": "Win", "L": "Loss", "T": "Tie"}[kind]
             record = f"{raw['W']}-{raw['L']}" + (f"-{raw['T']}" if raw["T"] else "")
+            short = {"W": "W", "L": "L", "T": "T"}[kind]
             tip = [f"{post['mean'] * 100:.0f}%   range {_pct_range(post['low'], post['high'])}",
-                   f"Game {len(points) + 1} · {_short_day(when)} · {_clock(when)}",
-                   f"{label} vs {b['opponent']}" if b.get("opponent") else label,
-                   f"Actual so far: {actual * 100:.0f}% ({record})" if actual is not None else record,
-                   f"Counts ×{weight:.2f} · {post['games']:.1f} effective games" if weight > 0
-                   else "Older format, not counted"]
+                   f"Game {len(points) + 1} · {short} vs {b['opponent']}" if b.get("opponent")
+                   else f"Game {len(points) + 1} · {label}",
+                   f"{_short_day(when)} · {_clock(when)}",
+                   f"Actual so far: {actual * 100:.0f}% ({record})" if actual is not None else record]
+            if weight <= 0:
+                tip.append("Older format, not counted")
+            elif abs(weight - 1.0) >= 0.005:
+                tip.append(f"Counts ×{weight:.2f} · {post['games']:.1f} weighted games")
             points.append({"y": post["mean"] * 100, "lo": post["low"] * 100, "hi": post["high"] * 100,
                            "alt": actual * 100 if actual is not None else None, "t": when,
                            "dot": color, "strip": color, "tip": tip})
@@ -4841,11 +4924,11 @@ class StatsWindow(QWidget):
         legend = QLabel(
             "<span style='color:#6BB6E8'>━●</span> estimate &nbsp;&nbsp;"
             "<span style='color:rgba(255,255,255,0.55)'>┅</span> actual so far &nbsp;&nbsp;"
-            "<span style='color:#6BB6E8'>▒</span> confidence range &nbsp;&nbsp;"
-            "<span style='color:#8A97AA'>hover for each game · drag to zoom · double-click to reset</span>")
-        legend.setToolTip("Estimate: true win rate after each game, weighted like the Win rate card "
-                          "(format age × league / tournament). Actual: your raw win % so far.<br>"
-                          + RANGE_EXPLAINED.format(level=90) + " Early swings are mostly noise.")
+            "<span style='color:#6BB6E8'>▒</span> range")
+        legend.setToolTip(infotip.tip(
+            "Estimate vs actual win rate per game",
+            "Estimate is weighted like the Win rate card (format age × league). Actual is your raw win % so far. "
+            "Early swings are mostly noise.<br>" + RANGE_EXPLAINED.format(level=90)))
         legend.setTextFormat(Qt.TextFormat.RichText)
         legend.setObjectName("deckMetricNote")
         legend.setWordWrap(True)
@@ -4863,8 +4946,8 @@ class StatsWindow(QWidget):
         card, layout = self._create_dashboard_card("RANK WITH THIS DECK")
         if len(points) < 2:
             only = points[0]
-            note = QLabel(f"One ranked game so far: rank {only['y']:,} ({league_name(only['y'])}), "
-                          f"{only['tip'][2]}. The chart appears after the next one.")
+            note = QLabel("Chart appears after your next ranked game.")
+            note.setToolTip(f"Rank {only['y']:,} ({league_name(only['y'])}), {only['tip'][2]}")
             note.setObjectName("deckMetricNote")
             note.setWordWrap(True)
             layout.addWidget(note)
@@ -4873,10 +4956,10 @@ class StatsWindow(QWidget):
         legend = QLabel(
             f"<span style='color:{WIN_COLOR}'>●</span> win &nbsp;"
             f"<span style='color:{LOSS_COLOR}'>●</span> loss &nbsp;&nbsp;"
-            f"{deck_rank_summary(points)} &nbsp;&nbsp;"
-            "<span style='color:#8A97AA'>hover for each game · drag to zoom</span>")
-        legend.setToolTip("Your ladder rank recorded with each game played with this deck. "
-                          "Games with other decks in between aren't shown, so a step can include them.")
+            f"{deck_rank_summary(points)}")
+        legend.setToolTip(infotip.tip(
+            "Your ladder rank after each game with this deck",
+            "Games with other decks in between aren't shown, so a step can include them."))
         legend.setTextFormat(Qt.TextFormat.RichText)
         legend.setObjectName("deckMetricNote")
         legend.setWordWrap(True)
@@ -5283,9 +5366,16 @@ class StatsWindow(QWidget):
                 self._set_meta_item(table, i, 3, f"{est:.0f}%", accent=self.NEUTRAL if few else accent)
                 item = table.item(i, 3)
                 if item is not None:
-                    item.setToolTip(f"<b>{est:.0f}%</b> vs {r.get('deck', '')} · range {_pct_range(post['low'], post['high'])}<br>"
-                                    f"{post['p_above_even'] * 100:.0f}% chance you're favored<br>"
-                                    + formulas.pooled_matchup(post, (analysis.get("posterior") or {}).get("mean", 0.5)))
+                    if few:
+                        head_text = "Too few games · uses your overall rate"
+                    elif early:
+                        head_text = f"Even so far · {int(games)} games"
+                    else:
+                        head_text = f"<b>{est:.0f}%</b> vs {r.get('deck', '')} · {post['p_above_even'] * 100:.0f}% favoured"
+                    item.setToolTip(infotip.tip(
+                        head_text,
+                        f"{est:.0f}% vs {r.get('deck', '')} · range {_pct_range(post['low'], post['high'])}<br>"
+                        + formulas.pooled_matchup(post, (analysis.get("posterior") or {}).get("mean", 0.5))))
                 bar_wrap = QWidget()
                 bar_layout = QHBoxLayout(bar_wrap)
                 bar_layout.setContentsMargins(6, 0, 6, 0)
@@ -5298,17 +5388,19 @@ class StatsWindow(QWidget):
                     self._set_meta_item(table, i, 6, "Too few games", muted=True)
                     item = table.item(i, 6)
                     if item is not None:
-                        item.setToolTip(f"Only {int(games)} game{'s' if games != 1 else ''}: the estimate leans on this "
-                                        "deck's overall win rate. Play 3+ games for a matchup verdict.")
+                        item.setToolTip(infotip.tip(
+                            "Too few games · uses your overall rate",
+                            f"Only {int(games)} game{'s' if games != 1 else ''}. A verdict needs 3+."))
                 elif early:
                     # Many small matchups: some look lopsided by chance alone
                     # (8 even matchups of 5 games show a "Leaning" 98% of the time).
                     self._set_meta_item(table, i, 6, f"Too early · {int(games)}/{self.MATCHUP_VERDICT_GAMES}", muted=True)
                     item = table.item(i, 6)
                     if item is not None:
-                        item.setToolTip(f"{int(games)} games and the likely range still includes an even matchup. "
-                                        f"With many matchups, a few always look lopsided by chance; verdicts start "
-                                        f"at {self.MATCHUP_VERDICT_GAMES} games or once the range clears 50%.")
+                        item.setToolTip(infotip.tip(
+                            f"Even so far · {int(games)} games",
+                            f"The range still includes an even matchup. Verdicts start at "
+                            f"{self.MATCHUP_VERDICT_GAMES} games or once the range clears 50%."))
                 else:
                     self._set_meta_item(table, i, 6, verdict_from_probability(post["p_above_even"]), accent=accent)
             else:
@@ -5317,7 +5409,7 @@ class StatsWindow(QWidget):
                 self._set_meta_item(table, i, 6, "Not faced", muted=True)
                 item = table.item(i, 6)
                 if item is not None:
-                    item.setToolTip("Counts at this deck's overall win rate until you play it.")
+                    item.setToolTip(infotip.tip("Not played yet", "Counts at this deck's overall win rate."))
             impact = r.get("impact")
             if impact is not None and post and abs(impact) >= 0.05:
                 arrow = "▲" if impact > 0 else "▼"
@@ -5334,21 +5426,22 @@ class StatsWindow(QWidget):
                 self._set_meta_item(table, i, 5, f"{fm_pct:.0f}%", accent=self._confidence_accent(fm_post["p_above_even"]))
                 item = table.item(i, 5)
                 if item is not None:
-                    item.setToolTip(f"{my_row.get('deck', 'This archetype')} vs {r.get('deck')} on Limitless: "
-                                    f"{fm_pct:.0f}% over ~{fm_games:.0f} weighted games")
+                    item.setToolTip(infotip.tip(
+                        f"<b>{fm_pct:.0f}%</b> on Limitless",
+                        f"{my_row.get('deck', 'This archetype')} vs {r.get('deck')} over ~{fm_games:.0f} weighted games"))
             else:
                 self._set_meta_item(table, i, 5, "", muted=True)
             row_links.append(meta_row.get("deck_url"))
 
         header_tips = [
-            "Opposing archetype. 'Other' = decks outside the listed ones. Double-click to open on Limitless.",
-            "Share of today's Limitless meta.",
-            "Your wins-losses vs this deck.",
-            "Estimated win rate in this matchup (leans on your overall rate until there are a few games).",
-            "Confidence range (90%) · dot = estimate · white tick = par (50% unless ties count as losses)",
-            "Your archetype vs this deck across Limitless online games (the benchmark).",
-            "Needs 3+ games.",
-            "▲ lifts / ▼ drags your win rate vs the meta. Bigger = matters more.",
+            infotip.tip("Opposing archetype", "'Other' = decks outside the listed ones. Double-click to open on Limitless."),
+            "Share of today's Limitless meta",
+            "Your wins-losses vs this deck",
+            infotip.tip("Estimated win rate in this matchup", "Leans on your overall rate until there are a few games."),
+            "90% range · tick = even",
+            "Limitless benchmark for your archetype",
+            "Verdict needs 3+ games",
+            "▲ helps / ▼ hurts vs the meta",
         ]
         for col, tip in enumerate(header_tips):
             header_item = table.horizontalHeaderItem(col)
@@ -5553,9 +5646,7 @@ class StatsWindow(QWidget):
         outer = QVBoxLayout(dialog.content)
         outer.setContentsMargins(14, 12, 14, 12)
         head = QLabel(f"<b>{os.path.basename(path)}</b>"
-                      + (f" · vs {opponent_deck}" if opponent_deck else "")
-                      + "<br><span style='color:#8A97AA;font-size:10px'>Copies seen = how many times a card "
-                        "was played or shown (a lower bound, max 4).</span>")
+                      + (f" · vs {opponent_deck}" if opponent_deck else ""))
         outer.addWidget(head)
         columns = QHBoxLayout()
         for title, counts in ((f"You ({username or 'you'})", mine), (opponent, theirs)):
@@ -5563,6 +5654,9 @@ class StatsWindow(QWidget):
             table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
             table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
             table.setColumnWidth(1, 52)
+            seen_head = table.horizontalHeaderItem(1)
+            if seen_head is not None:
+                seen_head.setToolTip(infotip.tip("Copies seen", "How many times a card was played or shown (a lower bound, max 4)."))
             items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
             table.setRowCount(len(items))
             for r, (name, n) in enumerate(items):
@@ -5680,10 +5774,6 @@ class StatsWindow(QWidget):
             hero_top.addWidget(open_btn)
         hero_layout.addLayout(hero_top)
 
-        comparison_text = self._deck_summary_text(analysis)
-
-        # The plain-language read-out lives on the deck title's hover.
-        deck_title.setToolTip(comparison_text)
         hero_layout.addWidget(self._create_deck_visual_metrics(analysis))
         layout.addWidget(hero_card)
 
@@ -5954,8 +6044,8 @@ class StatsWindow(QWidget):
         # Nothing to link yet: a corner toast instead of a panel, and the
         # dashboard steps aside so the game is free for the export.
         dialog.open_as_toast("Please export your decklist in Pokémon TCG Live")
-        dialog.pill.setToolTip("Decks → this deck → Export → Copy to clipboard. The list opens here by itself."
-                               "\nClick to pick a saved list or paste one instead.")
+        dialog.pill.setToolTip(infotip.tip("Paste a list, or export one from PTCGL",
+                                           "In PTCGL: Decks → this deck → Export → Copy to clipboard. The list opens here by itself."))
         self._decklist_hid_dashboard = self.isVisible()
         if self._decklist_hid_dashboard:
             self.minimize_to_overlay()
@@ -6491,7 +6581,7 @@ class StatsWindow(QWidget):
         top.addWidget(external)
         col.addLayout(top)
         if affiliate:
-            note = QLabel("Affiliate link: buying through it supports this app at no extra cost to you.")
+            note = QLabel("Affiliate link · supports the app at no cost to you.")
             note.setObjectName("buyNote")
             col.addWidget(note)
         view = QWebEngineView() if WEBENGINE_AVAILABLE else None
@@ -6671,10 +6761,10 @@ class StatsWindow(QWidget):
         completer.setMaxVisibleItems(10)
         completer.popup().setObjectName("baseArchetypePopup")
         field.setCompleter(completer)
-        field.setToolTip(
-            "The Limitless archetype this deck is a version of.\n"
-            "Its Meta Score, matchups vs Limitless, icons and the Limitless link start from it.\n"
-            "Leave empty to match by deck name" + (f" (now: {auto_name})." if auto_name else " (no match now)."))
+        field.setToolTip(infotip.tip(
+            "Limitless archetype this deck is based on",
+            "Its Meta Score, Limitless matchups, icons and link start from it. "
+            "Leave empty to match by deck name" + (f" (now: {auto_name})." if auto_name else " (no match now).")))
 
         committed = []
 
@@ -6887,7 +6977,7 @@ class StatsWindow(QWidget):
             placeholder = QWidget()
             placeholder_layout = QVBoxLayout(placeholder)
             placeholder_layout.setContentsMargins(16, 16, 16, 16)
-            label = QLabel("No deck data yet. Play a few matches and each deck will get its own dashboard here.")
+            label = QLabel("Play a match to see deck stats here.")
             label.setStyleSheet("color: rgba(255,255,255,0.4); font-size: 11px; font-style: italic;")
             label.setWordWrap(True)
             placeholder_layout.addWidget(label)
@@ -7340,7 +7430,7 @@ class StatsWindow(QWidget):
             col.setVerticalSpacing(6)
             header = QLabel(title)
             header.setObjectName("metaStatTitle")
-            col.addWidget(header, 0, 0, 1, 2)
+            col.addWidget(header, 0, 0, 1, 3)
             for row, (key, (label_text, tip)) in enumerate(WEIGHT_LABELS[group].items(), start=1):
                 label = QLabel(label_text)
                 label.setStyleSheet("color: rgba(235,242,250,0.85); font-size: 11px;")
@@ -7353,12 +7443,27 @@ class StatsWindow(QWidget):
                 spin.setFixedWidth(84)
                 spin.setValue(float(current[group][key]))
                 default = DEFAULT_WEIGHTS[group][key]
-                hint = f"Default {default:g}{' pts' if is_gap else '×'}" + (f" · {tip}" if tip else "")
-                label.setToolTip(hint)
-                spin.setToolTip(hint)
+                label.setToolTip(tip or "")
+                spin.setToolTip(tip or "")
                 spin.setStyleSheet(SPIN_STYLE)
+                reset = QToolButton()
+                reset.setObjectName("weightReset")
+                reset.setText("↺")
+                reset.setFixedSize(18, 18)
+                reset.setCursor(Qt.CursorShape.PointingHandCursor)
+                reset.setToolTip(f"Reset to {default:g}{' pts' if is_gap else '×'}")
+                reset.setStyleSheet("QToolButton#weightReset { color: rgba(214,225,240,0.55); background: transparent; "
+                                    "border: none; font-size: 12px; } "
+                                    "QToolButton#weightReset:hover { color: #4A9FD8; }")
+                reset.clicked.connect(lambda _c=False, s=spin, d=default: s.setValue(d))
+                keep = reset.sizePolicy()
+                keep.setRetainSizeWhenHidden(True)  # rows don't shift when it appears
+                reset.setSizePolicy(keep)
+                spin.valueChanged.connect(lambda v, b=reset, d=default: b.setVisible(abs(v - d) > 1e-9))
+                reset.setVisible(abs(spin.value() - default) > 1e-9)
                 col.addWidget(label, row, 0)
                 col.addWidget(spin, row, 1)
+                col.addWidget(reset, row, 2)
                 self._weight_spins[(group, key)] = spin
             col.setRowStretch(len(WEIGHT_LABELS[group]) + 1, 1)
             columns.addLayout(col)
@@ -7374,7 +7479,7 @@ class StatsWindow(QWidget):
         for key, (name, formula) in TIE_MODES.items():
             self.prefs_tie_combo.addItem(f"{name}   {formula}", key)
         self.prefs_tie_combo.setCurrentIndex(list(TIE_MODES).index(tie_mode()))
-        self.prefs_tie_combo.setToolTip("Applies immediately to the meta, matchups and your own decks.")
+        self.prefs_tie_combo.setToolTip("Applies at once to the meta, matchups and your decks")
         # Same setting as the Meta tab's selector: keep the two in step.
         self.prefs_tie_combo.currentIndexChanged.connect(
             lambda idx: hasattr(self, "meta_tie_combo") and self.meta_tie_combo.setCurrentIndex(idx))
@@ -7382,13 +7487,13 @@ class StatsWindow(QWidget):
         tie_row.addStretch()
         body.addLayout(tie_row)
 
-        note = QLabel("Elo above 1400: weight = Master + (Limitless − Master) × (2^((Elo − 1400) / 200) − 1) / 3, "
-                      "full tournament weight from 1800 (1500 +14%, 1600 +33%, 1700 +61%). "
-                      "Expansion multipliers apply to both columns; data older than two expansions is ignored. "
-                      "Your games are rescaled to their effective sample size, so weights never invent certainty.")
-        note.setObjectName("settingsDesc")
-        note.setWordWrap(True)
-        body.addWidget(note)
+        curve = EloWeightCurve()
+        curve.setToolTip(infotip.tip(
+            "Ladder games gain weight above 1400 Elo, full at 1800",
+            f"{formulas.F}weight = Master + (Limitless − Master) × (2^((Elo − 1400) / 200) − 1) / 3{formulas.END}<br>"
+            f"{formulas.DIM}Expansion multipliers apply to both columns; data older than two expansions is ignored. "
+            f"Weights change how much a game counts, never how many games there are.{formulas.END}"))
+        body.addWidget(curve)
 
         buttons = QHBoxLayout()
         reset_btn = QPushButton("Reset to defaults")
@@ -7501,11 +7606,6 @@ class StatsWindow(QWidget):
         # Check console availability on startup
         self.check_console_availability()
         
-        desc = QLabel("Quick access to development tools and debugging features")
-        desc.setObjectName("settingsDesc")
-        desc.setWordWrap(True)
-        debug_layout.addWidget(desc)
-        
         debug_card.layout().addLayout(debug_layout)
         layout.addWidget(debug_card)
 
@@ -7521,12 +7621,13 @@ class StatsWindow(QWidget):
         self.limitless_key_input.setText(self.app_settings.get("limitless_api_key") or "")
         self.limitless_key_input.editingFinished.connect(self._save_limitless_key)
         meta_layout.addWidget(self.limitless_key_input)
+        self.limitless_key_input.setToolTip(infotip.tip(
+            "Optional · raises the Limitless download limit",
+            "Without a key the Limitless API allows 50 requests per 5 minutes. Events are cached for good, "
+            "so the full window fills in over a few refreshes (biggest events first)."))
         meta_desc = QLabel(
-            "Online results and decklists come from the Limitless API, which allows 50 requests per 5 minutes "
-            "without a key. Events are cached for good, so the full window fills in over a few refreshes "
-            "(the current format's biggest events first). A key raises the limit: request one at "
-            "<a href='https://play.limitlesstcg.com/account/settings/api' style='color:#6BB6E8'>"
-            "play.limitlesstcg.com → Settings → API</a>.")
+            "Optional · raises the Limitless download limit. "
+            "<a href='https://play.limitlesstcg.com/account/settings/api' style='color:#6BB6E8'>Get a key ↗</a>")
         meta_desc.setObjectName("settingsDesc")
         meta_desc.setWordWrap(True)
         meta_desc.setTextFormat(Qt.TextFormat.RichText)
@@ -7620,7 +7721,6 @@ class StatsWindow(QWidget):
 
         self.local_only_checkbox = QCheckBox("Enable local-only parsing fallback")
         self.local_only_checkbox.setObjectName("settingsCheck")
-        self.local_only_checkbox.setToolTip("Same as choosing Off (local predictor) above.")
         parser_layout.addWidget(self.local_only_checkbox)
 
         saved_provider = "none" if self.app_settings.get("local_only_mode", False) else (
@@ -7633,18 +7733,20 @@ class StatsWindow(QWidget):
         self._update_ai_provider_fields()
 
         # SEC-09: say plainly what leaves the machine, and offer to strip names.
-        self.privacy_notice_label = QLabel(
-            "Privacy: unless detection is off, each battle log is sent to the chosen AI to name the decks. "
-            "Replay uploads the log to ptcglreplay.com. Limitless match chat is saved locally with each battle.")
+        self.privacy_notice_label = QLabel("Battle logs go to the chosen AI to name the decks.")
+        self.privacy_notice_label.setToolTip(
+            "Unless detection is off. Replay uploads the log to ptcglreplay.com. "
+            "Limitless match chat is saved locally with each battle.")
         self.privacy_notice_label.setObjectName("settingsDesc")
         self.privacy_notice_label.setWordWrap(True)
         parser_layout.addWidget(self.privacy_notice_label)
 
         self.ai_anonymize_checkbox = QCheckBox("Hide both usernames from the AI (sent as Player / Opponent)")
         self.ai_anonymize_checkbox.setObjectName("settingsCheck")
-        self.ai_anonymize_checkbox.setToolTip(
-            "Replaces your name and your opponent's name in the log before it is sent to the AI. "
-            "Local parsing and the saved log keep the real names.")
+        self.ai_anonymize_checkbox.setToolTip(infotip.tip(
+            "Sends Player / Opponent instead of real names",
+            "Replaces both names in the log before it is sent to the AI. "
+            "Local parsing and the saved log keep the real names."))
         self.ai_anonymize_checkbox.setChecked(bool(self.app_settings.get("ai_anonymize_names", True)))
         self.ai_anonymize_checkbox.toggled.connect(
             lambda checked: self._save_app_setting("ai_anonymize_names", bool(checked)))
@@ -7652,10 +7754,10 @@ class StatsWindow(QWidget):
 
         self.auto_export_checkbox = QCheckBox("Auto-export the battle log at the end of each battle")
         self.auto_export_checkbox.setObjectName("settingsCheck")
-        self.auto_export_checkbox.setToolTip(
-            "Clicks BATTLE LOG and export for you when a battle ends (only while the game window is focused). "
-            "Takes effect within a few seconds - no restart needed."
-        )
+        self.auto_export_checkbox.setToolTip(infotip.tip(
+            "Exports the log for you when a battle ends",
+            "Clicks BATTLE LOG and export, only while the game window is focused. "
+            "Takes effect within a few seconds."))
         self.auto_export_checkbox.setChecked(bool(self.app_settings.get("auto_export_battle_log", True)))
         self.auto_export_checkbox.toggled.connect(self._save_auto_export_setting)
         parser_layout.addWidget(self.auto_export_checkbox)
@@ -7682,15 +7784,6 @@ class StatsWindow(QWidget):
         self.parser_mode_status_label.setWordWrap(True)
         parser_layout.addWidget(self.parser_mode_status_label)
 
-        parser_desc = QLabel(
-            "When detection is off, or no AI is available, battle parsing falls back to OCR/manual flow. "
-            "The parser will use your last OCR-detected deck, and the overlay asks for the opponent's deck "
-            "after each battle."
-        )
-        parser_desc.setObjectName("settingsDesc")
-        parser_desc.setWordWrap(True)
-        parser_layout.addWidget(parser_desc)
-
         parser_card.layout().addLayout(parser_layout)
         layout.addWidget(parser_card)
         self.parser_card = parser_card
@@ -7715,11 +7808,6 @@ class StatsWindow(QWidget):
         remove_autorun_btn.clicked.connect(self.remove_autorun)
         autorun_layout.addWidget(remove_autorun_btn)
         
-        autorun_desc = QLabel("Configure one-click Windows startup in headless mode (no console window)")
-        autorun_desc.setObjectName("settingsDesc")
-        autorun_desc.setWordWrap(True)
-        autorun_layout.addWidget(autorun_desc)
-        
         autorun_card.layout().addLayout(autorun_layout)
         layout.addWidget(autorun_card)
         
@@ -7729,8 +7817,7 @@ class StatsWindow(QWidget):
         battle_mgmt_layout.setSpacing(8)
         battle_mgmt_layout.setContentsMargins(12, 8, 12, 12)
         
-        battles_label = QLabel(f"Last {BATTLE_MGMT_LIMIT} battles. Click a field to edit it; changes save "
-                               "automatically. 🏆 = tournament game.")
+        battles_label = QLabel(f"Last {BATTLE_MGMT_LIMIT} battles · 🏆 tournament")
         battles_label.setObjectName("settingsDesc")
         battles_label.setWordWrap(True)
         battle_mgmt_layout.addWidget(battles_label)
@@ -7749,6 +7836,8 @@ class StatsWindow(QWidget):
         )
         self.battle_mgmt_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         self.battle_mgmt_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.battle_mgmt_table.setMouseTracking(True)
+        self.battle_mgmt_table.setItemDelegate(EditHintDelegate(self.battle_mgmt_table))  # pencil on hover
         # Fixed widths everywhere except the two deck names, so the action
         # buttons always get their room (ResizeToContents squeezed them).
         header = self.battle_mgmt_table.horizontalHeader()
@@ -7803,10 +7892,6 @@ class StatsWindow(QWidget):
         close_app_btn.clicked.connect(self.close_application)
         app_control_layout.addWidget(close_app_btn)
         
-        app_control_desc = QLabel("Completely close the Stats Dashboard and Overlay")
-        app_control_desc.setObjectName("settingsDesc")
-        app_control_desc.setWordWrap(True)
-        app_control_layout.addWidget(app_control_desc)
         
         app_control_card.layout().addLayout(app_control_layout)
         layout.addWidget(app_control_card)
@@ -7833,7 +7918,7 @@ class StatsWindow(QWidget):
         layout.addWidget(header)
         
         # Description
-        desc = QLabel("If you enjoy using this tool and want to support its development,\nconsider buying me a coffee!")
+        desc = QLabel("Enjoying the app? Buy me a coffee.")
         desc.setStyleSheet("color: rgba(255, 255, 255, 0.7); font-size: 13px; line-height: 1.5;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
@@ -8593,9 +8678,7 @@ class StatsWindow(QWidget):
         # Applied to this tab only (deck pages keep the full weighted sheet).
         view_row = QHBoxLayout()
         view_row.setSpacing(4)
-        view_row.addWidget(label("Data:", "Which events feed this sheet. Records, Win % and Scores come from "
-                                          "online events and in-person pairings (Limitless Labs); Japan publishes "
-                                          "placings only."))
+        view_row.addWidget(label("Data:", "Which events feed this sheet"))
         self.meta_source_buttons = {}
         for key, text, tip in (("all", "All sources", "Online + in-person + Japan"),
                                ("online", "Online", "play.limitlesstcg.com events: shares, records, matchups"),
@@ -8617,10 +8700,11 @@ class StatsWindow(QWidget):
         self.meta_weights_btn.setCheckable(True)
         self.meta_weights_btn.setChecked(True)
         self.meta_weights_btn.setFixedHeight(24)
-        self.meta_weights_btn.setToolTip(
+        self.meta_weights_btn.setToolTip(infotip.tip(
+            "On: your custom weights · Off: raw data",
             "<b>On</b>: weighted by your Preferences (Advanced → Preferences)<br>" + formulas.event_weights()
             + "<br>" + formulas.game_weights()
-            + "<br><b>Off</b>: every event and game counts once (raw data, same date window).")
+            + "<br><b>Off</b>: every event and game counts once (same date window)."))
         self.meta_weights_btn.toggled.connect(lambda on: self._set_meta_view(weights=on))
         view_row.addWidget(self.meta_weights_btn)
         self.meta_include_mine = QPushButton("Show my decks")
@@ -8628,8 +8712,7 @@ class StatsWindow(QWidget):
         self.meta_include_mine.setCheckable(True)
         self.meta_include_mine.setChecked(True)
         self.meta_include_mine.setFixedHeight(24)
-        self.meta_include_mine.setToolTip("Add your ★ starred decks (star button on a deck's page) as rows, using your "
-                                          "weighted games vs each meta archetype. Kept separate from the public data.")
+        self.meta_include_mine.setToolTip("Add your ★ decks as rows")
         self.meta_include_mine.toggled.connect(self._on_show_my_decks)
         view_row.addWidget(self.meta_include_mine)
         self.meta_mine_basis = QComboBox()
@@ -8637,11 +8720,10 @@ class StatsWindow(QWidget):
         self.meta_mine_basis.setFixedHeight(24)
         self.meta_mine_basis.addItem("scored with archetype", "blended")
         self.meta_mine_basis.addItem("scored on own games only", "own")
-        self.meta_mine_basis.setToolTip(
-            "<b>With archetype</b>: your deck counts as a version of the Limitless archetype it matches - "
-            "your games adjust that archetype's measured strength (best for comparing decks).<br>"
-            "<b>Own games only</b>: your games alone, nothing borrowed from Limitless - your results with "
-            "this deck vs the field, still adjusted for sample size.")
+        self.meta_mine_basis.setToolTip(infotip.tip(
+            "How your ★ decks are scored",
+            "<b>With archetype</b>: your games adjust its Limitless archetype's strength.<br>"
+            "<b>Own games only</b>: nothing borrowed from Limitless."))
         self.meta_mine_basis.currentIndexChanged.connect(lambda *_: self._populate_meta_tab())
         view_row.addWidget(self.meta_mine_basis)
         view_row.addStretch()
@@ -8670,13 +8752,15 @@ class StatsWindow(QWidget):
         self._meta_header_tips = [
                 "Rank by Score. ~ = predicted (not enough games for a firm rank). ★ = your deck.",
                 "Double-click a row to open the archetype on Limitless.<br>★ rows are your own decks.",
-                "<b>Score</b> = expected win rate vs today's meta<br>"
-                + formulas.F + "Score = Σ share × matchup estimate" + formulas.END + "<br>"
-                + formulas.F + "matchup estimate = (k·θ + wins) / (k + games)" + formulas.END + "<br>"
-                + formulas.DIM + "θ = deck strength; k and the typical deck are fitted to all Limitless data. Sample "
-                "size, player clustering and your weights are all included. Hover a score for its numbers."
-                + formulas.END,
-                "Confidence range (90%) of the Score · white tick = par (an even deck under your tie rule)",
+                infotip.tip(
+                    "Expected win rate vs today's meta",
+                    formulas.F + "Score = Σ share × matchup estimate" + formulas.END + "<br>"
+                    + formulas.F + "matchup estimate = (k·θ + wins) / (k + games)" + formulas.END + "<br>"
+                    + formulas.DIM + "θ = deck strength, fitted to all Limitless data with your weights."
+                    + formulas.END),
+                infotip.tip("90% range · tick = even",
+                            "Range of the Score, even (50%) marked by the white tick. "
+                            "A chevron means the range runs past the axis."),
                 "<b>Share of the field</b> · English-legal unless Japan-only decks are shown<br>"
                 + formulas.SHARE + "<br>" + formulas.event_weights(),
                 "<b>Share of top finishes</b> (in-person + Japan)<br>" + formulas.TOP_CUT,
@@ -8684,11 +8768,10 @@ class StatsWindow(QWidget):
                 + "<br><span style='color:#8A97AA'>★ rows: your games, weighted by your Preferences.</span>",
                 "Raw result rate under the selected tie rule · from the weighted record.",
                 "<b>Top 32 conversion</b> (in-person only)<br>" + formulas.CONVERTS,
-                "<b>Where the data comes from</b><br>"
-                "<span style='color:#6BB6E8'>●</span> online events: W/L, Win %, matchups<br>"
-                "<span style='color:#FFD54F'>●</span> in-person: W/L, matchups, share, top cut<br>"
-                "<span style='color:#EF7A9A'>●</span> Japan City Leagues: share, top cut (placings only)<br>"
-                "<span style='color:#B39DDB'>★</span> your own games"]
+                "<span style='color:#6BB6E8'>●</span> Online<br>"
+                "<span style='color:#FFD54F'>●</span> In-person<br>"
+                "<span style='color:#EF7A9A'>●</span> Japan<br>"
+                "<span style='color:#B39DDB'>★</span> Your games"]
         self._apply_meta_header_tips(True)
         self.meta_views.addTab(self.meta_arch_table, "Archetypes")
 
@@ -8955,56 +9038,52 @@ class StatsWindow(QWidget):
         """Short hover for a Score cell: the number, its range, rank and the
         odds it beats the field. Formulas live on the Score heading."""
         res = res.get("own_of", res)
-        lines = [f"<b>{name}</b> · {res['score'] * 100:.1f} (range {res['low'] * 100:.1f}–{res['high'] * 100:.1f})"]
-        if res.get("rank"):
-            lines.append(f"{'Rank' if res.get('ranked') else 'Predicted rank'} #{res['rank']} of "
-                         f"{info.get('ranked', 0)} · likely #{res.get('rank_low')}–#{res.get('rank_high')}")
         p = res["p_above_even"]
-        lines.append((">99%" if p > 0.99 else "<1%" if p < 0.01 else f"{p * 100:.0f}%") + " chance it beats the field")
+        summary = (f"<b>{name}</b> · {res['score'] * 100:.1f}"
+                   + (f" · {self._rank_text(res, with_range=False)}" if res.get("rank") else "")
+                   + "<br>" + (">99%" if p > 0.99 else "<1%" if p < 0.01 else f"{p * 100:.0f}%")
+                   + " chance it beats the field")
+        details = [f"Range {res['low'] * 100:.1f}–{res['high'] * 100:.1f}"
+                   + (f" · likely #{res.get('rank_low')}–#{res.get('rank_high')}" if res.get("rank") else "")]
         if self._score_is_uncertain(res):
-            lines.append("<span style='color:#FFB74D'>* few games: wide range</span>")
+            details.append("Few games, so the range is wide")
         own = res.get("own") if is_mine else None
         if own:
-            lines.append(f"Your games only: {own['score'] * 100:.1f}")
-        return "<br>".join(lines)
+            details.append(f"Your games only: {own['score'] * 100:.1f}")
+        return infotip.tip(summary, "<br>".join(details))
 
     def _score_tooltip(self, name, res, info, is_mine):
-        level = int(round(info.get("level", 0.9) * 100))
-        lines = [f"<b>{name}</b>",
-                 f"Score <b>{res['score'] * 100:.1f}</b> · range {_pct_range(res['low'], res['high'])}"]
+        """Summary: score, rank, odds it beats the field. Details (on a
+        longer hover): rank odds, how it's built, your games only."""
+        p = res["p_above_even"]
+        chance = ">99%" if p > 0.99 else "<1%" if p < 0.01 else f"{p * 100:.0f}%"
+        summary = (f"<b>{name}</b> · Score <b>{res['score'] * 100:.1f}</b>"
+                   + (f" · {self._rank_text(res, with_range=False)} of {info.get('ranked', 0)}" if res.get("rank") else "")
+                   + f"<br>{chance} chance it beats the field")
+        details = [formulas.head("Rank")]
         if res.get("rank"):
-            label = ("Rank" if res.get("ranked") else "Predicted rank") if not is_mine else \
-                ("Would rank" if res.get("ranked") else "Predicted to rank")
-            lines.append(f"{label} #{res['rank']} of {info.get('ranked', 0)} meta decks · 90% range "
-                         f"#{res.get('rank_low')}–#{res.get('rank_high')} · {res.get('p_top5', 0) * 100:.0f}% chance it's "
-                         f"really top 5" + (f" · {res['p_first'] * 100:.0f}% #1" if res.get("p_first", 0) >= 0.01 else ""))
-            lines.append(f"{formulas.DIM}Rank range: the score is re-drawn {4000:,} times from its uncertainty against "
-                         f"every ranked deck; position = 1 + decks scoring higher; range = 5th–95th percentile."
-                         f"{formulas.END}")
+            details.append(f"{res.get('p_top5', 0) * 100:.0f}% chance it's top 5"
+                           + (f" · {res['p_first'] * 100:.0f}% #1" if res.get("p_first", 0) >= 0.01 else ""))
         if not res.get("ranked") and info.get("n_needed"):
-            lines.append(f"Predicted, not firm: evidence {res['eff_games']:.1f} of the {info['n_needed']:.0f} needed")
-            lines.append(f"{formulas.F}firm rank when effective games ≥ (1.645 × 0.5 / {info.get('rank_margin', 15):g}%)² "
-                         f"= {info['n_needed']:.0f}{formulas.END}  {formulas.DIM}(± {info.get('rank_margin', 15):g} pts "
-                         f"precision at 90%; evidence = effective sample size, see Record){formulas.END}")
-        lines.append(f"{res['p_above_even'] * 100:.0f}% chance it beats the field (above {_par_text(res.get('par', 0.5))}) · "
-                     f"evidence ≈ {res['eff_games']:,.0f} (effective sample size) · matchups seen for "
-                     f"{res['coverage'] * 100:.0f}% of the field")
-        lines.append("<b>How it's calculated</b> · expected win rate vs today's meta "
-                     f"({level}% range)")
+            details.append(f"Predicted until {info['n_needed']:.0f} weighted games ({res['eff_games']:.1f} so far)")
+        details.append(f"{formulas.DIM}Likely #{res.get('rank_low')}–#{res.get('rank_high')} · score "
+                       f"{_pct_range(res['low'], res['high'])} (90%){formulas.END}" if res.get("rank") else
+                       f"{formulas.DIM}Score {_pct_range(res['low'], res['high'])} (90%){formulas.END}")
+        details.append(formulas.head("How it's built"))
+        details.append(f"Expected win rate vs today's meta · matchups seen for {res['coverage'] * 100:.0f}% of it")
         rows = (self.limitless_standard_meta or {}).get("rows") or []
         names = {r["id"]: r.get("deck", r["id"]) for r in rows}
         archetype = names.get(res.get("mirror_id")) if is_mine else None
-        lines.append(formulas.score(res, info, is_mine, names, archetype))
+        details.append(formulas.score(res, info, is_mine, names, archetype))
         own = res.get("own") if is_mine else None
         if own:
-            lines.append(f"<b>Own games only</b>: {own['score'] * 100:.1f} · range {_pct_range(own['low'], own['high'])}"
-                         + (f" · {'would rank' if own.get('ranked') else 'predicted'} {self._rank_text(own)}"
-                            if own.get("rank") else ""))
-            lines.append(formulas.own_score(own, info))
+            details.append(formulas.head("Your games only"))
+            details.append(f"{own['score'] * 100:.1f} · range {_pct_range(own['low'], own['high'])}"
+                           + (f" · {self._rank_text(own)}" if own.get("rank") else ""))
+            details.append(formulas.own_score(own, info))
         if is_mine:
-            lines.append("<span style='color:#8A97AA'>Your games also carry your piloting and ladder opponents; "
-                         "meta rows are an average Limitless player.</span>")
-        return "<br>".join(lines)
+            details.append(f"{formulas.DIM}Your games include your piloting and ladder opponents.{formulas.END}")
+        return infotip.tip(summary, "<br>".join(details))
 
     def _populate_meta_tab(self):
         if not hasattr(self, "meta_arch_table"):
@@ -9092,10 +9171,10 @@ class StatsWindow(QWidget):
         par = score_info.get("par", 0.5)
         range_axis = range_domain([par - 0.08, par + 0.08], pad=0.0, min_span=0.16, step=0.01)
         if table.horizontalHeaderItem(3) is not None:
-            table.horizontalHeaderItem(3).setToolTip(
-                f"Score's 90% range on a zoomed axis: {range_axis[0] * 100:.0f}–{range_axis[1] * 100:.0f}% "
-                f"(ticks every 5 points; white tick = par {par * 100:.1f}%). A chevron means the range runs "
-                f"past the axis - hover the bar for its numbers.")
+            table.horizontalHeaderItem(3).setToolTip(infotip.tip(
+                "90% range · tick = even",
+                f"Zoomed axis {range_axis[0] * 100:.0f}–{range_axis[1] * 100:.0f}%, ticks every 5 points; "
+                f"white tick = even ({par * 100:.1f}%). A chevron means the range runs past the axis."))
         for i, r in enumerate(shown):
             link = r.get("deck_url")
             is_mine = bool(r.get("is_mine"))
@@ -9122,7 +9201,7 @@ class StatsWindow(QWidget):
                 sacc = self._confidence_accent(res["p_above_even"])
                 wide = self._score_is_uncertain(res)
                 half = (res["high"] - res["low"]) * 50.0
-                self._set_meta_item(table, i, 2, f"{sc * 100:.1f} ±{half:.1f}" + ("*" if wide else ""),
+                self._set_meta_item(table, i, 2, f"{sc * 100:.1f} ±{half:.1f}",
                                     accent=sacc, sort_value=sc, link=link)
                 tip = self._score_brief(r.get("deck", ""), res, score_info, is_mine)
                 table.item(i, 2).setToolTip(tip)
@@ -9130,7 +9209,7 @@ class StatsWindow(QWidget):
                 bar_layout = QHBoxLayout(bar_wrap)
                 bar_layout.setContentsMargins(6, 0, 6, 0)
                 bar = RangeBar(res["low"], sc, res["high"], sacc, height=16, par=res.get("par", 0.5),
-                               domain=range_axis)
+                               domain=range_axis, uncertain=wide)
                 bar.setToolTip(tip)
                 bar_layout.addWidget(bar)
                 table.setCellWidget(i, 3, bar_wrap)
@@ -9249,8 +9328,10 @@ class StatsWindow(QWidget):
         self.cards_list_combo.setObjectName("metaCombo")
         self.cards_list_combo.setFixedHeight(28)
         self.cards_list_combo.setMinimumWidth(200)
-        self.cards_list_combo.setToolTip("One of your decklists (PTCGL: Decks → Export → Copy to clipboard while the "
-                                         "monitor runs). Picking a list also picks the archetype closest to it.")
+        self.cards_list_combo.setToolTip(infotip.tip(
+            "Compare with one of your lists",
+            "Add a list in PTCGL: Decks → Export → Copy to clipboard while the monitor runs. "
+            "Picking a list also picks the archetype closest to it."))
         self.cards_list_combo.currentIndexChanged.connect(self._on_cards_list_changed)
         row.addWidget(self.cards_list_combo)
         row.addSpacing(10)
@@ -9278,8 +9359,9 @@ class StatsWindow(QWidget):
         for col, tip in enumerate([
                 "Double-click a card to open it on Limitless.",
                 "Pokémon · Trainer · Energy",
-                "Share of the archetype's decklists that play the card (weighted by format age: the current "
-                "set counts most)<br><b>core</b> ≥ 90% · <b>common</b> ≥ 50% · <b>tech</b> below",
+                infotip.tip("Share of lists that play it",
+                            "Weighted by format age (the current set counts most).<br>"
+                            "<b>core</b> ≥ 90% · <b>common</b> ≥ 50% · <b>tech</b> below"),
                 "Average copies in the lists that play it",
                 "The usual count: average copies rounded, for cards in at least half the lists",
                 "Copies in your selected list",
@@ -10777,16 +10859,19 @@ class StatsWindow(QWidget):
         settings = load_app_settings()
         for key, text, tip in (
                 ("overlay_show_max_elo", "Show max Elo on the overlay",
-                 "Elo:1487 | Max:1513 | 3-2  vs  Elo:1487 | 3-2"),
+                 infotip.tip("Show your peak next to your Elo", "Elo:1487 | Max:1513 | 3-2  vs  Elo:1487 | 3-2")),
                 ("overlay_session_reset_prompt", "Offer to reset today's W-L when the game starts",
-                 "A small Reset? popup above the overlay when Pokemon TCG Live starts (only if today's "
-                 "W-L isn't 0-0). It fades away on its own after about 10 seconds."),
+                 infotip.tip("Reset? prompt when the game starts",
+                             "A small popup above the overlay when Pokemon TCG Live starts, only if today's "
+                             "W-L isn't 0-0. It fades after about 10 seconds.")),
                 ("manual_mode_notice", "Remind me when AI deck detection is off",
-                 "Without a working AI (no key, or detection set to Off) a small card says so when the "
-                 "overlay starts, with a shortcut to the setting."),
+                 infotip.tip("Card when AI detection is off",
+                             "Without a working AI (no key, or detection Off) a small card says so when the "
+                             "overlay starts, with a shortcut to the setting.")),
                 ("check_updates", "Check for updates when the app starts",
-                 "Looks for a newer release on GitHub shortly after the overlay appears. If there is one, a "
-                 "card offers to download and install it (one click; your battles and settings stay).")):
+                 infotip.tip("Check GitHub on launch",
+                             "If there is a newer release, a card offers to install it in one click. "
+                             "Your battles and settings stay."))):
             box = QCheckBox(text)
             box.setObjectName("settingsCheck")
             box.setToolTip(tip)
@@ -10812,11 +10897,13 @@ class StatsWindow(QWidget):
         # HUD buddy (pet.py): off by default.
         pet_row = QHBoxLayout()
         pet_row.setSpacing(8)
-        pet_box = QLabel("HUD buddy · double-click the Pokéball on the overlay to call it out (and again to recall it)")
+        pet_box = QLabel("HUD buddy")
         pet_box.setStyleSheet("color: rgba(235,242,250,0.85); font-size: 11px;")
-        pet_box.setToolTip("It roams the bottom of the game and hops onto the overlay, naps (hover to wake it), "
-                           "peeks, hides in the Pokéball, cheers your wins and mopes after losses.<br>"
-                           "Click: pet it · Right-click: feed it a berry · 1 in 50 is shiny.")
+        pet_box.setToolTip(infotip.tip(
+            "Double-click the Pokéball to call it",
+            "Double-click again to recall it. It roams the bottom of the game, hops onto the overlay, naps "
+            "(hover to wake it), cheers wins and mopes after losses.<br>"
+            "Click: pet it · Right-click: feed it a berry · 1 in 50 is shiny."))
         pet_row.addWidget(pet_box)
         pet_combo = QComboBox()
         pet_combo.setObjectName("metaCombo")
@@ -10903,9 +10990,10 @@ class StatsWindow(QWidget):
         body = QVBoxLayout()
         body.setContentsMargins(12, 0, 12, 12)
         body.setSpacing(8)
-        intro = QLabel("Add games you played before using the app, or at an in-person tournament. They count in "
-                       "your deck pages, Deck Performance and the Meta Score; not in today's W-L, the charts, "
-                       "Recent Battles or matchups (there are no opponent decks).")
+        intro = QLabel("Add games played outside the app.")
+        intro.setToolTip("Games from before you used the app, or from an in-person tournament. They count in "
+                         "your deck pages, Deck Performance and the Meta Score; not in today's W-L, the charts, "
+                         "Recent Battles or matchups (there are no opponent decks).")
         intro.setObjectName("settingsDesc")
         intro.setWordWrap(True)
         body.addWidget(intro)
@@ -10948,8 +11036,7 @@ class StatsWindow(QWidget):
         self._imp_type.setObjectName("metaCombo")
         self._imp_type.addItem("Ladder (ranked)", False)
         self._imp_type.addItem("Tournament (in person / Limitless)", True)
-        self._imp_type.setToolTip("Tournament games also count as tournament evidence for the Score "
-                                  "(Preferences → Opponent strength).")
+        self._imp_type.setToolTip("Counts as tournament evidence in the Score")
         grid.addWidget(caption("Type"), 1, 0)
         grid.addWidget(self._imp_type, 1, 1, 1, 3)
         self._imp_counts = {}
@@ -10990,8 +11077,7 @@ class StatsWindow(QWidget):
         self._imp_weight.setSuffix(" ×")
         self._imp_weight.setFixedWidth(90)
         self._imp_weight.setStyleSheet(SPIN_STYLE)
-        self._imp_weight.setToolTip("How much each of these games counts, on the same scale as your other games "
-                                    "(see the scale below). 1 = a Master Ball ladder game.")
+        self._imp_weight.setToolTip("How much each game counts (scale below)")
         grid.addWidget(caption("Weight per game"), 4, 0)
         grid.addWidget(self._imp_weight, 4, 1)
         self._imp_note = QLineEdit()
@@ -11007,8 +11093,9 @@ class StatsWindow(QWidget):
         marks = [(WEIGHT_LABELS["ladder"][k][0].replace(" Ball", "").replace("Limitless tournament", "Tournament")
                   .replace("No rank recorded", "Unranked"), float(v)) for k, v in ladder.items()]
         self._imp_scale = WeightScale(marks, ladder["master"])
-        self._imp_scale.setToolTip("How your games are weighted now (Advanced → Preferences). The blue dot is the "
-                                   "weight you're adding; ticks are the leagues and tournament games.")
+        self._imp_scale.setToolTip(infotip.tip(
+            "Blue dot = the weight you're adding",
+            "Ticks are the leagues and tournament games, as weighted in Advanced → Preferences."))
         body.addWidget(self._imp_scale)
         self._imp_type.currentIndexChanged.connect(
             lambda *_: self._imp_weight.setValue(ladder["tournament"] if self._imp_type.currentData() else ladder["master"]))
@@ -11356,9 +11443,18 @@ class StatsWindow(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(2, 0, 0, 0)
         header.setSpacing(4)
-        self.chart_hint_label = QLabel("Hover for details · drag to zoom · double-click to reset")
+        # Taught, not told: a faint "drag to zoom" only the first few times a
+        # chart is hovered; once zoomed, a Reset zoom chip instead of words.
+        self.chart_hint_label = infotip.HintLabel("Drag across a chart to zoom", "chart_zoom")
         self.chart_hint_label.setObjectName("chartHint")
         header.addWidget(self.chart_hint_label)
+        self.chart_reset_btn = QPushButton("Reset zoom")
+        self.chart_reset_btn.setObjectName("eloScaleBtn")
+        self.chart_reset_btn.setFixedHeight(22)
+        self.chart_reset_btn.setToolTip("Back to the full range (or double-click a chart)")
+        self.chart_reset_btn.clicked.connect(self._reset_chart_zoom)
+        self.chart_reset_btn.hide()
+        header.addWidget(self.chart_reset_btn)
         header.addStretch()
         self.chart_range_buttons = {}
         for key, label, tip in self.CHART_RANGES:
@@ -11396,12 +11492,13 @@ class StatsWindow(QWidget):
         self.winrate_chart.ref_lines = [(50, "50%", QColor(255, 255, 255, 60))]
         self.winrate_chart.viewChanged.connect(self._update_winrate_summary)
         self.winrate_summary_label = QLabel("")
+        self.chart_hint_label.attach(self.elo_chart, self.winrate_chart)
         window_box = QComboBox()
         window_box.setObjectName("metaCombo")
         for size in (5, 10, 20, 50):
             window_box.addItem(f"Last {size}", size)
         window_box.setCurrentIndex(max(0, window_box.findData(self.winrate_window)))
-        window_box.setToolTip("Games in the dashed rolling line")
+        window_box.setToolTip("Rolling average (games)")
         window_box.currentIndexChanged.connect(lambda _i, box=window_box: self._set_winrate_window(box.currentData()))
         # One deck or all of them (ignored decks are never in the charts).
         self.winrate_deck_box = QComboBox()
@@ -11437,7 +11534,7 @@ class StatsWindow(QWidget):
 
     # (key, button text, tooltip)
     CHART_RANGES = (
-        ("auto", "Auto", "Most useful stretch: your current climb / recent games"),
+        ("auto", "Auto", "Current climb"),
         ("session", "Session", "Your latest day of play"),
         ("1w", "1W", "Last 7 days"),
         ("1m", "1M", "Last 30 days"),
@@ -11620,9 +11717,10 @@ class StatsWindow(QWidget):
             if post["games"] > 0:
                 estimate = f" · est. {post['mean'] * 100:.0f}%"
                 level = int(round(post["level"] * 100))
-                tip += (f"<br><b>Estimated win rate</b>: {post['mean'] * 100:.0f}% · range {_pct_range(post['low'], post['high'])}"
-                        f"<br><span style='color:#8A97AA'>{RANGE_EXPLAINED.format(level=level)} "
-                        f"{post['games']:.1f} effective games.</span><br>" + formulas.estimate(post))
+                tip = infotip.tip(
+                    f"<b>Estimated {post['mean'] * 100:.0f}%</b> · actual {record_text(w, l, t)}",
+                    f"Range {_pct_range(post['low'], post['high'])} · {post['games']:.1f} weighted games<br>"
+                    f"{formulas.DIM}{RANGE_EXPLAINED.format(level=level)}{formulas.END}<br>" + formulas.estimate(post))
         except Exception:
             pass
         sub.setText(f"{record_text(w, l, t)}{estimate}")
@@ -11821,12 +11919,14 @@ class StatsWindow(QWidget):
                     dot, head = "#EF5350", f"{rank:,}   ▼ {-delta:,}"
                 else:
                     dot, head = None, f"{rank:,}"
-                tip = [head, f"{_short_day(stamp)} · {_clock(stamp)} · {league_name(rank)}"]
-                if battle and stamp - battle["t"] < timedelta(hours=3):
-                    kind = {"W": "Win", "L": "Loss", "T": "Tie"}[self._result_kind(battle["result"])]
-                    tip.append(f"{kind} vs {battle['opp']}" if battle["opp"] else kind)
-                    if battle["deck"]:
-                        tip.append(f"with {battle['deck']}")
+                tip = [head]
+                recent = bool(battle and stamp - battle["t"] < timedelta(hours=3))
+                if recent:
+                    kind = self._result_kind(battle["result"])
+                    tip.append(f"{kind} vs {battle['opp']}" if battle["opp"] else {"W": "Win", "L": "Loss", "T": "Tie"}[kind])
+                tip.append(f"{_short_day(stamp)} · {_clock(stamp)} · {league_name(rank)}")
+                if recent and battle["deck"]:
+                    tip.append(f"with {battle['deck']}")
                 points.append({"y": rank, "t": stamp, "dot": dot, "tip": tip})
 
             # Auto: the current climb - walk back until a league-scale jump
@@ -11872,9 +11972,9 @@ class StatsWindow(QWidget):
             f"<span style='color:rgba(214,225,240,0.55)'>&nbsp;&nbsp;·&nbsp; {_range_dates(points)}</span>"
         )
         low = min(p["y"] for p in points)
-        self.elo_summary_label.setToolTip(
-            f"<b>{start:,} → {end:,}</b> ({delta:+,})<br>Peak {peak:,} · low {low:,} · {len(points)} rank changes<br>"
-            f"<span style='color:#8A97AA'>Dots: green = up, red = down. Dashed lines = league thresholds.</span>")
+        self.elo_summary_label.setToolTip(infotip.tip(
+            f"<b>{start:,} → {end:,}</b> ({delta:+,}) · peak {peak:,}",
+            f"Low {low:,} · {len(points)} rank changes in view."))
 
     def update_winrate_graph(self):
         """Win-rate chart: weighted Bayesian estimate with its 90% likely range
@@ -11917,15 +12017,17 @@ class StatsWindow(QWidget):
                 record = f"{w}-{l}-{t}" if t else f"{w}-{l}"
                 tip = [
                     f"{post['mean'] * 100:.0f}%   range {_pct_range(post['low'], post['high'])}",
-                    f"Game {i + 1} · {_short_day(battle['t'])} · {_clock(battle['t'])}",
-                    f"{label} vs {battle['opp']}" if battle["opp"] else label,
+                    f"Game {i + 1} · {kind} vs {battle['opp']}" if battle["opp"] else f"Game {i + 1} · {label}",
+                    f"{_short_day(battle['t'])} · {_clock(battle['t'])}",
                 ]
                 if battle["deck"]:
                     tip.append(f"with {battle['deck']}")
                 if rolling is not None:
                     tip.append(f"Last {len(window)}: {rolling * 100:.0f}% ({record})")
-                tip.append(f"Counts ×{weight:.2f} · {post['games']:.1f} effective games"
-                           if weight > 0 else "Older format, not counted")
+                if weight <= 0:
+                    tip.append("Older format, not counted")
+                elif abs(weight - 1.0) >= 0.005:
+                    tip.append(f"Counts ×{weight:.2f} · {post['games']:.1f} weighted games")
                 points.append({
                     "y": post["mean"] * 100,
                     "lo": post["low"] * 100,
@@ -11970,21 +12072,25 @@ class StatsWindow(QWidget):
             f"<span style='color:rgba(214,225,240,0.55)'>&nbsp;&nbsp;·&nbsp; {record} &nbsp;·&nbsp; "
             f"{_range_dates(games, key='t')}</span>"
         )
-        self.winrate_summary_label.setToolTip(
-            f"<b>Estimated win rate {post['mean'] * 100:.0f}%</b> · range {_pct_range(post['low'], post['high'])}<br>"
+        self.winrate_summary_label.setToolTip(infotip.tip(
+            f"<b>Estimated {post['mean'] * 100:.0f}%</b> · range {_pct_range(post['low'], post['high'])}",
             f"{post['p_above_even'] * 100:.0f}% chance it's above {_par_text(post.get('par', 0.5))} · "
-            f"{post['games']:.1f} effective games<br>"
-            f"<span style='color:#8A97AA'>{RANGE_EXPLAINED.format(level=level)}<br>"
-            f"Solid line = estimate · band = range · dashed = last {self.winrate_window} games · "
-            f"strip = results.</span><br>" + formulas.estimate(post))
+            f"{post['games']:.1f} weighted games<br>"
+            f"{formulas.DIM}{RANGE_EXPLAINED.format(level=level)}{formulas.END}<br>" + formulas.estimate(post)))
 
     def _update_chart_hint(self):
         label = getattr(self, "chart_hint_label", None)
         if label is None:
             return
         zoomed = any(getattr(c, "custom", False) for c in (getattr(self, "elo_chart", None), getattr(self, "winrate_chart", None)) if c)
-        label.setText("Zoomed in · double-click a chart to reset" if zoomed
-                      else "Hover for details · drag to zoom · double-click to reset")
+        if zoomed:
+            label.used()
+        self.chart_reset_btn.setVisible(zoomed)
+
+    def _reset_chart_zoom(self):
+        for chart in (getattr(self, "elo_chart", None), getattr(self, "winrate_chart", None)):
+            if chart is not None and chart.custom:
+                chart.reset_view()
 
     def update_deck_usage(self, deck_analyses=None):
         """Update the dashboard deck summary with richer, clickable deck stats."""
@@ -11999,7 +12105,8 @@ class StatsWindow(QWidget):
             hidden = sum(1 for a in deck_analyses if a.get("deck_name") in self.ignored_decks)
             deck_analyses = [a for a in deck_analyses if a.get("deck_name") not in self.ignored_decks]
             if hidden:
-                note = QLabel(f"{hidden} ignored deck{'s' if hidden != 1 else ''} hidden · un-ignore on its Decks page")
+                note = QLabel(f"{hidden} hidden")
+                note.setToolTip("Ignored decks. Un-ignore on the deck's page.")
                 note.setStyleSheet("color: rgba(214,225,240,0.38); font-size: 10px;")
                 self.deck_list_layout.addWidget(note)
 
@@ -12064,20 +12171,18 @@ class StatsWindow(QWidget):
                     ci_low, ci_high = post["low"] * 100.0, post["high"] * 100.0
                 raw_games = analysis.get("games") or 0
                 actual = (analysis.get("wins", 0) / raw_games * 100.0) if raw_games else 0.0
-                row_tip = (f"<b>{analysis.get('deck_name', '')}</b><br>"
-                           f"Estimated win rate {bayes_pct:.0f}% · range {ci_low:.0f}–{ci_high:.0f}%<br>"
-                           f"Actual {analysis.get('record')} in {raw_games} game{'s' if raw_games != 1 else ''} "
-                           f"({actual:.0f}%)")
-                if post:
-                    row_tip += f"<br>{post['p_above_even'] * 100:.0f}% chance it's above {_par_text(post.get('par', 0.5))}"
-                    if post.get("alpha"):
-                        row_tip += "<br>" + formulas.estimate(post)
-                if matched_meta:
-                    row_tip += f"<br>Limitless archetype: {matched_meta['row'].get('deck')} (#{matched_meta.get('rank')})"
-                row_tip += "<br><span style='color:#8A97AA'>Click to open its page</span>"
                 stale = bool(post) and post.get("games", 0) <= 0  # every game is from an older format
+                row_details = [f"Range {ci_low:.0f}–{ci_high:.0f}% · {raw_games} game{'s' if raw_games != 1 else ''} "
+                               f"({actual:.0f}% actual)"]
+                if post:
+                    row_details.append(f"{post['p_above_even'] * 100:.0f}% chance it's above {_par_text(post.get('par', 0.5))}")
+                    if post.get("alpha"):
+                        row_details.append(formulas.estimate(post))
+                if matched_meta:
+                    row_details.append(f"Limitless archetype: {matched_meta['row'].get('deck')} (#{matched_meta.get('rank')})")
                 if stale:
-                    row_tip += "<br>All games are from an older format, so they don't count toward the estimate."
+                    row_details.append("All games are from an older format, so they don't count toward the estimate.")
+                row_tip = infotip.tip(f"<b>{bayes_pct:.0f}% est</b> · {analysis.get('record')}", "<br>".join(row_details))
                 row_button.setToolTip(row_tip)
                 wr_label = QLabel("--" if stale else f"{bayes_pct:.0f}%")
                 wr_label.setStyleSheet(f"color: {'#8A97AA' if stale else self._percent_accent(bayes_pct)}; font-size: 13px; font-weight: 700;")
@@ -12174,9 +12279,7 @@ class StatsWindow(QWidget):
                 # Connect click event
                 if log_file:
                     battle_row.clicked.connect(lambda checked=False, lf=log_file: self.open_battle_replay(lf))
-                    battle_row.setToolTip(
-                        f"Click to open this battle in PTCGL Replay: {os.path.basename(log_file) if log_file else 'N/A'}"
-                    )
+                    battle_row.setToolTip("Open replay")
                 
                 layout = QHBoxLayout(battle_row)
                 layout.setContentsMargins(10, 4, 10, 4)
