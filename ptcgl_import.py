@@ -167,7 +167,7 @@ class Screen:
         return gray, scale, boxes
 
     def read_line(self, gray, box, scale, x0, y0):
-        """Words of one text line (psm 7), dark-on-light first, then inverted."""
+        """Words of one text line (psm 7): as is, inverted, then binarized."""
         import cv2
         tess = self._tesseract()
         x, y, w, h = box
@@ -176,7 +176,9 @@ class Screen:
         crop = gray[top:y + h + pad, left:x + w + pad]
         f = 48.0 / max(1, crop.shape[0])
         crop = cv2.resize(crop, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
-        for img in (crop, 255 - crop):
+        otsu = cv2.threshold(crop, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+        # dark-on-light, light-on-dark, then hard black/white (white on red buttons)
+        for img in (crop, 255 - crop, 255 - otsu if otsu.mean() < 128 else otsu):
             data = tess.image_to_data(img, config="--psm 7", output_type=tess.Output.DICT)
             got = self._parse(data, 40, lambda bx, by, bw, bh: (x0 + (left + bx / f) / scale,
                                                                 y0 + (top + by / f) / scale,
@@ -199,7 +201,7 @@ class Screen:
         want = max(1.5, len(phrase) * 0.62)  # width / height of the phrase in this UI font
         boxes.sort(key=lambda b: abs(b[2] / float(b[3]) - want) / want)
         for box in boxes[:30]:
-            if abs(box[2] / float(box[3]) - want) / want > 0.6:
+            if abs(box[2] / float(box[3]) - want) / want > 2.0:  # a whole button can hold the label
                 break
             hit = self._find(phrase, self.read_line(gray, box, scale, x0, y0), min_score)
             if hit:
