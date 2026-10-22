@@ -21,7 +21,7 @@
   header { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; white-space: nowrap; }
   header .brand { text-decoration: none; display: block; flex: 1; min-width: 0; overflow: hidden; }
   /* logo: banner letters in block characters over a field of stray ASCII; a yellow beam sweeps across */
-  .logo { margin: 0; font: 3.5px/1 var(--mono); letter-spacing: 0; white-space: pre; user-select: none;
+  .logo { margin: 0; font: 4.2px/1 var(--mono); letter-spacing: 0; white-space: pre; user-select: none;
           height: 7em; overflow: hidden; color: var(--fg); }
   .logo .y { color: var(--accent); }
   .logo .yd { color: var(--accent); opacity: .5; }
@@ -239,9 +239,9 @@ function startLogo() {
   const SPARK = "#@%&$*+=";
   const hash = (a, b, c) => { const v = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453; return v - Math.floor(v); };
   let cols = W + 2;
-  const fit = () => {  // small letters (3.5px at most)
+  const fit = () => {  // small letters (4.2px at most)
     const room = pre.parentElement.clientWidth;
-    const size = Math.min(3.5, Math.floor(room / ((W + 2) * 0.6) * 10) / 10);
+    const size = Math.min(4.2, Math.floor(room / ((W + 2) * 0.6) * 10) / 10);
     pre.style.fontSize = size + "px";
     cols = W + 6;  // the grain stays just around the name
   };
