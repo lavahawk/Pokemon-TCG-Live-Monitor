@@ -231,7 +231,11 @@ class PixelBall(QLabel):
         from PySide6.QtGui import QFontMetricsF
         text_label.ensurePolished()  # its stylesheet font, not the default
         fm = QFontMetricsF(text_label.font())
-        height = text_label.height() if text_label.height() > 1 else int(math.ceil(fm.height()))
+        # The text's natural height, never text_label.height(): before the
+        # layout has run, that is Qt's default 480 px, and a ball box that
+        # tall stretched the whole mini GUI. Both boxes are this tall and the
+        # layout centres both in the row, so their middles line up.
+        height = max(1, text_label.sizeHint().height())
         ratio = pix.devicePixelRatio() or 1.0
         width = int(math.ceil(pix.width() / ratio - 0.01))
         caps_middle = (height - fm.height()) / 2.0 + fm.ascent() - fm.capHeight() / 2.0  # QLabel centres its line
