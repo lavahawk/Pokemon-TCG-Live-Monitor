@@ -3325,6 +3325,7 @@ class ResizeGhost(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
     def paintEvent(self, _event):
+        from PySide6.QtGui import QFont
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
