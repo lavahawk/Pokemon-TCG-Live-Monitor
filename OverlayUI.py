@@ -5,6 +5,7 @@ Ultra-compact, professional overlay that follows the game and allows click-throu
 
 import sys
 import os
+import math
 import random
 import threading
 import time
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton
 )
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize, QRectF
-from PySide6.QtGui import QPixmap, QPainter, QColor
+from PySide6.QtGui import QPixmap, QPainter, QColor, QImage
 from BattleDatabase import BattleDatabase
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -119,63 +120,69 @@ def _dbg(msg):
 # --- END DEBUG ---
 
 
-def create_pokeball_icon(ball_type="poke", dpr=1.0, angle=0.0):
-    """8-bit style pokeball icon for each league, 12 logical px. Drawn at the
-    screen's own resolution (a 12 px image stretched to 18 px at 150 % was
-    blurry), hard-edged. angle: tilt in degrees, rocking on its bottom (the
-    shake of a ball with something inside)."""
-    side = max(12, int(round(12 * dpr)))
-    pixmap = QPixmap(side, side)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    pixmap.setDevicePixelRatio(side / 12.0)
+# Pixel art of the mini GUI's ball, 9x9: K outline, H highlight, T top colour,
+# D top shade, B button, W white, S white shade.
+BALL_ART = (
+    "..KKKKK..",
+    ".KHTTTDK.",
+    "KHTTTTTDK",
+    "KTTKKKTDK",
+    "KKKKBKKKK",
+    "KWWKKKWSK",
+    "KWWWWWWSK",
+    ".KSWWWSK.",
+    "..KKKKK..",
+)
+BALL_COLORS = {  # league -> (top, top shade)
+    "nest": ("#9CC344", "#5C7C28"),
+    "quick": ("#4A9FD8", "#2B5F8C"),
+    "poke": ("#E53935", "#A82222"),
+    "great": ("#1976D2", "#0D47A1"),
+    "ultra": ("#F9A825", "#C77A10"),
+    "master": ("#7B1FA2", "#4A148C"),
+}
 
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, bool(angle))  # pixelated unless tilting
-    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
-    if angle:
-        painter.translate(6, 11.5)
-        painter.rotate(angle)
-        painter.translate(-6, -11.5)
-    
-    # Define colors for each ball type
-    colors = {
-        "nest": ("#9CC344", "#5C7C28"),      # Nest Ball - Green/Yellow
-        "quick": ("#4A9FD8", "#2B5F8C"),     # Quick Ball - Blue
-        "poke": ("#E53935", "#C62828"),      # Poke Ball - Red
-        "great": ("#1976D2", "#0D47A1"),     # Great Ball - Blue
-        "ultra": ("#F9A825", "#F57F17"),     # Ultra Ball - Yellow
-        "master": ("#7B1FA2", "#4A148C"),    # Master Ball - Purple
-    }
-    
-    top_color, bottom_color = colors.get(ball_type, colors["poke"])
-    
-    # Draw black outline (circle)
-    painter.setPen(QColor("#000000"))
-    painter.setBrush(QColor("#000000"))
-    painter.drawEllipse(0, 0, 12, 12)
-    
-    # Draw top half
-    painter.setBrush(QColor(top_color))
-    painter.drawChord(1, 1, 10, 10, 0, 180 * 16)
-    
-    # Draw bottom half (white)
-    painter.setBrush(QColor("#F5F5F5"))
-    painter.drawChord(1, 1, 10, 10, 180 * 16, 180 * 16)
-    
-    # Draw middle black line
-    painter.setPen(QColor("#000000"))
-    painter.drawLine(1, 6, 11, 6)
-    
-    # Draw center button
-    painter.setPen(QColor("#000000"))
-    painter.setBrush(QColor("#F5F5F5"))
-    painter.drawEllipse(4, 4, 4, 4)
-    
-    # Inner button detail
-    painter.setBrush(QColor("#E0E0E0"))
-    painter.drawEllipse(5, 5, 2, 2)
-    
-    painter.end()
+
+def _ball_art(ball_type):
+    """The ball at its own pixel size (9x9), one QImage pixel per art pixel."""
+    top, shade = BALL_COLORS.get(ball_type, BALL_COLORS["poke"])
+    palette = {"K": QColor("#141414"), "T": QColor(top), "D": QColor(shade), "H": QColor(top).lighter(150),
+               "W": QColor("#F5F5F5"), "S": QColor("#C3C8CF"), "B": QColor("#FFFFFF")}
+    art = QImage(len(BALL_ART[0]), len(BALL_ART), QImage.Format.Format_ARGB32_Premultiplied)
+    art.fill(Qt.GlobalColor.transparent)
+    for y, row in enumerate(BALL_ART):
+        for x, key in enumerate(row):
+            if key in palette:
+                art.setPixelColor(x, y, palette[key])
+    return art
+
+
+def create_pokeball_icon(ball_type="poke", dpr=1.0, angle=0.0):
+    """The league's ball as chunky pixel art: each art pixel is a whole block
+    of screen pixels (2x2 at 150 %), never smoothed, about 12 logical px wide.
+    angle: lean in degrees (the shake of a ball with something inside); the
+    rows shift by whole art pixels, pivoting on the bottom, like a sprite
+    leaning, so it stays pixel art."""
+    size = len(BALL_ART)
+    block = max(1, int(round(12 * dpr / size)))
+    art = _ball_art(ball_type)
+    pad = 1  # one art pixel each side: room for the lean (the size never changes)
+    lean = QImage(size + 2 * pad, size, QImage.Format.Format_ARGB32_Premultiplied)
+    lean.fill(Qt.GlobalColor.transparent)
+    p = QPainter(lean)
+    slope = math.tan(math.radians(angle)) * 0.5
+    for y in range(size):
+        shift = int(round(slope * (size - 1 - y)))  # a one-pixel staircase: the top leans, the bottom stays
+        p.drawImage(pad + max(-pad, min(pad, shift)), y, art, 0, y, size, 1)
+    p.end()
+    big = lean.scaled(lean.width() * block, size * block, Qt.AspectRatioMode.IgnoreAspectRatio,
+                      Qt.TransformationMode.FastTransformation)
+    pixmap = QPixmap(big.width(), big.height())
+    pixmap.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pixmap)
+    p.drawImage(0, 0, big)
+    p.end()
+    pixmap.setDevicePixelRatio(max(1.0, dpr))
     return pixmap
 
 
@@ -641,10 +648,19 @@ class MinimalOverlay(QWidget):
                 (t0, a0), (t1, a1) = keys[i - 1], keys[i]
                 u = (age - t0) / max(1e-6, t1 - t0)
                 angle = a0 + (a1 - a0) * (u * u * (3 - 2 * u))
-            self.ball_icon.setPixmap(create_pokeball_icon(getattr(self, "_ball_league", "poke"),
-                                                          self.ball_icon.devicePixelRatioF(), angle))
+            self._set_ball(angle)
         timer.timeout.connect(frame)
         timer.start()
+
+    def _set_ball(self, angle=0.0):
+        """The league's pixel-art ball; the label takes the art's size (a whole
+        number of screen pixels per art pixel: exactly 12 at 150 %)."""
+        pix = create_pokeball_icon(getattr(self, "_ball_league", "poke"), self.ball_icon.devicePixelRatioF(), angle)
+        ratio = pix.devicePixelRatio() or 1.0
+        size = (math.ceil(pix.width() / ratio - 0.01), math.ceil(pix.height() / ratio - 0.01))
+        if (self.ball_icon.width(), self.ball_icon.height()) != size:
+            self.ball_icon.setFixedSize(*size)
+        self.ball_icon.setPixmap(pix)
 
     def _poll_manual_mode_notice(self, anchor):
         """Once per launch, when the mini GUI is placed: no OpenAI key (or
@@ -1672,7 +1688,7 @@ class MinimalOverlay(QWidget):
         league = get_league_from_elo(self.current_rank)
         self._ball_league = league
         if not getattr(self, "_ball_shaking", False):
-            self.ball_icon.setPixmap(create_pokeball_icon(league, self.ball_icon.devicePixelRatioF()))
+            self._set_ball()
 
 
 def main():
