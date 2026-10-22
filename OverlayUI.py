@@ -605,6 +605,7 @@ class MinimalOverlay(QWidget):
                     if self.pet is not None and request.get("battle_id") != getattr(self, "_pet_reacted", None):
                         self._pet_reacted = request.get("battle_id")
                         self.pet.react(request.get("result"))
+                    self._game_ended_for_ball_hint(request.get("battle_id"))
                     _dbg(f"deck popup: battle {request.get('battle_id')} {request.get('deck')!r} "
                          f"({request.get('source')}, needs_input={request.get('needs_input')})")
             if self.deck_popup is not None:
@@ -622,31 +623,43 @@ class MinimalOverlay(QWidget):
         self._poll_pet()
         self._poll_ball_hint()
 
-    # The mini GUI's ball rocks like a Pokeball with something inside: until
-    # the HUD buddy has been called out once (a hint that it's there), and
-    # now and then while it rests in the ball.
-    BALL_HINT_GAP_S = {"undiscovered": (30, 90), "resting": (60, 180)}
+    # The buddy hint: the mini GUI's ball rocks like a Pokeball with something
+    # inside, rarely - after a game, 1 in 4 times, once, at a random moment
+    # 10-120 s later, never once a new battle has started. Only while there's
+    # something inside: the buddy not called out yet, or resting in the ball.
+    BALL_HINT_ODDS = 0.25
+    BALL_HINT_WINDOW_S = (10, 120)
+
+    def _game_ended_for_ball_hint(self, battle_id):
+        if battle_id == getattr(self, "_ball_hint_battle", None):
+            return  # once per game
+        self._ball_hint_battle = battle_id
+        self._ball_hint_at = None
+        if random.random() < self.BALL_HINT_ODDS:
+            self._ball_hint_at = time.monotonic() + random.uniform(*self.BALL_HINT_WINDOW_S)
+            self._ball_hint_after = time.time()  # a battle started after this cancels it
+
+    def _ball_has_something_inside(self):
+        if self.pet is not None:
+            return self.pet.state == "ball"
+        from pet import STATE_FILE  # anyone who ever had the buddy out has its save file
+        return not (_overlay_setting("pet_discovered", False) or os.path.exists(STATE_FILE))
 
     def _poll_ball_hint(self):
         try:
-            if getattr(self, "_ball_shaking", False) or not self.isVisible():
-                return
-            if self.pet is None:
-                from pet import STATE_FILE  # anyone who ever had the buddy out has its save file
-                if _overlay_setting("pet_discovered", False) or os.path.exists(STATE_FILE):
-                    return
-                gap = self.BALL_HINT_GAP_S["undiscovered"]
-            elif self.pet.state == "ball":
-                gap = self.BALL_HINT_GAP_S["resting"]
-            else:
-                self._ball_hint_at = None
-                return
-            now = time.monotonic()
             due = getattr(self, "_ball_hint_at", None)
-            if due is None:
-                self._ball_hint_at = now + random.uniform(*gap)
-            elif now >= due:
-                self._ball_hint_at = now + random.uniform(*gap)
+            if due is None or getattr(self, "_ball_shaking", False) or time.monotonic() < due:
+                return
+            from deck_confirm import battle_started_at
+            if battle_started_at() > getattr(self, "_ball_hint_after", 0.0):
+                self._ball_hint_at = None  # in a battle again: not this time
+                return
+            if not self.isVisible():
+                if time.monotonic() - due > 30:
+                    self._ball_hint_at = None  # the mini GUI stayed hidden: not this time
+                return
+            self._ball_hint_at = None
+            if self._ball_has_something_inside():
                 self._shake_ball()
         except Exception as exc:
             _dbg(f"_poll_ball_hint error: {exc}")
