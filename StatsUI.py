@@ -5775,10 +5775,7 @@ class StatsWindow(QWidget):
             share_btn.setFixedHeight(30)
             share_btn.setMinimumWidth(78)  # room for "Copied!" without the row shifting
             share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            share_btn.setToolTip(infotip.tip(
-                "Copy a link to this list",
-                "Anyone with the link sees the list on the web; with the app it opens straight into "
-                "the import box. The picture is in the Decklist menu."))
+            share_btn.setToolTip("Copy a link to this list")
             share_btn.clicked.connect(lambda checked=False, e=list_entry, name=flag_deck, b=share_btn:
                                       self._copy_share_link(e, name, b))
             hero_top.addWidget(share_btn)

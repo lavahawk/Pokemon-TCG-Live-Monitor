@@ -7,5 +7,6 @@
 A dev checkout is "ai" but stays local until HOSTED_AI_URL is set.
 """
 
+APP_NAME = "PTCGL Monitor"  # the app's short name in the UI (one place to rename it)
 EDITION = "ai"
 HOSTED_AI_URL = ""  # e.g. "https://ptcgl-monitor-ai.<account>.workers.dev/v1" (ai_proxy/README.md)

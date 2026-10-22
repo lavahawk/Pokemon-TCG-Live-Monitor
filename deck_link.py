@@ -59,15 +59,6 @@ def register():
     return True
 
 
-def section_counts(text):
-    """{"Pokémon": 19, ...}: copies per section (the export's headings count lines)."""
-    import decklists
-    counts = {}
-    for line in decklists.list_lines(text):
-        counts[line["section"]] = counts.get(line["section"], 0) + line["qty"]
-    return counts
-
-
 def import_list(text, name):
     """Save to the app's decklists (named `name` when it's new) and link it
     to the deck called `name`, so that deck's page in the monitor shows the
@@ -419,25 +410,19 @@ def main(argv):
     name_field = QLineEdit(name or decklists.auto_name(text))
     name_field.setMaxLength(deck_share.MAX_NAME)
     box.addWidget(name_field)
-    counts = section_counts(text)
-    summary = QLabel(" · ".join(f"{counts.get(s, 0)} {s}" for s in deck_share.SECTIONS)
-                     + f" · {decklists.card_count(text)} cards")
-    summary.setObjectName("muted")
-    summary.setToolTip(text.replace("\n", "<br>"))
-    box.addWidget(summary)
     import game_window
+    from edition import APP_NAME
     game_open = bool(game_window.find_game_hwnd())
     to_game = QCheckBox("Add it to Pokémon TCG Live")
     to_game.setChecked(game_open)
     to_game.setEnabled(game_open)
-    to_game.setToolTip("Creates the deck in the game with the rarest prints you own. Esc stops it."
+    to_game.setToolTip("Creates the deck in the game under this name, with the rarest prints you own"
                        if game_open else "Open Pokémon TCG Live to add it there too")
     box.addWidget(to_game)
-    rename = QCheckBox("Use this name in the game")
-    rename.setChecked(game_open)
-    rename.setEnabled(game_open)
-    to_game.toggled.connect(rename.setEnabled)
-    box.addWidget(rename)
+    to_app = QCheckBox(f"Add it to {APP_NAME}")
+    to_app.setChecked(True)
+    to_app.setToolTip("Saves the list to your decklists under this name")
+    box.addWidget(to_app)
     status = QLabel("")
     status.setWordWrap(True)
     status.hide()
@@ -466,10 +451,10 @@ def main(argv):
             game_line = message.replace("Imported into Pokémon TCG Live", "imported")
         else:
             game_line = f"{message} {MANUAL}"
-        status.setText(f"<b>Monitor:</b> {html.escape(monitor_line)}<br>"
+        status.setText(f"<b>{APP_NAME}:</b> {html.escape(monitor_line)}<br>"
                        f"<b>Pokémon TCG Live:</b> {html.escape(game_line)}")
         status.show()
-        for widget in (name_field, to_game, rename):
+        for widget in (name_field, to_game, to_app):
             widget.setEnabled(False)
         cancel.hide()
         primary.setText("Done")
@@ -488,11 +473,14 @@ def main(argv):
             fade(dialog, 1.0, 0.0, 160, dialog.accept)
             return
         deck_name = name_field.text().strip()
-        entry, had = import_list(text, deck_name)
+        if to_app.isChecked():
+            entry, had = import_list(text, deck_name)
+            monitor_line = (f"you already had this list, as {entry['name']}." if had
+                            else f"saved as {entry['name']}.") + (
+                                f" Its deck page shows it once you play {deck_name}." if deck_name else "")
+        else:
+            monitor_line = "not added."
         QGuiApplication.clipboard().setText(text)
-        monitor_line = (f"you already had this list, as {entry['name']}." if had
-                        else f"saved as {entry['name']}.") + (
-                            f" Its deck page shows it once you play {deck_name}." if deck_name else "")
         if not (to_game.isChecked() and game_window.find_game_hwnd()):
             finish(monitor_line)
             return
@@ -503,8 +491,7 @@ def main(argv):
         relay.progress.connect(toast.say)
         relay.finished.connect(lambda ok, message: toast.finish(ok, message,
                                                                 lambda: finish(monitor_line, ok, message)))
-        importer = ptcgl_import.PTCGLImporter(text, deck_name if rename.isChecked() else None,
-                                              status=relay.progress.emit)
+        importer = ptcgl_import.PTCGLImporter(text, deck_name or None, status=relay.progress.emit)
 
         def start():
             dialog.hide()  # out of the way of the clicks
@@ -513,6 +500,12 @@ def main(argv):
         fade(dialog, 1.0, 0.0, 180, start)
 
     primary.clicked.connect(do_import)
+
+    def can_import():  # nothing to do with both boxes off
+        primary.setEnabled(to_app.isChecked() or (to_game.isChecked() and to_game.isEnabled()))
+    to_app.toggled.connect(can_import)
+    to_game.toggled.connect(can_import)
+    can_import()
     buttons.addWidget(cancel)
     buttons.addWidget(primary)
     box.addLayout(buttons)
