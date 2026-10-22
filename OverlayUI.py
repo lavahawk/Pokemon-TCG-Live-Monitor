@@ -5,6 +5,7 @@ Ultra-compact, professional overlay that follows the game and allows click-throu
 
 import sys
 import os
+import random
 import threading
 import time
 import webbrowser
@@ -118,15 +119,23 @@ def _dbg(msg):
 # --- END DEBUG ---
 
 
-def create_pokeball_icon(ball_type="poke"):
-    """Create 8-bit style pokeball icons for different leagues"""
-    # 12x12 pixel pokeball
-    pixmap = QPixmap(12, 12)
+def create_pokeball_icon(ball_type="poke", dpr=1.0, angle=0.0):
+    """8-bit style pokeball icon for each league, 12 logical px. Drawn at the
+    screen's own resolution (a 12 px image stretched to 18 px at 150 % was
+    blurry), hard-edged. angle: tilt in degrees, rocking on its bottom (the
+    shake of a ball with something inside)."""
+    side = max(12, int(round(12 * dpr)))
+    pixmap = QPixmap(side, side)
     pixmap.fill(Qt.GlobalColor.transparent)
-    
+    pixmap.setDevicePixelRatio(side / 12.0)
+
     painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)  # Keep it pixelated
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, bool(angle))  # pixelated unless tilting
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+    if angle:
+        painter.translate(6, 11.5)
+        painter.rotate(angle)
+        painter.translate(-6, -11.5)
     
     # Define colors for each ball type
     colors = {
@@ -575,6 +584,67 @@ class MinimalOverlay(QWidget):
         except Exception as exc:
             _dbg(f"_poll_deck_confirm error: {exc}")
         self._poll_pet()
+        self._poll_ball_hint()
+
+    # The mini GUI's ball rocks like a Pokeball with something inside: until
+    # the HUD buddy has been called out once (a hint that it's there), and
+    # now and then while it rests in the ball.
+    BALL_HINT_GAP_S = {"undiscovered": (30, 90), "resting": (60, 180)}
+
+    def _poll_ball_hint(self):
+        try:
+            if getattr(self, "_ball_shaking", False) or not self.isVisible():
+                return
+            if self.pet is None:
+                from pet import STATE_FILE  # anyone who ever had the buddy out has its save file
+                if _overlay_setting("pet_discovered", False) or os.path.exists(STATE_FILE):
+                    return
+                gap = self.BALL_HINT_GAP_S["undiscovered"]
+            elif self.pet.state == "ball":
+                gap = self.BALL_HINT_GAP_S["resting"]
+            else:
+                self._ball_hint_at = None
+                return
+            now = time.monotonic()
+            due = getattr(self, "_ball_hint_at", None)
+            if due is None:
+                self._ball_hint_at = now + random.uniform(*gap)
+            elif now >= due:
+                self._ball_hint_at = now + random.uniform(*gap)
+                self._shake_ball()
+        except Exception as exc:
+            _dbg(f"_poll_ball_hint error: {exc}")
+
+    def _shake_ball(self):
+        """One to three rocks, each smaller, with a pause between (the shakes
+        of a ball in the games), tilting on the ball's bottom."""
+        keys, t = [(0.0, 0.0)], 0.0
+        for amp in (16.0, 11.0, 7.0)[:random.choice((1, 2, 2, 3))]:
+            for angle in (-amp, 0.0, amp * 0.85, 0.0):
+                t += 0.085
+                keys.append((t, angle))
+            t += random.uniform(0.25, 0.45)  # still for a moment
+            keys.append((t, 0.0))
+        self._ball_shaking, started = True, time.monotonic()
+        timer = QTimer(self)
+        timer.setInterval(16)
+
+        def frame():
+            age = time.monotonic() - started
+            if age >= keys[-1][0]:
+                timer.stop()
+                timer.deleteLater()
+                self._ball_shaking = False
+                angle = 0.0
+            else:
+                i = next(n for n in range(1, len(keys)) if keys[n][0] > age)
+                (t0, a0), (t1, a1) = keys[i - 1], keys[i]
+                u = (age - t0) / max(1e-6, t1 - t0)
+                angle = a0 + (a1 - a0) * (u * u * (3 - 2 * u))
+            self.ball_icon.setPixmap(create_pokeball_icon(getattr(self, "_ball_league", "poke"),
+                                                          self.ball_icon.devicePixelRatioF(), angle))
+        timer.timeout.connect(frame)
+        timer.start()
 
     def _poll_manual_mode_notice(self, anchor):
         """Once per launch, when the mini GUI is placed: no OpenAI key (or
@@ -828,6 +898,7 @@ class MinimalOverlay(QWidget):
                 from app_settings import load_app_settings, save_app_settings
                 settings = load_app_settings()
                 settings["overlay_pet"] = True
+                settings["pet_discovered"] = True  # the ball stops hinting
                 save_app_settings(settings)
             except Exception as exc:
                 _dbg(f"pet enable failed: {exc}")
@@ -1223,7 +1294,9 @@ class MinimalOverlay(QWidget):
         half transparent-ish, center band + button dot. Kept faint so it
         reads as an accent, not a mascot.
         """
-        pixmap = QPixmap(size, size)
+        dpr = max(1.0, self.devicePixelRatioF())  # drawn at screen resolution, not stretched
+        pixmap = QPixmap(int(round(size * dpr)), int(round(size * dpr)))
+        pixmap.setDevicePixelRatio(dpr)
         pixmap.fill(Qt.GlobalColor.transparent)
         p = QPainter(pixmap)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -1597,8 +1670,9 @@ class MinimalOverlay(QWidget):
         
         # Update pokeball icon based on current Elo
         league = get_league_from_elo(self.current_rank)
-        pokeball = create_pokeball_icon(league)
-        self.ball_icon.setPixmap(pokeball)
+        self._ball_league = league
+        if not getattr(self, "_ball_shaking", False):
+            self.ball_icon.setPixmap(create_pokeball_icon(league, self.ball_icon.devicePixelRatioF()))
 
 
 def main():

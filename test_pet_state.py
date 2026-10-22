@@ -24,7 +24,7 @@ import pet
 pet.STATE_FILE = os.path.join(TMP, ".pet_state.json")
 
 DEFAULTS = {"games": 0, "fed_game": 0, "full_for": 3, "happiness": 60.0, "energy": 80.0, "level": 5,
-            "candy_ready_at": 0.0, "recalled": False}
+            "candy_ready_at": 0.0, "recalled": False, "streak": 0, "gloom": 0.0}
 
 
 def write_state(text):
@@ -50,6 +50,9 @@ class FakePet:
     menu_seen = pet.PetWidget.menu_seen
     _finish_eating = pet.PetWidget._finish_eating
     _pick_treat = pet.PetWidget._pick_treat
+    sadness = pet.PetWidget.sadness
+    _show_result = pet.PetWidget._show_result
+    _pick_fresh = pet.PetWidget._pick_fresh
 
     def __init__(self, **mem):
         self.mem = dict(DEFAULTS, **mem)  # fresh meters, not whatever an earlier test saved
@@ -57,6 +60,8 @@ class FakePet:
         self.state, self.recalled, self.battle, self.speed_mul = "idle", False, False, 1.0
         self.berry, self.after_walk, self.y_off, self.zs = None, None, 0.0, []
         self.hyper_until = self.anger_at = self.shake_until = 0.0
+        self.cloud_until = self.tears_until = self.grumble_until = 0.0
+        self._last_pick = {}
         self.calls = []
 
     def _stub(name):
@@ -71,6 +76,12 @@ class FakePet:
     walk_to = _stub("walk_to")
     _enter = _stub("enter")
     _release = _stub("release")
+    _win_reaction = _stub("win")
+    _loss_reaction = _stub("loss")
+    _confetti = _stub("confetti")
+
+    def _later(self, ms, fn):
+        self.calls.append("later")
 
     def _nap_spot(self):
         return 100.0
@@ -143,11 +154,11 @@ def test_react_counts_games_and_moves_happiness():
     p.battle, p.speed_mul = True, 0.45
     p.react("Win")
     assert p.mem["games"] == 1 and p.mem["happiness"] == 63.0
-    assert p.battle is False and p.speed_mul == 1.0 and "celebrate" in p.calls
+    assert p.battle is False and p.speed_mul == 1.0 and "win" in p.calls
     assert read_state()["games"] == 1  # saved right away
     p.calls = []
     p.react("Loss")
-    assert p.mem["happiness"] == 60.0 and "walk_to" in p.calls and "celebrate" not in p.calls
+    assert p.mem["happiness"] == 60.0 and "loss" in p.calls and "win" not in p.calls
     p.react("Tie")  # neither: no celebration, no mope
     assert p.mem["games"] == 3 and p.mem["happiness"] == 57.0
 
@@ -170,6 +181,10 @@ def test_react_while_recalled_or_in_ball():
     assert q._pending_result == "Win" and q.calls == []  # played once it's back out
     q.menu_seen()
     assert q.calls == ["release"]
+    games = q.mem["games"]
+    q.state = "idle"
+    q._show_result(q._pending_result)  # replayed once it's out: the game isn't counted twice
+    assert q.mem["games"] == games and "win" in q.calls
 
 
 # ── treats ─────────────────────────────────────────────────────────────────
@@ -237,6 +252,57 @@ def test_regression_non_object_state_and_string_bools():
     assert pet._load_state()["recalled"] is False
     pet._save_state(dict(pet._load_state(), level=9))
     assert pet._load_state()["level"] == 9 and not os.path.exists(pet.STATE_FILE + ".tmp")
+
+
+# ── streaks, gloom, variety ───────────────────────────────────────────────
+def test_streaks_and_gloom():
+    clear_state()
+    p = FakePet()
+    for _ in range(3):
+        p.react("Loss")
+    assert p.mem["streak"] == -3 and p.mem["gloom"] == 14 + 18 + 22 and p.sadness() == "sad"
+    p.react("Loss")
+    p.react("Loss")
+    assert p.mem["streak"] == -5 and p.sadness() == "depressed"
+    gloom = p.mem["gloom"]
+    p.react("Win")  # breaking a losing run: a big relief
+    assert p.mem["streak"] == 1 and p.mem["gloom"] == max(0.0, gloom - 40)
+    p.react("Win")
+    p.react("Tie")  # a tie leaves the streak alone
+    assert p.mem["streak"] == 2 and read_state()["streak"] == 2
+
+
+def test_sadness_thresholds():
+    assert FakePet().sadness() == "ok"
+    assert FakePet(gloom=40.0).sadness() == "sad" and FakePet(streak=-3).sadness() == "sad"
+    assert FakePet(gloom=70.0).sadness() == "depressed" and FakePet(streak=-5).sadness() == "depressed"
+
+
+def test_reactions_never_repeat_back_to_back():
+    p = FakePet()
+    picks = [p._pick_fresh("win", pet.WIN_REACTIONS) for _ in range(200)]
+    assert all(a != b for a, b in zip(picks, picks[1:])) and set(picks) == set(pet.WIN_REACTIONS)
+    picks = [p._pick_fresh("loss", pet.LOSS_REACTIONS) for _ in range(300)]
+    assert all(a != b for a, b in zip(picks, picks[1:])) and set(picks) == set(pet.LOSS_REACTIONS)
+
+
+def test_new_berries():
+    clear_state()
+    lum = FakePet(gloom=80.0)
+    lum.cloud_until = 999.0
+    lum.berry = [0, 0, 0, True, "Lum"]
+    lum._finish_eating()
+    assert lum.mem["gloom"] == 0.0 and lum.cloud_until == 0.0
+    colbur = FakePet()
+    colbur.berry = [0, 0, 0, True, "Colbur"]
+    colbur._finish_eating()
+    assert "later" in colbur.calls  # the nap is scheduled
+    enigma = FakePet()
+    enigma.berry = [0, 0, 0, True, "Enigma"]
+    enigma._finish_eating()
+    assert enigma.mem["fed_game"] == 0 and "say" in enigma.calls
+    rare = [n for n, (_w, _c, fx) in pet.TREATS.items() if fx.get("fx")]
+    assert pet.TREATS["Oran"][0] < 60 and {"Cheri", "Sitrus", "Lum", "Colbur", "Enigma"} <= set(rare)
 
 
 if __name__ == "__main__":
