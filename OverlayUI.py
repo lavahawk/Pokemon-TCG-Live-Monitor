@@ -157,31 +157,60 @@ def _ball_art(ball_type):
     return art
 
 
-def create_pokeball_icon(ball_type="poke", dpr=1.0, angle=0.0):
-    """The league's ball as chunky pixel art: each art pixel is a whole block
-    of screen pixels (2x2 at 150 %), never smoothed, about 12 logical px wide.
-    angle: lean in degrees (the shake of a ball with something inside); the
-    rows shift by whole art pixels, pivoting on the bottom, like a sprite
-    leaning, so it stays pixel art."""
-    size = len(BALL_ART)
-    block = max(1, int(round(12 * dpr / size)))
+_ball_art_cache = {}
+
+
+def _turned_ball(ball_type, angle):
+    """The 9x9 sprite turned by `angle` degrees, still on its pixel grid,
+    plus one art pixel each side (11x9). A circle stays a circle: the
+    outline is fixed and only the pattern inside turns (RotSprite-style:
+    enlarge 8x, rotate with nearest sampling, sample back down), and the
+    ball rolls a pixel at the steepest tilts, rocking on its base."""
+    key = (ball_type, int(round(angle)))
+    if key in _ball_art_cache:
+        return _ball_art_cache[key]
     art = _ball_art(ball_type)
-    pad = 1  # one art pixel each side: room for the lean (the size never changes)
-    lean = QImage(size + 2 * pad, size, QImage.Format.Format_ARGB32_Premultiplied)
-    lean.fill(Qt.GlobalColor.transparent)
-    p = QPainter(lean)
-    slope = math.tan(math.radians(angle)) * 0.5
-    for y in range(size):
-        shift = int(round(slope * (size - 1 - y)))  # a one-pixel staircase: the top leans, the bottom stays
-        p.drawImage(pad + max(-pad, min(pad, shift)), y, art, 0, y, size, 1)
-    p.end()
-    big = lean.scaled(lean.width() * block, size * block, Qt.AspectRatioMode.IgnoreAspectRatio,
-                      Qt.TransformationMode.FastTransformation)
-    pixmap = QPixmap(big.width(), big.height())
-    pixmap.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pixmap)
+    size, up = len(BALL_ART), 8
+    big = art.scaled(size * up, size * up, Qt.AspectRatioMode.IgnoreAspectRatio,
+                     Qt.TransformationMode.FastTransformation)
+    turned = QImage(big.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    turned.fill(Qt.GlobalColor.transparent)
+    p = QPainter(turned)  # no smoothing: nearest pixels only
+    p.translate(size * up / 2.0, size * up / 2.0)
+    p.rotate(key[1])
+    p.translate(-size * up / 2.0, -size * up / 2.0)
     p.drawImage(0, 0, big)
     p.end()
+
+    def inside(x, y):
+        return 0 <= x < size and 0 <= y < size and art.pixelColor(x, y).alpha() > 0
+    outline = QColor("#141414")
+    roll = max(-1, min(1, int(round(math.sin(math.radians(key[1])) * 4))))
+    out = QImage(size + 2, size, QImage.Format.Format_ARGB32_Premultiplied)
+    out.fill(Qt.GlobalColor.transparent)
+    for y in range(size):
+        for x in range(size):
+            if not inside(x, y):
+                continue
+            edge = not all(inside(x + dx, y + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+            color = turned.pixelColor(x * up + up // 2, y * up + up // 2)
+            out.setPixelColor(1 + x + roll, y, outline if edge or color.alpha() == 0 else color)
+    if len(_ball_art_cache) > 400:
+        _ball_art_cache.clear()
+    _ball_art_cache[key] = out
+    return out
+
+
+def create_pokeball_icon(ball_type="poke", dpr=1.0, angle=0.0):
+    """The league's ball as chunky pixel art: each art pixel is a whole block
+    of screen pixels (2x2 at 150 %), never smoothed, about 12 logical px tall.
+    angle: tilt in degrees (the shake of a ball with something inside); it
+    turns on its pixel grid (_turned_ball), so it stays pixel art."""
+    block = max(1, int(round(12 * dpr / len(BALL_ART))))
+    art = _turned_ball(ball_type, angle)
+    big = art.scaled(art.width() * block, art.height() * block, Qt.AspectRatioMode.IgnoreAspectRatio,
+                     Qt.TransformationMode.FastTransformation)
+    pixmap = QPixmap.fromImage(big)
     pixmap.setDevicePixelRatio(max(1.0, dpr))
     return pixmap
 
@@ -626,7 +655,7 @@ class MinimalOverlay(QWidget):
         """One to three rocks, each smaller, with a pause between (the shakes
         of a ball in the games), tilting on the ball's bottom."""
         keys, t = [(0.0, 0.0)], 0.0
-        for amp in (16.0, 11.0, 7.0)[:random.choice((1, 2, 2, 3))]:
+        for amp in (24.0, 17.0, 11.0)[:random.choice((1, 2, 2, 3))]:  # degrees; a 9 px sprite needs a real tip
             for angle in (-amp, 0.0, amp * 0.85, 0.0):
                 t += 0.085
                 keys.append((t, angle))
