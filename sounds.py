@@ -3,11 +3,16 @@ Import sounds: what plays when a battle log is saved.
 
 Settings (.app_settings.json):
   import_sound_enabled  bool   (default True)
-  import_sound          one of SOUNDS keys (default "ding")
+  import_sound          one of SOUNDS keys (default "chime")
   import_sound_volume   0-100  (default 60)
 
-Every sound except "ding" (ding.mp3, played with pygame) is synthesised, so
-there is nothing to ship or lose. No Qt here: the monitor imports it.
+Every sound except the "ding" key (ding.mp3, played with pygame) is
+synthesised, so there is nothing to ship or lose. No Qt here: the monitor
+imports it.
+
+The keys are what .app_settings.json stores, so they never change; only the
+labels do. Since 2.10 the "chime" key (two notes) is labelled Ding and is the
+default, and the "ding" key (the recording) is labelled Chime.
 """
 
 import math
@@ -19,16 +24,18 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DING_FILE = os.path.join(BASE_DIR, "ding.mp3")
 RATE = 44100
 
-# key -> label shown in Advanced → Preferences
+# key (stored, never renamed) -> label shown in Advanced → Preferences
 SOUNDS = {
-    "ding": "Ding (classic)",
-    "chime": "Chime",
+    "chime": "Ding",
+    "ding": "Chime",
     "coin": "Coin",
+    "coindrop": "Coin drop",
     "pop": "Pop",
+    "bubblepop": "Bubble pop",
     "levelup": "Level up",
     "bubble": "Bubbles",
 }
-DEFAULT_SOUND = "ding"
+DEFAULT_SOUND = "chime"
 DEFAULT_VOLUME = 60
 
 _cache = {}
@@ -65,7 +72,53 @@ def _mix(parts, total):
     return track
 
 
+def _clink(length, partials, decay, amp=1.0):
+    """A struck bit of metal: inharmonic partials, the high ones dying first."""
+    out = []
+    for i in range(int(length * RATE)):
+        t = i / RATE
+        s = sum(a * math.sin(2 * math.pi * f * t) * math.exp(-t * decay * (f / partials[0][0]) ** 0.5)
+                for f, a in partials)
+        out.append(amp * s * min(1.0, t / 0.0008))
+    return out
+
+
+def _coin_drop():
+    """A coin landing on a table: a bright first hit, bounces that come
+    faster and softer, then a short spin-down rattle."""
+    partials = ((2637.0, 1.0), (3960.0, 0.55), (5280.0, 0.32), (7112.0, 0.18))
+    parts, t, gap, amp = [], 0.0, 0.16, 1.0
+    for _ in range(6):
+        parts.append((t, _clink(0.22, partials, 18, amp)))
+        t += gap
+        gap *= 0.62
+        amp *= 0.6
+    for k in range(10):  # the wobble as it settles
+        parts.append((t + k * 0.022 * (1 - k * 0.05), _clink(0.05, partials, 60, 0.12 * (1 - k / 10))))
+    return _mix(parts, t + 0.45)
+
+
+def _bubble_pop():
+    """One round bubble pop: a tiny click, then a tone that sweeps up fast
+    (how a bubble sounds as it bursts) and dies out."""
+    out = []
+    phase, f0, f1, sweep = 0.0, 320.0, 1500.0, 0.045
+    for i in range(int(0.11 * RATE)):
+        t = i / RATE
+        f = f0 * (f1 / f0) ** min(1.0, t / sweep)
+        phase += 2 * math.pi * f / RATE
+        s = math.sin(phase) * min(1.0, t / 0.002) * math.exp(-t * 34)
+        if i < 60:  # the click of the film breaking (deterministic, no random)
+            s += 0.35 * math.sin(i * 12.9898) * (1 - i / 60)
+        out.append(s)
+    return _mix([(0.0, out)], 0.13)
+
+
 def _build(key):
+    if key == "coindrop":
+        return _coin_drop()
+    if key == "bubblepop":
+        return _bubble_pop()
     if key == "chime":
         return _mix([(0.0, _tone(880.0, 0.16, decay=11)),
                      (0.075, _tone(1318.5, 0.30, decay=11))], 0.40)
