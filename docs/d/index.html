@@ -18,8 +18,15 @@
   body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.6 var(--mono); }
   main { max-width: 760px; margin: 0 auto; padding: 18px 16px 48px; }
   a { color: inherit; }
-  header { display: flex; justify-content: space-between; gap: 12px; white-space: nowrap; }
-  header .brand { font-weight: 700; letter-spacing: .04em; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; white-space: nowrap; }
+  header .brand { text-decoration: none; display: block; min-width: 0; overflow: hidden; }
+  /* pixel logo: each letter pixel is two block characters; a wave washes through it */
+  .logo { margin: 0; font: 7px/1 var(--mono); letter-spacing: 0; white-space: pre; user-select: none;
+          height: 9em; overflow: hidden; }
+  .logo .px { color: var(--fg); }
+  .logo .wet { color: var(--accent); }
+  .logo .crest { color: var(--accent); opacity: .75; }
+  .logo .sea { color: var(--rule); }
   header nav a { color: var(--dim); text-decoration: none; margin-left: 14px; }
   header nav a:hover { color: var(--fg); }
   .rule { color: var(--rule); overflow: hidden; white-space: nowrap; user-select: none; }
@@ -45,7 +52,21 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 8px; margin-top: 22px;
           opacity: 0; transition: opacity .6s ease; }
   .grid.on { opacity: 1; }
-  .card { position: relative; aspect-ratio: 63 / 88; background: var(--rule); border-radius: 4px; overflow: hidden; }
+  .card { position: relative; aspect-ratio: 63 / 88; background: var(--rule); border-radius: 4px; overflow: hidden;
+          cursor: zoom-in; transition: transform .12s ease; }
+  .card:hover { transform: translateY(-2px); }
+  .row { cursor: zoom-in; }
+  .row:hover .n { color: var(--accent); }
+  .zoom { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center;
+          justify-content: center; gap: 10px; padding: 16px; background: rgba(6,7,9,.82); cursor: zoom-out;
+          opacity: 0; transition: opacity .15s ease; }
+  .zoom.on { opacity: 1; }
+  .zoom img { max-height: min(78vh, 700px); max-width: 100%; aspect-ratio: 63 / 88; border-radius: 14px;
+              box-shadow: 0 18px 60px rgba(0,0,0,.6); transform: scale(.94); transition: transform .18s ease;
+              background: #1a1c20 center / cover no-repeat; }
+  .zoom.on img { transform: none; }
+  .zoom .cap { color: #d8dbe0; text-align: center; cursor: default; }
+  .zoom .cap a { color: #e8c547; }
   .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .card b { position: absolute; right: 4px; bottom: 4px; min-width: 22px; padding: 0 5px; text-align: center;
             background: rgba(12,13,15,.86); color: #fff; border-radius: 3px; font-weight: 700; }
@@ -59,7 +80,7 @@
 <body>
 <main>
   <header>
-    <span class="brand">PTCGL MONITOR</span>
+    <a class="brand" href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor#readme" aria-label="PTCGL Monitor"><pre class="logo" id="logo" aria-hidden="true">PTCGL MONITOR</pre></a>
     <nav><a href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor#readme">about</a><a href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor/releases/latest">get the app</a></nav>
   </header>
   <div class="rule" aria-hidden="true">────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
@@ -182,8 +203,10 @@ function render(sections, name) {
     for (const c of sections[i]) {
       const row = el("div", "row t");
       row.append(el("span", "q", c.qty), el("span", "n", pretty(c.name)), el("span", "s", `${c.set} ${c.number}`));
+      row.onclick = () => zoomCard(c);
       list.append(row);
       const card = el("div", "card");
+      card.onclick = () => zoomCard(c);
       const img = new Image();
       img.loading = "lazy";
       img.alt = `${c.qty} × ${pretty(c.name)} (${c.set} ${c.number})`;
@@ -193,6 +216,96 @@ function render(sections, name) {
       grid.append(card);
     }
   });
+}
+
+// ── logo: "PTCGL MONITOR" in a pixel font, a wave washing through it ──
+const GLYPHS = {
+  P: ["###", "#.#", "###", "#..", "#.."], T: ["###", ".#.", ".#.", ".#.", ".#."], C: ["###", "#..", "#..", "#..", "###"],
+  G: ["###", "#..", "#.#", "#.#", "###"], L: ["#..", "#..", "#..", "#..", "###"], O: ["###", "#.#", "#.#", "#.#", "###"],
+  M: ["#...#", "##.##", "#.#.#", "#...#", "#...#"], N: ["#..#", "##.#", "#.##", "#..#", "#..#"],
+  I: ["###", ".#.", ".#.", ".#.", "###"], R: ["##.", "#.#", "##.", "#.#", "#.#"], " ": ["..", "..", "..", "..", ".."],
+};
+function startLogo() {
+  const pre = $("logo"), ROWS = 9, TOP = 2;  // letters sit on rows 2-6, the wave moves over all nine
+  const bits = Array.from({ length: ROWS }, () => []);
+  for (const ch of "PTCGL MONITOR") {
+    const g = GLYPHS[ch];
+    for (let y = 0; y < ROWS; y++) {
+      const row = y >= TOP && y < TOP + 5 ? g[y - TOP] + "." : ".".repeat(g[0].length + 1);
+      for (const b of row) bits[y].push(b === "#");
+    }
+  }
+  const width = bits[0].length - 1;
+  const draw = t => {
+    let html = "";
+    for (let y = 0; y < ROWS; y++) {
+      let run = "", cls = null;
+      const flush = () => { if (run) html += cls ? `<span class="${cls}">${run}</span>` : run; run = ""; };
+      for (let x = 0; x < width; x++) {
+        // water surface in half rows (0 = top); two waves so it doesn't look like a plain sine
+        const s = 2 * (4.6 + 2.6 * Math.sin(x * 0.17 - t * 2.1) + 0.9 * Math.sin(x * 0.41 + t * 1.3));
+        const half = Math.floor(s);
+        let c, k;
+        if (bits[y][x]) { c = "██"; k = 2 * y + 1 >= s ? "wet" : "px"; }
+        else if (half === 2 * y) { c = "▄▄"; k = "crest"; }
+        else if (half === 2 * y + 1) { c = "▁▁"; k = "crest"; }
+        else if (2 * y > s) { c = (x + y) % 2 ? "░░" : "  "; k = "sea"; }
+        else { c = "  "; k = null; }
+        if (k !== cls) { flush(); cls = k; }
+        run += c;
+      }
+      flush();
+      if (y < ROWS - 1) html += "\n";
+    }
+    pre.innerHTML = html;
+  };
+  // the logo shrinks to the room the header leaves it (7px at most)
+  const fit = () => {
+    const room = pre.closest("header").clientWidth - pre.closest("header").querySelector("nav").offsetWidth - 12;
+    pre.style.fontSize = Math.min(7, Math.floor(room / (width * 2 * 0.6) * 10) / 10) + "px";
+  };
+  addEventListener("resize", fit);
+  draw(1.2);
+  fit();
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  let last = 0;
+  const tick = now => {
+    if (now - last > 66) { last = now; draw(now / 1000); }  // ~15 fps is plenty for ASCII
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+// ── click a card: the large scan, like Limitless's own preview ──
+const LIMITLESS_SETS = { "PR-SV": "SVP", "PR-SW": "SWSHP" };
+function zoomCard(c) {
+  const box = el("div", "zoom");
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", pretty(c.name));
+  const small = cardImage(c.set, c.number);
+  const img = new Image();
+  img.alt = `${pretty(c.name)} (${c.set} ${c.number})`;
+  img.style.backgroundImage = `url("${small}")`;  // the small scan shows while the large one loads
+  img.src = small.replace(/_SM\.png$/, "_LG.png");
+  img.onerror = () => { img.onerror = null; img.src = small; };
+  const cap = el("div", "cap", `${c.qty} × ${pretty(c.name)} · ${c.set} ${c.number} · `);
+  const link = el("a", "", "open on limitless ↗");
+  const code = LIMITLESS_SETS[c.set.toUpperCase()] || c.set.toUpperCase();
+  link.href = `https://limitlesstcg.com/cards/${encodeURIComponent(code)}/${encodeURIComponent(c.number)}`;
+  link.target = "_blank";
+  link.rel = "noopener";
+  cap.append(link);
+  box.append(img, cap);
+  const onKey = e => { if (e.key === "Escape") close(); };
+  const close = () => {
+    document.removeEventListener("keydown", onKey);
+    box.classList.remove("on");
+    setTimeout(() => box.remove(), 160);
+  };
+  box.addEventListener("click", e => { if (!cap.contains(e.target)) close(); });
+  document.addEventListener("keydown", onKey);
+  document.body.append(box);
+  requestAnimationFrame(() => box.classList.add("on"));
 }
 
 // Top-down typing: every .t line types out in order (skipped for reduced motion).
@@ -206,19 +319,20 @@ async function typeIn() {
     node.style.visibility = "hidden";  // untyped lines (and their dot leaders) stay out of sight
     return { node, parts };
   });
-  const frame = () => new Promise(r => requestAnimationFrame(r));
-  for (const [index, job] of jobs.entries()) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  for (const job of jobs) {
     job.node.style.visibility = "";
     if (job.node.classList.contains("row")) {
-      if (index % 2) await frame();  // list rows: two per frame, top to bottom
+      await sleep(45);  // list rows: one at a time, top to bottom
       continue;
     }
     job.parts.forEach(([n]) => { n.textContent = ""; });
     job.node.classList.add("cursor");
     for (const [n, text] of job.parts) {
-      for (let i = 0; i < text.length; i += 3) { n.textContent = text.slice(0, i + 3); await frame(); }
+      for (let i = 0; i < text.length; i++) { n.textContent = text.slice(0, i + 1); await sleep(18); }
     }
     job.node.classList.remove("cursor");
+    await sleep(90);
   }
 }
 
@@ -226,7 +340,21 @@ async function copyList(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
 }
 
+// Hand the deck to the app. Chromium asks once and ignores an unknown scheme
+// quietly; other browsers would show an error page for a top-level visit, so
+// they get a hidden frame instead.
+function openApp(url) {
+  const chromium = !!(navigator.userAgentData && navigator.userAgentData.brands.length);
+  if (chromium) { location.href = url; return; }
+  const frame = document.createElement("iframe");
+  frame.hidden = true;
+  frame.src = url;
+  document.body.append(frame);
+  setTimeout(() => frame.remove(), 3000);
+}
+
 (async () => {
+  startLogo();
   const note = $("note");
   try {
     const hash = location.hash.slice(1);
@@ -239,7 +367,9 @@ async function copyList(text) {
     const text = exportText(sections);
     render(sections, name);
     $("actions").hidden = false;
-    $("open").href = "ptcglmonitor://d#" + hash;
+    const appUrl = "ptcglmonitor://d#" + hash;
+    $("open").href = appUrl;
+    openApp(appUrl);
     $("copy").onclick = async () => {
       note.innerHTML = (await copyList(text))
         ? '<span class="ok">copied.</span> in pokémon tcg live: decks → create a deck → import'
@@ -261,11 +391,6 @@ async function copyList(text) {
     }
     await typeIn();
     $("grid").classList.add("on");
-    // Hand the deck to the app when it's installed. Chromium ignores an unknown
-    // scheme quietly; Firefox and Safari would show an error page, so there it
-    // waits for the "open in app" button.
-    const chromium = !!(navigator.userAgentData && navigator.userAgentData.brands.length);
-    if (chromium) location.href = "ptcglmonitor://d#" + hash;
   } catch (err) {
     $("name").textContent = "can't open this deck";
     note.className = "bad";

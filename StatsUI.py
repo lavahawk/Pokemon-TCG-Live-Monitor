@@ -6173,9 +6173,13 @@ class StatsWindow(QWidget):
 
         def show(pixmap):
             state["pixmap"] = pixmap
-            width = max(200, scroll.viewport().width() - 4)
-            label.setPixmap(pixmap.scaledToWidth(min(width, pixmap.width()),
-                                                 Qt.TransformationMode.SmoothTransformation))
+            # Scale in device pixels and tag the ratio, or Windows display
+            # scaling stretches the preview (blurry at 150%).
+            dpr = max(1.0, label.devicePixelRatioF())
+            width = int(max(200, scroll.viewport().width() - 4) * dpr)
+            shown = pixmap.scaledToWidth(min(width, pixmap.width()), Qt.TransformationMode.SmoothTransformation)
+            shown.setDevicePixelRatio(dpr)
+            label.setPixmap(shown)
 
         def render():
             for mode, b in mode_btns.items():
@@ -6389,8 +6393,9 @@ class StatsWindow(QWidget):
             full = state.get("pixmap")
             if state.get("mode") != "prints" or shown is None or shown.isNull() or full is None:
                 return None, None
-            scale = shown.width() / max(1, full.width())
-            offset_x = (label.width() - shown.width()) / 2
+            shown_w = shown.width() / shown.devicePixelRatio()  # logical pixels
+            scale = shown_w / max(1, full.width())
+            offset_x = (label.width() - shown_w) / 2
             for rect, card in state.get("rects") or []:
                 r = QRectF(offset_x + rect.x() * scale, rect.y() * scale, rect.width() * scale, rect.height() * scale)
                 if r.contains(QPointF(pos)):
