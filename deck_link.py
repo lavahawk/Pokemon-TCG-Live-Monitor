@@ -321,6 +321,26 @@ def _toast_class():
     return ImportShade
 
 
+def _already_have_note(app, name):
+    """A small note by the cursor for a link to a deck you already have
+    (opened from the browser, so something visibly answers the click)."""
+    from PySide6.QtCore import QPoint, QTimer, Qt
+    from PySide6.QtGui import QCursor
+    from PySide6.QtWidgets import QLabel
+    note = QLabel(f"Already in your decklists: {name}")
+    note.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
+                        | Qt.WindowType.WindowDoesNotAcceptFocus)
+    note.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    note.setStyleSheet("QLabel { background: rgb(15, 15, 15); color: rgba(232, 238, 246, 0.95); font-size: 12px;"
+                       " border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; padding: 7px 12px; }")
+    note.adjustSize()
+    note.move(QCursor.pos() + QPoint(14, 18))
+    note.show()
+    fade(note, 0.0, 1.0, 180)
+    QTimer.singleShot(2200, lambda: fade(note, 1.0, 0.0, 300, app.quit))
+    app.exec()
+
+
 def main(argv):
     from PySide6.QtCore import QObject, Qt, Signal
     from PySide6.QtGui import QGuiApplication
@@ -335,6 +355,15 @@ def main(argv):
     except Exception:
         pass
     link = argv[1] if len(argv) > 1 else (QGuiApplication.clipboard().text() or "")
+    try:
+        cards, shared_name = deck_share.parse(link)
+        import decklists
+        have = decklists.stored_copy(cards, shared_name)
+    except Exception:
+        have = None  # a damaged link: the box below explains
+    if have is not None:  # your own list (same cards, same name): nothing to import
+        _already_have_note(app, have.get("name") or shared_name)
+        return 0
     if not first_box_for(link):
         return 0  # this deck's box is already open (copied and clicked, say)
     deck_share.remember_seen(link)  # the clipboard watch won't offer it again

@@ -196,6 +196,34 @@ def test_copied_link_is_offered_once_and_own_links_never():
             S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen = saved
 
 
+def test_a_deck_you_already_have_is_not_offered():
+    """Same cards and same name (its own, or a deck it's linked to) = yours:
+    no import box, from the clipboard or a clicked link (temp store)."""
+    import tempfile
+    import TCGLiveMonitor as M
+    saved = (D.STORE_FILE, S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen)
+    opened = []
+    with tempfile.TemporaryDirectory() as tmp:
+        D.STORE_FILE = os.path.join(tmp, ".decklists.json")
+        S.OWN_FILE, S.SEEN_FILE = os.path.join(tmp, "own"), os.path.join(tmp, "seen")
+        M.subprocess.Popen = lambda args, **kw: opened.append(args[-1])
+        try:
+            entry = D.save_decklist(LIST)
+            D.rename_decklist(entry["id"], "Gengar Testing")
+            assert D.stored_copy(LIST, "Gengar Testing")["id"] == entry["id"]
+            assert D.stored_copy(LIST, "  gengar testing ") is not None  # any case / spacing
+            assert D.stored_copy(LIST) is not None  # no name in the link: the cards decide
+            assert D.stored_copy(LIST, "Someone else's name") is None  # same cards, other name: offered
+            assert D.stored_copy(LIST.replace("2 Haunter MEP 27", "3 Haunter MEP 27"), "Gengar Testing") is None
+            D.link_decklist("Dragapult Box", entry["id"])
+            assert D.stored_copy(LIST, "Dragapult Box") is not None  # the deck it's linked to counts
+            monitor = M.Monitor.__new__(M.Monitor)
+            assert monitor.handle_link(S.share_url(LIST, "Gengar Testing")) and opened == []
+            assert monitor.handle_link(S.share_url(LIST, "Other name")) and len(opened) == 1
+        finally:
+            D.STORE_FILE, S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen = saved
+
+
 def test_one_import_box_per_link():
     import deck_link
     link = S.share_url(LIST, "Lock test")

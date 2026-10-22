@@ -571,13 +571,18 @@ class Monitor:
         """A shared deck link copied while the game is open (the backup to
         clicking it): offer the import box. The deck is decoded from the link
         itself, so this works even when the web page is down. Asked once per
-        link; links you made yourself are skipped. True when `text` was a link."""
+        link; links you made yourself, and decks you already have (same cards,
+        same name), are skipped. True when `text` was a link."""
         try:
             import deck_share
             if not deck_share.looks_like_link(text):
                 return False
             if not deck_share.is_own_link(text) and not deck_share.was_offered(text):
-                deck_share.parse(text)  # a damaged link opens nothing
+                cards, name = deck_share.parse(text)  # a damaged link opens nothing
+                from decklists import stored_copy
+                if stored_copy(cards, name):
+                    log("Shared deck link on the clipboard: already in your decklists, not offered.")
+                    return True
                 deck_share.remember_seen(text)
                 import ui_restart
                 flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)

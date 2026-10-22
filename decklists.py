@@ -197,6 +197,22 @@ def decklist_for_deck(deck_name):
     return entry
 
 
+def stored_copy(text, name=None):
+    """The stored list with exactly these cards that already goes by `name`
+    (its own name, or a deck it's linked to, case-insensitive), else None.
+    No name: any stored list with these cards. A shared link like that is
+    one you already have: nothing to import."""
+    data = _load()
+    lid = list_id(text)
+    entry = next((e for e in data.get("lists") or [] if e.get("id") == lid), None)
+    if entry is None or not (name or "").strip():
+        return entry
+    names = {entry.get("name") or "", entry.get("menu_deck") or ""}
+    names |= {deck for deck, linked in (data.get("links") or {}).items() if linked == lid}
+    wanted = name.strip().casefold()
+    return entry if any(n.strip().casefold() == wanted for n in names if n) else None
+
+
 def import_decklist(text, deck_name):
     """Store a pasted PTCGL export and link it to `deck_name`."""
     entry = save_decklist(text, deck_name)
