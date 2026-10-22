@@ -389,18 +389,9 @@ function openApp(url) {
         : '<span class="bad">couldn\'t copy</span> - select the list below instead';
     };
     $("limitless").onclick = () => { $("imggen-input").value = text; $("imggen").submit(); };
-    // Copy right away when the browser allows it; otherwise on the first click.
+    // Copy right away when the browser allows it; otherwise the copy list button does it.
     if (await copyList(text)) {
       note.innerHTML = '<span class="ok">list copied.</span> in pokémon tcg live: decks → create a deck → import';
-    } else {
-      note.textContent = "click anywhere to copy the list for pokémon tcg live";
-      const once = async () => {
-        document.removeEventListener("pointerdown", once, true);
-        if (await copyList(text)) {
-          note.innerHTML = '<span class="ok">list copied.</span> in pokémon tcg live: decks → create a deck → import';
-        }
-      };
-      document.addEventListener("pointerdown", once, true);
     }
     await typeIn();
     $("grid").classList.add("on");
