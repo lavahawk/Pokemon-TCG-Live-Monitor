@@ -386,7 +386,8 @@ function openApp(url) {
     const hash = location.hash.slice(1);
     if (!hash) throw new Error("this page needs a deck link");
     const [token, rawName = ""] = hash.split("~");
-    const name = decodeURIComponent(rawName).replace(/[\x00-\x1f<>]/g, "").slice(0, 40);
+    // control characters, < >, and invisible bidi controls (a name can't pose as another)
+    const name = decodeURIComponent(rawName).replace(/[\x00-\x1f<>\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "").slice(0, 40);
     const tableText = await (await fetch("cards_v1.txt", { cache: "force-cache" })).text();
     const table = tableText.split(/\r?\n/).filter(l => l.trim() && !l.startsWith("#"));
     const sections = await decode(token, table);

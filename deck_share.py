@@ -177,7 +177,9 @@ def decode(token):
 
 def _clean_name(name):
     name = " ".join((name or "").split())[:MAX_NAME]
-    return re.sub(r"[\x00-\x1f<>]", "", name)
+    # control characters, < >, and the invisible bidi controls that can make
+    # a name read as something else (U+202A-202E, U+2066-2069, U+200E/200F)
+    return re.sub("[\\x00-\\x1f<>\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", name)
 
 
 def share_url(text, name=None, web=True):

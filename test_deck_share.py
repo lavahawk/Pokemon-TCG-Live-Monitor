@@ -196,6 +196,14 @@ def test_copied_link_is_offered_once_and_own_links_never():
             S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen = saved
 
 
+def test_names_cannot_hide_bidi_controls():
+    tricky = "My deck‮⁦kcab‏"
+    assert S.parse(S.share_url(LIST, tricky))[1] == "My deckkcab"
+    page = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "d", "index.html"),
+                encoding="utf-8").read()
+    assert "\\u202a-\\u202e" in page  # the web page strips them too
+
+
 def test_a_deck_you_already_have_is_not_offered():
     """Same cards and same name (its own, or a deck it's linked to) = yours:
     no import box, from the clipboard or a clicked link (temp store)."""

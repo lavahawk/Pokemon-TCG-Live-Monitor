@@ -312,6 +312,18 @@ class PetWidget(QWidget):
                           overlay_geo.width(), overlay_geo.height())
         if ball_global is not None:
             self.ball = QPointF(self.mapFromGlobal(ball_global))
+        # The mini GUI grows / shrinks with its text: this window with it.
+        # Keep the buddy (and its walk) inside, and anything on the floor
+        # that the moved left wall now reaches steps back clear.
+        self.x = max(10.0, min(self.width() - 10.0, self.x))
+        self.target = max(10.0, min(self.width() - 10.0, self.target))
+        stop = self._wall_stop()
+        if stop < self.x < self._pill_edge() and self.arc is None and self.fx_pos is None:
+            self.x = stop
+            if self.state == "walk" and stop < self.target < self._pill_edge():
+                self.target = stop
+        if self.berry and stop - 12 < self.berry[0] < self._pill_edge() + 4 and self.berry[1] >= WIN_H - 1:
+            self.berry[0] = stop - 14
         if self.species and self._screen_dpr() != self._dpr:
             self._load(self.species, self._screen_dpr())
 
@@ -551,6 +563,12 @@ class PetWidget(QWidget):
         self.bubble = (kind, text, now, now + seconds)
 
     def _hop(self, x1, dur=0.42, then=None):
+        stop, edge = self._wall_stop(), self._pill_edge()
+        if x1 == self.x and stop < self.x < edge:
+            # a hop on the spot inside the wall's reach (a battle or a result
+            # cut a climb short): first to the nearest clear spot
+            self.x = x1 = edge if edge - self.x < self.x - stop else stop
+            self.y_off = 0.0
         self.arc = (self.x, self.floor(self.x), x1, self.floor(x1), time.monotonic(), dur, then)
 
     # ── tick ──
@@ -569,6 +587,8 @@ class PetWidget(QWidget):
             self.y_off = self.floor(self.x) - (ground - peak * 4 * t * (1 - t))
             if t >= 1.0:
                 self.arc, self.y_off = None, 0.0
+                if self.floor(self.x) >= WIN_H and self._wall_stop() < self.x < self._pill_edge():
+                    self.x = self._wall_stop()  # the mini GUI moved mid-hop: land clear of its wall
                 if then:
                     then()
         elif self.state == "walk":
@@ -647,6 +667,12 @@ class PetWidget(QWidget):
                 self._enter("emote", anim="Nod", loop=False) if "Nod" in self.sheets else self._enter("idle")
             else:
                 self._next()
+
+        # never left standing on the floor where the mini GUI's wall reaches
+        # (it moved during a release, a hop, a peek...): step clear
+        if self.arc is None and self.fx_pos is None and self.state not in ("ball", "capture", "release", "peek") \
+                and self.floor(self.x) >= WIN_H and self._wall_stop() < self.x < self._pill_edge():
+            self.x = self._wall_stop()
 
         # wake up when the cursor rests on a sleeping buddy
         if self.state == "sleep" and self._sprite_rect().contains(self.mapFromGlobal(QCursor.pos())):
