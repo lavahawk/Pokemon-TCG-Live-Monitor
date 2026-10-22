@@ -239,14 +239,14 @@ function startLogo() {
   const SPARK = "#@%&$*+=";
   const hash = (a, b, c) => { const v = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453; return v - Math.floor(v); };
   let cols = W + 2;
-  const fit = () => {  // small letters (3.5px at most); stray ASCII runs on to the edge of the header
+  const fit = () => {  // small letters (3.5px at most)
     const room = pre.parentElement.clientWidth;
     const size = Math.min(3.5, Math.floor(room / ((W + 2) * 0.6) * 10) / 10);
     pre.style.fontSize = size + "px";
-    cols = Math.max(W + 2, Math.floor(room / (size * 0.62)));
+    cols = W + 6;  // the grain stays just around the name
   };
   const draw = t => {
-    const period = 4.2, beam = ((t % period) / period) * (cols + 60) - 30;
+    const period = 3.4, beam = ((t % period) / period) * (cols + 40) - 20;
     let html = "";
     for (let y = 0; y < ROWS; y++) {
       let run = "", cls = null;
@@ -258,17 +258,17 @@ function startLogo() {
         const d = Math.abs(sx - beam - (y - 3) * 2.6);  // slanted beam
         const flick = Math.floor(t * 9 + hash(sx, y, 3) * 9);
         if (ink(sx, y)) {
-          if (d < 3) put(SPARK[Math.floor(hash(sx, y, flick) * SPARK.length)], "w");
-          else if (hash(sx, y, Math.floor(t * 2.5 + hash(sx, y, 5) * 4)) < 0.07) put(STRAY[Math.floor(hash(sx, y, flick) * STRAY.length)], d < 8 ? "y" : null);  // frayed strokes
-          else put("█", d < 8 ? "y" : null);
+          if (d < 2) put(SPARK[Math.floor(hash(sx, y, flick) * SPARK.length)], "w");
+          else if (hash(sx, y, Math.floor(t * 2.5 + hash(sx, y, 5) * 4)) < 0.07) put(STRAY[Math.floor(hash(sx, y, flick) * STRAY.length)], d < 5 ? "y" : null);  // frayed strokes
+          else put("█", d < 5 ? "y" : null);
         } else if (ink(sx - 1, y - 1) || ink(sx - 2, y - 1)) {
-          put("░", d < 8 ? "yd" : "d");  // drop shadow, one row down and to the right
+          put("░", d < 5 ? "yd" : "d");  // drop shadow, one row down and to the right
         } else {
           // stray ASCII: sparse, each cell changing now and then; the beam lights it up
           const slow = Math.floor(t * 0.7 + hash(sx, y, 9) * 5);
           const dense = sx < W + 4 ? 0.2 : 0.26;
           if (hash(sx, y, slow) < dense || d < 2.2 && hash(sx, y, flick) < 0.35) {
-            put(STRAY[Math.floor(hash(sx, y, slow + 7) * STRAY.length)], d < 3 ? "y" : d < 9 ? "yd" : "d");
+            put(STRAY[Math.floor(hash(sx, y, slow + 7) * STRAY.length)], d < 2 ? "y" : d < 6 ? "yd" : "d");
           } else put(" ", cls);
         }
       }
