@@ -5769,14 +5769,19 @@ class StatsWindow(QWidget):
         from decklists import decklist_for_deck
         list_entry = decklist_for_deck(flag_deck)
         if list_entry is not None:
-            picture_btn = QPushButton("Picture")
-            picture_btn.setObjectName("limitlessBtn")
-            picture_btn.setFixedHeight(30)
-            picture_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            picture_btn.setToolTip("The list as a picture, every card in its regular printing (Limitless ImgGen)")
-            picture_btn.clicked.connect(lambda checked=False, e=list_entry, name=flag_deck:
-                                        self._view_decklist_picture(e, name, mode="normalized"))
-            hero_top.addWidget(picture_btn)
+            # Share = copy the deck's link (the picture lives in the Decklist menu).
+            share_btn = QPushButton("Share")
+            share_btn.setObjectName("limitlessBtn")
+            share_btn.setFixedHeight(30)
+            share_btn.setMinimumWidth(78)  # room for "Copied!" without the row shifting
+            share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            share_btn.setToolTip(infotip.tip(
+                "Copy a link to this list",
+                "Anyone with the link sees the list on the web; with the app it opens straight into "
+                "the import box. The picture is in the Decklist menu."))
+            share_btn.clicked.connect(lambda checked=False, e=list_entry, name=flag_deck, b=share_btn:
+                                      self._copy_share_link(e, name, b))
+            hero_top.addWidget(share_btn)
 
         if matched_row.get("deck_url"):
             open_btn = QPushButton("Limitless ↗")
@@ -5877,19 +5882,43 @@ class StatsWindow(QWidget):
 
     def _copy_share_link(self, entry, deck_name, anchor):
         """Copy a link that holds the whole list (deck_share): it opens the
-        app for anyone who has it, and the web page shows the list otherwise."""
+        app for anyone who has it, and the web page shows the list otherwise.
+        The button itself says "Copied!"; hover tips stay quiet for a moment
+        so the cursor (often left over the buttons below a menu) can't cover it."""
         import deck_share
+        infotip.quiet(2.5)
         try:
             link = deck_share.share_url(entry.get("text") or "", deck_name)
         except deck_share.ShareError as exc:
+            self._flash_button(anchor, "Can't share")
             infotip.show_text(QCursor.pos(), f"Can't share this list: {exc}", anchor)
             return
         deck_share.remember_own(link)
         QApplication.clipboard().setText(link)
-        infotip.show_text(QCursor.pos(), infotip.tip(
-            "<b>Link copied</b> · paste it anywhere",
-            "Opens this list in Pokemon TCG Live Monitor, or shows it on the web for anyone without the app."),
-            anchor)
+        self._flash_button(anchor, "Copied!" if isinstance(anchor, QPushButton) else "Link copied!")
+
+    def _flash_button(self, button, text, ms=1800):
+        """Show `text` on the button for a moment, then its own label again."""
+        try:
+            original = button.property("flashOriginal") or button.text()
+            button.setProperty("flashOriginal", original)
+            button.setText(text)
+        except RuntimeError:
+            return
+        timer = getattr(button, "_flash_timer", None)
+        if timer is None:
+            timer = QTimer(button)
+            timer.setSingleShot(True)
+
+            def restore(b=button):
+                try:
+                    b.setText(b.property("flashOriginal"))
+                    b.setProperty("flashOriginal", None)
+                except RuntimeError:
+                    pass
+            timer.timeout.connect(restore)
+            button._flash_timer = timer
+        timer.start(ms)
 
     def _link_decklist(self, deck_name, lid):
         from decklists import link_decklist
@@ -8416,19 +8445,28 @@ class StatsWindow(QWidget):
         return self.in_person_view
 
     def _poll_decklists(self):
-        if not hasattr(self, "tab_widget") or self.tab_widget.currentIndex() != getattr(self, "in_person_tab_index", -1):
+        """The monitor and shared-deck imports save lists in their own
+        processes: pick changes up for the deck pages and the In Person tab."""
+        if not hasattr(self, "tab_widget"):
             return
         try:
             from decklists import store_mtime
             mtime = store_mtime()
         except Exception:
             return
-        if mtime != self._decklist_mtime:
-            first = self._decklist_mtime is None
-            self._decklist_mtime = mtime
-            if not first:
-                self._refresh_decklist_choices(select_newest=True)
-                self._fill_decklist_if_open()
+        if mtime == self._decklist_mtime:
+            return
+        first = self._decklist_mtime is None
+        self._decklist_mtime = mtime
+        if first:
+            return
+        self._deck_dashboards_dirty = True
+        current = self.tab_widget.currentIndex()
+        if current == getattr(self, "decks_tab_index", -1):
+            self._refresh_deck_dashboards()
+        elif current == getattr(self, "in_person_tab_index", -1):
+            self._refresh_decklist_choices(select_newest=True)
+            self._fill_decklist_if_open()
 
     def _refresh_decklist_choices(self, select_newest=False):
         try:

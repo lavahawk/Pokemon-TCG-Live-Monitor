@@ -340,6 +340,8 @@ def _global_rect(widget, rect):
 def _retarget(global_pos):
     """The pointer left the tip's area: if it's over another tip, swap to it
     at once (no second hover delay). True when it swapped."""
+    if is_quiet():
+        return False
     widget = QApplication.widgetAt(global_pos)
     tip_widget = _instance()
     while widget is not None and widget is not tip_widget:
@@ -367,6 +369,23 @@ def hide_text():
         _tip.hide_tip()
 
 
+_quiet_until = 0.0
+
+
+def quiet(seconds):
+    """No hover tips for `seconds` (and any open one closes): after a click
+    whose result shows on the button, the cursor resting on the next button
+    (or where a menu just closed) mustn't pop a tip over it."""
+    global _quiet_until
+    _quiet_until = max(_quiet_until, time.monotonic() + seconds)
+    if _tip is not None:
+        _tip.hide_tip()
+
+
+def is_quiet():
+    return time.monotonic() < _quiet_until
+
+
 def is_visible():
     return _tip is not None and _tip.isVisible()
 
@@ -381,6 +400,8 @@ class _Filter(QObject):
     def eventFilter(self, obj, event):
         kind = event.type()
         if kind == QEvent.Type.ToolTip and isinstance(obj, QWidget):
+            if is_quiet():
+                return True  # swallowed: no tip, and no native one either
             found = lookup(obj, event.pos())
             if not found:
                 return False  # let it bubble to the parent

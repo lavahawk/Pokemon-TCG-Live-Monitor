@@ -154,6 +154,32 @@ def test_table_is_frozen_shape():
     assert rows[0] == "Boss's Orders MEG 114"
 
 
+def test_import_links_the_list_to_the_deck():
+    """A shared deck lands in the monitor: saved, named, and linked to the
+    deck's name (temp store; the user's .decklists.json is never touched)."""
+    import tempfile
+    import deck_link
+    saved = D.STORE_FILE
+    with tempfile.TemporaryDirectory() as tmp:
+        D.STORE_FILE = os.path.join(tmp, ".decklists.json")
+        try:
+            entry, had = deck_link.import_list(LIST, "Gengar Box")
+            assert not had and entry["name"] == "Gengar Box"
+            assert D.decklist_for_deck("Gengar Box")["id"] == entry["id"]
+            again, had = deck_link.import_list(LIST, "Gengar Box")
+            assert had and again["id"] == entry["id"]
+        finally:
+            D.STORE_FILE = saved
+
+
+def test_import_progress_only_moves_forward():
+    import deck_link
+    value = deck_link.step_progress("Opening Decks…")
+    assert 0 < value < deck_link.step_progress("Creating the deck…", value)
+    assert deck_link.step_progress("Waiting for Pokémon TCG Live's main menu…", 0.5) == 0.5
+    assert deck_link.step_progress("something new", 0.3) == 0.3
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

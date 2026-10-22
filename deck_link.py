@@ -69,8 +69,9 @@ def section_counts(text):
 
 
 def import_list(text, name):
-    """Save to the app's decklists (named `name` when it's new) and copy the
-    list. Returns (entry, already_had)."""
+    """Save to the app's decklists (named `name` when it's new) and link it
+    to the deck called `name`, so that deck's page in the monitor shows the
+    list as soon as you play it. Returns (entry, already_had)."""
     import decklists
     entry = decklists.save_decklist(text)
     if entry.get("new") and name:
@@ -79,14 +80,48 @@ def import_list(text, name):
             entry["name"] = name
         except Exception:
             pass
+    if name:
+        try:
+            decklists.link_decklist(name, entry["id"])
+        except Exception:
+            pass
     return entry, not entry.get("new")
+
+
+# The importer's steps and how far along each one is (for the progress bar).
+STEP_PROGRESS = (("Waiting", 0.08), ("Leaving", 0.12), ("Opening Decks", 0.2), ("Creating", 0.38),
+                 ("Choosing", 0.55), ("Importing", 0.72), ("Naming", 0.88))
+
+
+def step_progress(message, current=0.0):
+    """Progress (0-1) after the importer says `message`; never goes back."""
+    for prefix, value in STEP_PROGRESS:
+        if message.startswith(prefix):
+            return max(current, value)
+    return current
+
+
+def fade(widget, start, end, ms, then=None):
+    """Animate a window's opacity (Qt's own windows only; the game is never touched)."""
+    from PySide6.QtCore import QEasingCurve, QVariantAnimation
+    animation = QVariantAnimation(widget)
+    animation.setStartValue(float(start))
+    animation.setEndValue(float(end))
+    animation.setDuration(ms)
+    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+    animation.valueChanged.connect(lambda value: widget.setWindowOpacity(float(value)))
+    if then is not None:
+        animation.finished.connect(then)
+    widget.setWindowOpacity(float(start))
+    animation.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
+    return animation
 
 
 def _toast_class():
     import ctypes
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QEasingCurve, QRectF, Qt, QVariantAnimation
     from PySide6.QtGui import QColor, QPainter
-    from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+    from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QVBoxLayout, QWidget
 
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     FLAGS = (Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
@@ -114,6 +149,39 @@ def _toast_class():
         def paintEvent(self, _event):
             painter = QPainter(self)
             painter.fillRect(self.rect(), QColor(6, 8, 12))
+            painter.end()
+
+    class Progress(QWidget):
+        """A thin bar that glides to each step's value."""
+
+        def __init__(self):
+            super().__init__()
+            self.setFixedHeight(4)
+            self.value = 0.0
+            self._animation = QVariantAnimation(self)
+            self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._animation.valueChanged.connect(self._set)
+
+        def _set(self, value):
+            self.value = float(value)
+            self.update()
+
+        def glide(self, target, ms=520):
+            self._animation.stop()
+            self._animation.setStartValue(self.value)
+            self._animation.setEndValue(float(target))
+            self._animation.setDuration(ms)
+            self._animation.start()
+
+        def paintEvent(self, _event):
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 22))
+            painter.drawRoundedRect(QRectF(self.rect()), 2, 2)
+            if self.value > 0:
+                painter.setBrush(QColor(74, 159, 216))
+                painter.drawRoundedRect(QRectF(0, 0, self.width() * min(1.0, self.value), self.height()), 2, 2)
             painter.end()
 
     class ImportShade:
@@ -146,22 +214,40 @@ def _toast_class():
             title.setObjectName("shadeTitle")
             name = QLabel(deck_name or "Shared deck")
             name.setObjectName("shadeName")
-            self.step = QLabel("Starting…")
+            self.step = QLabel("Saved to the monitor · opening Pokémon TCG Live…")
             self.step.setObjectName("shadeStep")
+            self._step_fx = QGraphicsOpacityEffect(self.step)
+            self._step_fx.setOpacity(1.0)
+            self.step.setGraphicsEffect(self._step_fx)
+            self._step_fade = QVariantAnimation(self.card)
+            self._step_fade.valueChanged.connect(lambda v: self._step_fx.setOpacity(float(v)))
+            self._after_fade = None
+            self._step_fade.finished.connect(self._faded)
+            self._next_step = None
+            self.bar = Progress()
+            self.bar.value = 0.04
             hint = QLabel("Please don't use the mouse or keyboard until it's done  ·  Esc stops")
             hint.setObjectName("shadeHint")
-            for label in (title, name, self.step, hint):
-                box.addWidget(label)
+            for widget in (title, name, self.step):
+                box.addWidget(widget)
+            box.addSpacing(4)
+            box.addWidget(self.bar)
+            box.addSpacing(2)
+            box.addWidget(hint)
+            self.card.setMinimumWidth(460)  # steps change length; the card shouldn't jump
             self._hwnd = None
 
         def show_over(self, hwnd):
             import ptcgl_import
             self._hwnd = hwnd
             for widget in (self.dim, self.card):
+                widget.setWindowOpacity(0.0)
                 widget.show()
                 if not exclude_from_capture(widget):
                     ptcgl_import.hide_during_capture(int(widget.winId()))
             self._place()
+            fade(self.dim, 0.0, 0.45, 260)
+            fade(self.card, 0.0, 0.96, 320)
 
         def _place(self):
             try:
@@ -176,9 +262,42 @@ def _toast_class():
             cw, ch = int(hint.width() * ratio), int(hint.height() * ratio)
             place(self.card, x + (w - cw) // 2, y + (h - ch) // 2, cw, ch)
 
-        def say(self, message):
-            self.step.setText(message)
-            self._place()
+        def say(self, message, progress=None, ms=520):
+            """Cross-fade to the next step and move the bar along."""
+            self.bar.glide(step_progress(message, self.bar.value) if progress is None else progress, ms)
+            self._next_step = message
+            if self._step_fade.state() == QVariantAnimation.State.Running:
+                return  # the running fade picks up the newest message
+            self._fade_step(1.0, 0.0, 110, self._swap_step)
+
+        def _fade_step(self, start, end, ms, then=None):
+            self._step_fade.stop()
+            self._after_fade = then
+            self._step_fade.setStartValue(start)
+            self._step_fade.setEndValue(end)
+            self._step_fade.setDuration(ms)
+            self._step_fade.start()
+
+        def _faded(self):
+            then, self._after_fade = self._after_fade, None
+            if then is not None:
+                then()
+
+        def _swap_step(self):
+            self.step.setText(self._next_step or "")
+            self._place()  # a long message can widen the card
+            self._fade_step(0.0, 1.0, 170)
+
+        def finish(self, ok, message, then):
+            """Fill the bar, show the outcome for a moment, then fade away."""
+            self.step.setStyleSheet("" if ok else "color: rgb(239,143,143);")
+            self.say("Done" if ok else (message or "Stopped"), 1.0 if ok else self.bar.value, 300)
+
+            def away():
+                fade(self.dim, self.dim.windowOpacity(), 0.0, 260)
+                fade(self.card, self.card.windowOpacity(), 0.0, 260, lambda: (self.hide(), then()))
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(650 if ok else 1100, away)
 
         def hide(self):
             import ptcgl_import
@@ -336,59 +455,72 @@ def main(argv):
     relay = Relay()
     toast = None
 
-    def finish(saved_note, ok=None, message=""):
-        if toast is not None:
-            toast.hide()
+    MANUAL = "The list is on your clipboard: in Pokémon TCG Live open Decks → Create a deck → Import."
+
+    def finish(monitor_line, ok=None, message=""):
+        """The box comes back with one line per place the deck went."""
+        import html
         if ok is None:
-            text_out = saved_note + "The list is on your clipboard: in PTCGL open Decks → Create a deck → Import."
+            game_line = MANUAL
         elif ok:
-            text_out = saved_note + message
+            game_line = message.replace("Imported into Pokémon TCG Live", "imported")
         else:
-            text_out = (saved_note + message + " The list is on your clipboard: in PTCGL open Decks → "
-                        "Create a deck → Import.")
-        status.setText(text_out)
+            game_line = f"{message} {MANUAL}"
+        status.setText(f"<b>Monitor:</b> {html.escape(monitor_line)}<br>"
+                       f"<b>Pokémon TCG Live:</b> {html.escape(game_line)}")
         status.show()
         for widget in (name_field, to_game, rename):
             widget.setEnabled(False)
         cancel.hide()
         primary.setText("Done")
         primary.setEnabled(True)
-        dialog.show()
+        dialog.adjustSize()
+        if not dialog.isVisible():
+            dialog.setWindowOpacity(0.0)
+            dialog.show()
         dialog.raise_()
         dialog.activateWindow()
-        dialog.adjustSize()
+        fade(dialog, dialog.windowOpacity(), 1.0, 220)
 
     def do_import():
         nonlocal toast
         if primary.text() == "Done":
-            dialog.accept()
+            fade(dialog, 1.0, 0.0, 160, dialog.accept)
             return
         deck_name = name_field.text().strip()
         entry, had = import_list(text, deck_name)
         QGuiApplication.clipboard().setText(text)
-        saved_note = f"You already had this list ({entry['name']}). " if had else "Saved to your decklists. "
+        monitor_line = (f"you already had this list, as {entry['name']}." if had
+                        else f"saved as {entry['name']}.") + (
+                            f" Its deck page shows it once you play {deck_name}." if deck_name else "")
         if not (to_game.isChecked() and game_window.find_game_hwnd()):
-            finish(saved_note)
+            finish(monitor_line)
             return
         import threading
         import ptcgl_import
         primary.setEnabled(False)
-        dialog.hide()  # out of the way of the clicks
         toast = ImportShade(deck_name)
         relay.progress.connect(toast.say)
-        toast.show_over(game_window.find_game_hwnd())
-        relay.finished.connect(lambda ok, message: finish(saved_note, ok, message))
+        relay.finished.connect(lambda ok, message: toast.finish(ok, message,
+                                                                lambda: finish(monitor_line, ok, message)))
         importer = ptcgl_import.PTCGLImporter(text, deck_name if rename.isChecked() else None,
                                               status=relay.progress.emit)
-        threading.Thread(target=lambda: relay.finished.emit(*importer.run()), daemon=True).start()
+
+        def start():
+            dialog.hide()  # out of the way of the clicks
+            toast.show_over(game_window.find_game_hwnd())
+            threading.Thread(target=lambda: relay.finished.emit(*importer.run()), daemon=True).start()
+        fade(dialog, 1.0, 0.0, 180, start)
 
     primary.clicked.connect(do_import)
     buttons.addWidget(cancel)
     buttons.addWidget(primary)
     box.addLayout(buttons)
+    dialog.setWindowOpacity(0.0)
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()
+    fade(dialog, 0.0, 1.0, 220)
     # The app's loop, not dialog.exec(): the dialog hides while the import
     # drives the game, and hiding would end exec() (and this process).
     outcome = {}
