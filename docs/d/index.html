@@ -19,14 +19,15 @@
   main { max-width: 760px; margin: 0 auto; padding: 18px 16px 48px; }
   a { color: inherit; }
   header { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; white-space: nowrap; }
-  header .brand { text-decoration: none; display: block; min-width: 0; overflow: hidden; }
-  /* pixel logo: each letter pixel is two block characters; a wave washes through it */
-  .logo { margin: 0; font: 7px/1 var(--mono); letter-spacing: 0; white-space: pre; user-select: none;
-          height: 9em; overflow: hidden; }
-  .logo .px { color: var(--fg); }
-  .logo .wet { color: var(--accent); }
-  .logo .crest { color: var(--accent); opacity: .75; }
-  .logo .sea { color: var(--rule); }
+  header .brand { text-decoration: none; display: block; flex: 1; min-width: 0; overflow: hidden; }
+  /* logo: banner letters in block characters over a field of stray ASCII; a yellow beam sweeps across */
+  .logo { margin: 0; font: 3.5px/1 var(--mono); letter-spacing: 0; white-space: pre; user-select: none;
+          height: 7em; overflow: hidden; color: var(--fg); }
+  .logo .y { color: var(--accent); }
+  .logo .yd { color: var(--accent); opacity: .5; }
+  .logo .w { color: #fff6cf; }
+  .logo .r { color: var(--rule); }
+  .logo .d { color: var(--dim); }
   header nav a { color: var(--dim); text-decoration: none; margin-left: 14px; }
   header nav a:hover { color: var(--fg); }
   .rule { color: var(--rule); overflow: hidden; white-space: nowrap; user-select: none; }
@@ -218,59 +219,71 @@ function render(sections, name) {
   });
 }
 
-// ── logo: "PTCGL MONITOR" in a pixel font, a wave washing through it ──
+// ── logo: "PTCGL MONITOR" in a thin 5x6 pixel font drawn with block characters,
+// over a field of stray ASCII; a yellow beam sweeps through both ──
 const GLYPHS = {
-  P: ["###", "#.#", "###", "#..", "#.."], T: ["###", ".#.", ".#.", ".#.", ".#."], C: ["###", "#..", "#..", "#..", "###"],
-  G: ["###", "#..", "#.#", "#.#", "###"], L: ["#..", "#..", "#..", "#..", "###"], O: ["###", "#.#", "#.#", "#.#", "###"],
-  M: ["#...#", "##.##", "#.#.#", "#...#", "#...#"], N: ["#..#", "##.#", "#.##", "#..#", "#..#"],
-  I: ["###", ".#.", ".#.", ".#.", "###"], R: ["##.", "#.#", "##.", "#.#", "#.#"], " ": ["..", "..", "..", "..", ".."],
+  P: ["####.", "#...#", "#...#", "####.", "#....", "#...."], T: ["#####", "..#..", "..#..", "..#..", "..#..", "..#.."],
+  C: [".###.", "#...#", "#....", "#....", "#...#", ".###."], G: [".###.", "#....", "#....", "#..##", "#...#", ".###."],
+  L: ["#....", "#....", "#....", "#....", "#....", "#####"], M: ["#...#", "##.##", "#.#.#", "#...#", "#...#", "#...#"],
+  O: [".###.", "#...#", "#...#", "#...#", "#...#", ".###."], N: ["#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#"],
+  I: ["###", ".#.", ".#.", ".#.", ".#.", "###"], R: ["####.", "#...#", "#...#", "####.", "#..#.", "#...#"],
+  " ": ["..", "..", "..", "..", "..", ".."],
 };
 function startLogo() {
-  const pre = $("logo"), ROWS = 9, TOP = 2;  // letters sit on rows 2-6, the wave moves over all nine
-  const bits = Array.from({ length: ROWS }, () => []);
-  for (const ch of "PTCGL MONITOR") {
-    const g = GLYPHS[ch];
-    for (let y = 0; y < ROWS; y++) {
-      const row = y >= TOP && y < TOP + 5 ? g[y - TOP] + "." : ".".repeat(g[0].length + 1);
-      for (const b of row) bits[y].push(b === "#");
-    }
-  }
-  const width = bits[0].length - 1;
+  const pre = $("logo"), NAME = "PTCGL MONITOR", ROWS = 7;  // six letter rows and one for the shadow
+  const bits = Array.from({ length: 6 }, () => []);
+  for (const ch of NAME) GLYPHS[ch].forEach((line, y) => { for (const b of line + ".") bits[y].push(b === "#"); });
+  const W = (bits[0].length - 1) * 2;  // two characters per pixel keeps the pixels square
+  const ink = (sx, y) => y >= 0 && y < 6 && sx >= 0 && sx < W && bits[y][sx >> 1];
+  const STRAY = "./\\|-_:;+*=~^`',<>[]{}()?!#%&$@";
+  const SPARK = "#@%&$*+=";
+  const hash = (a, b, c) => { const v = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453; return v - Math.floor(v); };
+  let cols = W + 2;
+  const fit = () => {  // small letters (3.5px at most); stray ASCII runs on to the edge of the header
+    const room = pre.parentElement.clientWidth;
+    const size = Math.min(3.5, Math.floor(room / ((W + 2) * 0.6) * 10) / 10);
+    pre.style.fontSize = size + "px";
+    cols = Math.max(W + 2, Math.floor(room / (size * 0.62)));
+  };
   const draw = t => {
+    const period = 4.2, beam = ((t % period) / period) * (cols + 60) - 30;
     let html = "";
     for (let y = 0; y < ROWS; y++) {
       let run = "", cls = null;
-      const flush = () => { if (run) html += cls ? `<span class="${cls}">${run}</span>` : run; run = ""; };
-      for (let x = 0; x < width; x++) {
-        // water surface in half rows (0 = top); two waves so it doesn't look like a plain sine
-        const s = 2 * (4.6 + 2.6 * Math.sin(x * 0.17 - t * 2.1) + 0.9 * Math.sin(x * 0.41 + t * 1.3));
-        const half = Math.floor(s);
-        let c, k;
-        if (bits[y][x]) { c = "██"; k = 2 * y + 1 >= s ? "wet" : "px"; }
-        else if (half === 2 * y) { c = "▄▄"; k = "crest"; }
-        else if (half === 2 * y + 1) { c = "▁▁"; k = "crest"; }
-        else if (2 * y > s) { c = (x + y) % 2 ? "░░" : "  "; k = "sea"; }
-        else { c = "  "; k = null; }
-        if (k !== cls) { flush(); cls = k; }
-        run += c;
+      const put = (c, k) => {
+        if (k !== cls) { if (run) html += cls ? `<span class="${cls}">${run}</span>` : run; run = ""; cls = k; }
+        run += c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : c;
+      };
+      for (let sx = 0; sx < cols; sx++) {
+        const d = Math.abs(sx - beam - (y - 3) * 2.6);  // slanted beam
+        const flick = Math.floor(t * 9 + hash(sx, y, 3) * 9);
+        if (ink(sx, y)) {
+          if (d < 3) put(SPARK[Math.floor(hash(sx, y, flick) * SPARK.length)], "w");
+          else if (hash(sx, y, Math.floor(t * 2.5 + hash(sx, y, 5) * 4)) < 0.07) put(STRAY[Math.floor(hash(sx, y, flick) * STRAY.length)], d < 8 ? "y" : null);  // frayed strokes
+          else put("█", d < 8 ? "y" : null);
+        } else if (ink(sx - 1, y - 1) || ink(sx - 2, y - 1)) {
+          put("░", d < 8 ? "yd" : "d");  // drop shadow, one row down and to the right
+        } else {
+          // stray ASCII: sparse, each cell changing now and then; the beam lights it up
+          const slow = Math.floor(t * 0.7 + hash(sx, y, 9) * 5);
+          const dense = sx < W + 4 ? 0.2 : 0.26;
+          if (hash(sx, y, slow) < dense || d < 2.2 && hash(sx, y, flick) < 0.35) {
+            put(STRAY[Math.floor(hash(sx, y, slow + 7) * STRAY.length)], d < 3 ? "y" : d < 9 ? "yd" : "d");
+          } else put(" ", cls);
+        }
       }
-      flush();
+      if (run) html += cls ? `<span class="${cls}">${run}</span>` : run;
       if (y < ROWS - 1) html += "\n";
     }
     pre.innerHTML = html;
   };
-  // the logo shrinks to the room the header leaves it (7px at most)
-  const fit = () => {
-    const room = pre.closest("header").clientWidth - pre.closest("header").querySelector("nav").offsetWidth - 12;
-    pre.style.fontSize = Math.min(7, Math.floor(room / (width * 2 * 0.6) * 10) / 10) + "px";
-  };
-  addEventListener("resize", fit);
-  draw(1.2);
   fit();
+  addEventListener("resize", fit);
+  draw(1.5);
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   let last = 0;
   const tick = now => {
-    if (now - last > 66) { last = now; draw(now / 1000); }  // ~15 fps is plenty for ASCII
+    if (now - last > 33) { last = now; draw(now / 1000); }
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
