@@ -59,6 +59,28 @@ def register():
     return True
 
 
+_box_lock = None
+
+
+def first_box_for(link):
+    """False when an import box for this link is already open (a named
+    mutex per link, held until this process ends)."""
+    global _box_lock
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    import hashlib
+    name = "PTCGLMonitorDeckLink_" + hashlib.sha1(link.strip().split("~", 1)[0].encode()).hexdigest()[:16]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    handle = kernel32.CreateMutexW(None, False, name)
+    if handle and ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+        return False
+    _box_lock = handle
+    return True
+
+
 def import_list(text, name):
     """Save to the app's decklists (named `name` when it's new) and link it
     to the deck called `name`, so that deck's page in the monitor shows the
@@ -313,6 +335,9 @@ def main(argv):
     except Exception:
         pass
     link = argv[1] if len(argv) > 1 else (QGuiApplication.clipboard().text() or "")
+    if not first_box_for(link):
+        return 0  # this deck's box is already open (copied and clicked, say)
+    deck_share.remember_seen(link)  # the clipboard watch won't offer it again
 
     dialog = QDialog()
     dialog.setWindowTitle("Shared deck")

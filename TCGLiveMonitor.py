@@ -567,21 +567,31 @@ class Monitor:
             self.automation = None
 
     # ── clipboard ──
-    def handle_clipboard(self, text):
-        # A shared deck link copied from a chat (works even when the web
-        # page is down): open the import box. Links you made yourself are skipped.
+    def handle_link(self, text):
+        """A shared deck link copied while the game is open (the backup to
+        clicking it): offer the import box. The deck is decoded from the link
+        itself, so this works even when the web page is down. Asked once per
+        link; links you made yourself are skipped. True when `text` was a link."""
         try:
             import deck_share
-            if deck_share.looks_like_link(text):
-                if not deck_share.is_own_link(text):
-                    import ui_restart
-                    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                    subprocess.Popen([ui_restart.gui_python(), os.path.join(BASE_DIR, "deck_link.py"), text.strip()],
-                                     cwd=BASE_DIR, creationflags=flags, close_fds=True)
-                    log("Shared deck link on the clipboard: opened the import box.")
-                return
+            if not deck_share.looks_like_link(text):
+                return False
+            if not deck_share.is_own_link(text) and not deck_share.was_offered(text):
+                deck_share.parse(text)  # a damaged link opens nothing
+                deck_share.remember_seen(text)
+                import ui_restart
+                flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                subprocess.Popen([ui_restart.gui_python(), os.path.join(BASE_DIR, "deck_link.py"), text.strip()],
+                                 cwd=BASE_DIR, creationflags=flags, close_fds=True)
+                log("Shared deck link on the clipboard: opened the import box.")
+            return True
         except Exception as exc:
             log(f"Deck link handling failed: {exc}")
+            return True
+
+    def handle_clipboard(self, text):
+        if self.handle_link(text):
+            return
         # Your own deck exported from PTCGL (Export → Copy to clipboard):
         # remembered for the In Person tab's "Print your decklist".
         try:

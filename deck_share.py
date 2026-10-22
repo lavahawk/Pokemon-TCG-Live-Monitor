@@ -206,30 +206,53 @@ def parse(link):
 OWN_FILE = os.path.join(BASE_DIR, ".own_share_links")
 
 
-def remember_own(link):
-    """Note a link this app made, so copying it doesn't open the import box."""
-    try:
-        token = link.split("#", 1)[1].split("~", 1)[0]
-        known = _own_tokens()[-49:] + [token]
-        with open(OWN_FILE, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(known))
-    except (OSError, IndexError):
-        pass
+SEEN_FILE = os.path.join(BASE_DIR, ".seen_share_links")
 
 
-def _own_tokens():
+def _token(link):
+    return link.strip().split("#", 1)[1].split("~", 1)[0]
+
+
+def _tokens(path):
     try:
-        with open(OWN_FILE, "r", encoding="utf-8") as handle:
+        with open(path, "r", encoding="utf-8") as handle:
             return [line.strip() for line in handle if line.strip()]
     except OSError:
         return []
 
 
-def is_own_link(link):
+def _remember(path, link):
     try:
-        return link.strip().split("#", 1)[1].split("~", 1)[0] in _own_tokens()
+        known = [t for t in _tokens(path) if t != _token(link)][-49:] + [_token(link)]
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(known))
+    except (OSError, IndexError):
+        pass
+
+
+def _known(path, link):
+    try:
+        return _token(link) in _tokens(path)
     except IndexError:
         return False
+
+
+def remember_own(link):
+    """Note a link this app made, so copying it doesn't open the import box."""
+    _remember(OWN_FILE, link)
+
+
+def is_own_link(link):
+    return _known(OWN_FILE, link)
+
+
+def remember_seen(link):
+    """Note a link whose import box was offered, so the clipboard watch asks once."""
+    _remember(SEEN_FILE, link)
+
+
+def was_offered(link):
+    return _known(SEEN_FILE, link)
 
 
 def looks_like_link(text):

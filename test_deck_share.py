@@ -172,6 +172,43 @@ def test_import_links_the_list_to_the_deck():
             D.STORE_FILE = saved
 
 
+def test_copied_link_is_offered_once_and_own_links_never():
+    """The monitor's clipboard watch: someone else's link opens the import box
+    once; your own links and damaged links never (temp files, no box opens)."""
+    import tempfile
+    import TCGLiveMonitor as M
+    saved = (S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen)
+    opened = []
+    with tempfile.TemporaryDirectory() as tmp:
+        S.OWN_FILE, S.SEEN_FILE = os.path.join(tmp, "own"), os.path.join(tmp, "seen")
+        M.subprocess.Popen = lambda args, **kw: opened.append(args[-1])
+        try:
+            monitor = M.Monitor.__new__(M.Monitor)
+            theirs = S.share_url(LIST, "Gengar Testing")
+            mine = S.share_url(LIST.replace("2 Haunter MEP 27", "3 Haunter MEP 27"), "Mine")
+            S.remember_own(mine)
+            assert monitor.handle_link(theirs) and opened == [theirs]
+            assert monitor.handle_link(theirs) and opened == [theirs]  # asked once
+            assert monitor.handle_link(mine) and opened == [theirs]  # yours: skipped
+            assert monitor.handle_link(S.WEB_BASE + "#azzzz~x") and opened == [theirs]  # damaged
+            assert not monitor.handle_link("just some text")
+        finally:
+            S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen = saved
+
+
+def test_one_import_box_per_link():
+    import deck_link
+    link = S.share_url(LIST, "Lock test")
+    assert deck_link.first_box_for(link)
+    if sys.platform == "win32":
+        # another process (the second box) finds this link's mutex taken
+        import subprocess
+        code = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[2]); import deck_link; "
+                               "sys.exit(0 if deck_link.first_box_for(sys.argv[1]) else 3)",
+                               link, os.path.dirname(os.path.abspath(__file__))]).returncode
+        assert code == 3, code
+
+
 def test_import_progress_only_moves_forward():
     import deck_link
     value = deck_link.step_progress("Opening Decks…")
