@@ -3314,13 +3314,43 @@ class TitleBarButton(QPushButton):
         painter.end()
 
 
+class ResizeGhost(QWidget):
+    """The outline of a window's new size while a top or left edge is dragged."""
+
+    def __init__(self):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                         | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        p.setPen(QPen(QColor(74, 159, 216, 230), 2))
+        p.setBrush(QColor(10, 14, 20, 70))
+        p.drawRoundedRect(rect, 12, 12)
+        font = QFont(theme.family("ui"), 10)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor(230, 238, 246, 220))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{self.width()} × {self.height()}")
+        p.end()
+
+
 class FramelessChrome(QObject):
     """Moves and resizes a frameless window.
 
     Drag the title bar or the empty strip beside the tabs to move; drag any
     edge or the corner grip to resize; double-click the title bar (or F11) to
     expand. Uses the OS move/resize loop when available (smooth, multi-monitor
-    aware) and falls back to manual geometry updates."""
+    aware) and falls back to manual geometry updates.
+
+    A top or left edge moves the window's corner too, and on Windows a
+    translucent window redraws violently while that happens (the old picture
+    lands at the new position, then everything repaints). So those edges
+    drag an outline (ResizeGhost) and the window resizes once, on release."""
 
     EDGE = 7
 
@@ -3429,16 +3459,21 @@ class FramelessChrome(QObject):
 
     def begin_resize(self, edges, global_pos):
         win = self.window
+        if Qt.Edge.LeftEdge in edges or Qt.Edge.TopEdge in edges:
+            self.manual = ("ghost", edges, global_pos, QRect(win.geometry()))
+            ghost = getattr(self, "_ghost", None) or ResizeGhost()
+            self._ghost = ghost
+            ghost.setGeometry(win.geometry())
+            ghost.show()
+            ghost.raise_()
+            return
         handle = win.windowHandle()
         if handle is not None and handle.startSystemResize(edges):
             return
         self.manual = ("resize", edges, global_pos, QRect(win.geometry()))
 
-    def _manual_update(self, global_pos):
+    def _resized_rect(self, global_pos):
         win = self.window
-        if self.manual[0] == "move":
-            win.move(global_pos - self.manual[1])
-            return
         _, edges, start, geo = self.manual
         delta = global_pos - start
         left, top, right, bottom = geo.left(), geo.top(), geo.right(), geo.bottom()
@@ -3450,7 +3485,23 @@ class FramelessChrome(QObject):
             top = min(top + delta.y(), bottom - win.minimumHeight() + 1)
         if Qt.Edge.BottomEdge in edges:
             bottom = max(bottom + delta.y(), top + win.minimumHeight() - 1)
-        win.setGeometry(QRect(QPoint(left, top), QPoint(right, bottom)))
+        return QRect(QPoint(left, top), QPoint(right, bottom))
+
+    def _manual_update(self, global_pos):
+        win = self.window
+        if self.manual[0] == "move":
+            win.move(global_pos - self.manual[1])
+        elif self.manual[0] == "ghost":
+            self._ghost.setGeometry(self._resized_rect(global_pos))
+        else:
+            win.setGeometry(self._resized_rect(global_pos))
+
+    def _finish_manual(self, global_pos):
+        if self.manual[0] == "ghost":
+            rect = self._resized_rect(global_pos)
+            self._ghost.hide()
+            self.window.setGeometry(rect)  # one resize, not one per mouse move
+        self.manual = None
 
     def eventFilter(self, obj, event):
         et = event.type()
@@ -3459,10 +3510,13 @@ class FramelessChrome(QObject):
             return False
         if self.manual is not None:
             if et == QEvent.Type.MouseMove:
+                if self.manual[0] == "ghost" and not (event.buttons() & Qt.MouseButton.LeftButton):
+                    self._finish_manual(event.globalPosition().toPoint())  # released outside: settle here
+                    return True
                 self._manual_update(event.globalPosition().toPoint())
                 return True
             if et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
-                self.manual = None
+                self._finish_manual(event.globalPosition().toPoint())
                 save = getattr(self.window, "save_window_geometry", None)
                 if save is not None:
                     save()
