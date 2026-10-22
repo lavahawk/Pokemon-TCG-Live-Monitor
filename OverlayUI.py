@@ -18,7 +18,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize, QRectF
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize, QRectF, QPoint, QPointF
 from PySide6.QtGui import QPixmap, QPainter, QColor, QImage
 from BattleDatabase import BattleDatabase
 
@@ -213,6 +213,44 @@ def create_pokeball_icon(ball_type="poke", dpr=1.0, angle=0.0):
     pixmap = QPixmap.fromImage(big)
     pixmap.setDevicePixelRatio(max(1.0, dpr))
     return pixmap
+
+
+class PixelBall(QLabel):
+    """The mini GUI's ball: paints its pixel art itself, at whole screen
+    pixels (a QLabel centring a pixmap can land it between pixels at 150 %
+    and smear it), centred on the capitals of the text beside it."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pix = None
+        self._y = 0.0
+
+    def set_ball(self, pix, text_label):
+        """Show `pix` centred on `text_label`'s capitals; this label is as
+        tall as the text label, so the layout lines both up alike."""
+        from PySide6.QtGui import QFontMetricsF
+        text_label.ensurePolished()  # its stylesheet font, not the default
+        fm = QFontMetricsF(text_label.font())
+        height = text_label.height() if text_label.height() > 1 else int(math.ceil(fm.height()))
+        ratio = pix.devicePixelRatio() or 1.0
+        width = int(math.ceil(pix.width() / ratio - 0.01))
+        caps_middle = (height - fm.height()) / 2.0 + fm.ascent() - fm.capHeight() / 2.0  # QLabel centres its line
+        self._pix, self._y = pix, caps_middle - pix.height() / ratio / 2.0
+        if (self.width(), self.height()) != (width, height):
+            self.setFixedSize(width, height)
+        self.update()
+
+    def paintEvent(self, _event):
+        if self._pix is None:
+            return
+        dpr = self.devicePixelRatioF() or 1.0
+        origin = self.mapTo(self.window(), QPoint(0, 0))
+        x = round(origin.x() * dpr) / dpr - origin.x()  # snap to the window's screen pixels
+        y = round((origin.y() + self._y) * dpr) / dpr - origin.y()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        p.drawPixmap(QPointF(x, y), self._pix)
+        p.end()
 
 
 def get_league_from_elo(elo):
@@ -695,14 +733,9 @@ class MinimalOverlay(QWidget):
         timer.start()
 
     def _set_ball(self, angle=0.0):
-        """The league's pixel-art ball; the label takes the art's size (a whole
-        number of screen pixels per art pixel: exactly 12 at 150 %)."""
+        """The league's pixel-art ball, centred on the stats text's capitals."""
         pix = create_pokeball_icon(getattr(self, "_ball_league", "poke"), self.ball_icon.devicePixelRatioF(), angle)
-        ratio = pix.devicePixelRatio() or 1.0
-        size = (math.ceil(pix.width() / ratio - 0.01), math.ceil(pix.height() / ratio - 0.01))
-        if (self.ball_icon.width(), self.ball_icon.height()) != size:
-            self.ball_icon.setFixedSize(*size)
-        self.ball_icon.setPixmap(pix)
+        self.ball_icon.set_ball(pix, self.stats_label)
 
     def _poll_manual_mode_notice(self, anchor):
         """Once per launch, when the mini GUI is placed: no OpenAI key (or
@@ -1254,7 +1287,7 @@ class MinimalOverlay(QWidget):
         stats_layout.setSpacing(4)
         
         # Pokeball icon label
-        self.ball_icon = QLabel()
+        self.ball_icon = PixelBall()
         self.ball_icon.setFixedSize(12, 12)
         # Double-click the ball: recall / send out the HUD buddy (pet.py)
         self.ball_icon.mouseDoubleClickEvent = lambda e: self._on_ball_double_click()
