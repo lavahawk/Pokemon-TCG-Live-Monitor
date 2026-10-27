@@ -201,12 +201,12 @@ def _turned_ball(ball_type, angle):
     return out
 
 
-def create_pokeball_icon(ball_type="poke", dpr=1.0, angle=0.0):
+def create_pokeball_icon(ball_type="poke", dpr=1.0, angle=0.0, scale=1.0):
     """The league's ball as chunky pixel art: each art pixel is a whole block
     of screen pixels (2x2 at 150 %), never smoothed, about 12 logical px tall.
     angle: tilt in degrees (the shake of a ball with something inside); it
     turns on its pixel grid (_turned_ball), so it stays pixel art."""
-    block = max(1, int(round(12 * dpr / len(BALL_ART))))
+    block = max(1, int(round(12 * scale * dpr / len(BALL_ART))))
     art = _turned_ball(ball_type, angle)
     big = art.scaled(art.width() * block, art.height() * block, Qt.AspectRatioMode.IgnoreAspectRatio,
                      Qt.TransformationMode.FastTransformation)
@@ -738,7 +738,7 @@ class MinimalOverlay(QWidget):
 
     def _set_ball(self, angle=0.0):
         """The league's pixel-art ball, centred on the stats text's capitals."""
-        pix = create_pokeball_icon(getattr(self, "_ball_league", "poke"), self.ball_icon.devicePixelRatioF(), angle)
+        pix = create_pokeball_icon(getattr(self, "_ball_league", "poke"), self.ball_icon.devicePixelRatioF(), angle, self._hud_scale)
         self.ball_icon.set_ball(pix, self.stats_label)
 
     def _poll_manual_mode_notice(self, anchor):
@@ -1260,6 +1260,8 @@ class MinimalOverlay(QWidget):
         """Initialize minimal UI"""
         # Window properties - clickable but stays on top
         self.setWindowTitle("TCG Monitor")
+        from app_settings import get_scale
+        self._hud_scale = get_scale("hud_scale")  # Settings -> HUD size; read at start
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | 
             Qt.WindowType.WindowStaysOnTopHint |
@@ -1277,8 +1279,9 @@ class MinimalOverlay(QWidget):
         
         # Container layout
         layout = QVBoxLayout(self.container)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(2)
+        k = self._hud_scale
+        layout.setContentsMargins(round(6 * k), round(4 * k), round(6 * k), round(4 * k))
+        layout.setSpacing(round(2 * k))
 
         # The Limitless match chat lives in its own standalone window
         # (LimitlessChatWindow) positioned ABOVE this mini GUI — it is fully
@@ -1288,11 +1291,11 @@ class MinimalOverlay(QWidget):
         # Stats display with pokeball icon
         stats_layout = QHBoxLayout()
         stats_layout.setContentsMargins(0, 0, 0, 0)
-        stats_layout.setSpacing(4)
+        stats_layout.setSpacing(round(4 * k))
         
         # Pokeball icon label
         self.ball_icon = PixelBall()
-        self.ball_icon.setFixedSize(12, 12)
+        self.ball_icon.setFixedSize(round(12 * k), round(12 * k))
         # Double-click the ball: recall / send out the HUD buddy (pet.py)
         self.ball_icon.mouseDoubleClickEvent = lambda e: self._on_ball_double_click()
         stats_layout.addWidget(self.ball_icon)
@@ -1307,7 +1310,7 @@ class MinimalOverlay(QWidget):
         # Small arrow indicator (clickable)
         self.arrow_label = QLabel("▲")
         self.arrow_label.setObjectName("arrow")
-        self.arrow_label.setFixedSize(10, 12)
+        self.arrow_label.setFixedSize(round(10 * k), round(12 * k))
         self.arrow_label.mousePressEvent = lambda e: self.toggle_stats_dashboard()
         stats_layout.addWidget(self.arrow_label)
         
@@ -1321,6 +1324,7 @@ class MinimalOverlay(QWidget):
     
     def apply_style(self):
         """Apply minimal, professional styling"""
+        k = self._hud_scale
         self.setStyleSheet("""
             QWidget {
                 background-color: #141414;
@@ -1333,20 +1337,20 @@ class MinimalOverlay(QWidget):
             QLabel#stats {
                 color: #DCDCDC;
                 font-family: 'Segoe UI', Arial;
-                font-size: 11px;
+                font-size: %dpx;
                 font-weight: 500;
                 background-color: transparent;
             }
             QLabel#arrow {
                 color: #C8C8C8;
                 font-family: 'Segoe UI', Arial;
-                font-size: 9px;
+                font-size: %dpx;
                 background-color: transparent;
             }
             QLabel#arrow:hover {
                 color: #FFFFFF;
             }
-        """)
+        """ % (round(11 * k), round(9 * k)))
     
     def load_stats(self):
         """Load stats from database and files"""

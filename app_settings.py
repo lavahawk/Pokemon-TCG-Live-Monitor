@@ -16,7 +16,12 @@ DEFAULT_SETTINGS = {
     # Replace both player usernames with placeholders before a battle log is
     # sent to OpenAI (SEC-09). Local parsing always sees the real names.
     "ai_anonymize_names": True,
+    # Size for high-resolution screens, in percent (SCALE_CHOICES): the mini
+    # GUI overlay, and the text of every window. Read when the UI starts.
+    "hud_scale": 100,
+    "text_scale": 100,
 }
+SCALE_CHOICES = (100, 125, 150, 175, 200)
 
 
 def _read_text_file(path):
@@ -138,3 +143,12 @@ def is_local_only_mode():
 
 def is_ai_anonymize_names():
     return bool(load_app_settings().get("ai_anonymize_names", True))
+
+
+def get_scale(key):
+    """hud_scale / text_scale as a factor (1.0 = 100 %); bad values mean 1.0."""
+    try:
+        pct = int(load_app_settings().get(key, 100))
+    except (TypeError, ValueError):
+        return 1.0
+    return pct / 100.0 if pct in SCALE_CHOICES else 1.0

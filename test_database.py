@@ -236,6 +236,21 @@ def test_deck_queries():
     assert db.get_all_time_stats() == (5, 2, 2, 120, 100)
 
 
+def test_rename_and_merge_deck():
+    db = fresh()
+    db.add_battle("Dragapult", "X", "WIN", log_hash="a")
+    db.add_battle("Dragapult", "Y", "LOSS", log_hash="b")
+    db.add_battle("Dragpult", "Z", "WIN", log_hash="c")
+    db.add_rank_update(10, "Dragpult")
+    assert db.rename_deck("Dragapult", "Dragapult ex") == 2  # plain rename
+    assert db.rename_deck("Dragpult", "Dragapult ex") == 1  # merge into existing
+    assert rows(db, "SELECT COUNT(*) FROM battles WHERE my_deck = 'Dragapult ex'") == [(3,)]
+    assert rows(db, "SELECT COUNT(*) FROM battles WHERE my_deck IN ('Dragapult', 'Dragpult')") == [(0,)]
+    assert rows(db, "SELECT deck_name FROM rank_history") == [("Dragapult ex",)]
+    assert db.rename_deck("Nope", "Other") == 0
+    assert db.rename_deck("Dragapult ex", "  ") == 0
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

@@ -185,6 +185,23 @@ def link_decklist(deck_name, lid):
     _save(data)
 
 
+def move_deck_links(old, new):
+    """Deck `old` was renamed or merged into `new`: its list link follows
+    (an existing link on `new` wins)."""
+    if not old or not new or old == new:
+        return
+    data = _load()
+    for key in ("links", "auto_links"):
+        table = data.get(key) or {}
+        if old in table:
+            lid = table.pop(old)
+            table.setdefault(new, lid)
+    for entry in data.get("lists") or []:
+        if entry.get("menu_deck") == old:
+            entry["menu_deck"] = new
+    _save(data)
+
+
 def decklist_for_deck(deck_name):
     """The list linked to a deck, else the newest list exported while that
     deck was on the menu, else None."""
@@ -381,6 +398,10 @@ def spelled_name(name):
 
 def card_image_url(set_code, number):
     code = IMAGE_SET_CODES.get(set_code.upper(), set_code.upper())
+    gallery = re.fullmatch(r"(\w+)-(TG|GG)", code)  # Trainer/Galarian Gallery: LOR-TG 24 -> LOR/LOR_TG24, unpadded
+    if gallery:
+        code = gallery.group(1)
+        return CARD_IMAGE_URL.format(code=code, number=f"{gallery.group(2)}{number}")
     digits = re.match(r"\d+", str(number))
     padded = f"{int(digits.group()):03d}{str(number)[digits.end():]}" if digits else str(number)
     return CARD_IMAGE_URL.format(code=code, number=padded)
