@@ -19,8 +19,8 @@ import time
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, Signal, QVariantAnimation, QEasingCurve
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QFont, QFontMetrics, QFontDatabase
-from PySide6.QtWidgets import QApplication, QWidget, QScrollArea, QSizePolicy, QStyledItemDelegate, QStyle
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QFont, QFontMetrics, QFontDatabase, QPixmap
+from PySide6.QtWidgets import QApplication, QWidget, QScrollArea, QSizePolicy, QStyledItemDelegate, QStyle, QHeaderView
 
 
 TEXT = QColor(226, 235, 246, 150)
@@ -933,6 +933,21 @@ MATCHUP_UNFAVOURED = QColor("#b03a3a")
 MATCHUP_NEUTRAL = QColor("#2c3038")
 MATCHUP_SPAN = 0.20       # 50% +- this reaches the full pole colour
 MATCHUP_CONFIDENT = 40    # games at which a cell gets most of its colour
+MATCHUP_SURE_WIDTH = 0.20  # a 90% range wider than this is "not sure yet": range + stripes
+
+
+def _paint_stripes(painter, rect, color, gap=6.0):
+    """Diagonal (45 degree) stripes inside a rounded rect: the "not sure yet" mark."""
+    path = QPainterPath()
+    path.addRoundedRect(rect, 4, 4)
+    painter.save()
+    painter.setClipPath(path)
+    painter.setPen(QPen(color, 1.6))
+    x = rect.left() - rect.height()
+    while x < rect.right():
+        painter.drawLine(QPointF(x, rect.bottom()), QPointF(x + rect.height(), rect.top()))
+        x += gap
+    painter.restore()
 
 
 def _mix(a, b, t):
@@ -953,8 +968,9 @@ def matchup_color(edge, games):
 class MatchupCellDelegate(QStyledItemDelegate):
     """Paints one matchup cell: the result rate large, the W-L-T record small
     underneath, on its diverging colour with a 2px surface gap between cells.
-    The item's UserRole holds {"rate", "record", "edge", "games", "thin", "mirror"}
-    (None = no games)."""
+    A cell whose 90% range is too wide to call shows the range instead, over
+    stripes. The item's UserRole holds {"rate", "low", "high", "unsure",
+    "record", "edge", "games", "mirror"} (None = no games)."""
 
     def paint(self, painter, option, index):
         info = index.data(Qt.ItemDataRole.UserRole)
@@ -974,29 +990,160 @@ class MatchupCellDelegate(QStyledItemDelegate):
             fill = QColor(255, 255, 255, 10)
         else:
             fill = matchup_color(info["edge"], info["games"])
-        painter.setPen(QPen(QColor(255, 255, 255, 150), 1.2) if hovered else Qt.PenStyle.NoPen)
+        unsure = info.get("unsure") and not info.get("mirror")
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(fill)
         painter.drawRoundedRect(cell, 4, 4)
+        if unsure:
+            _paint_stripes(painter, cell, QColor(255, 255, 255, 34))
+        if hovered:
+            painter.setPen(QPen(QColor(255, 255, 255, 150), 1.2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(cell, 4, 4)
 
         big = QFont(option.font)
-        big.setPixelSize(13)
+        big.setPixelSize(11 if unsure else 13)
         big.setBold(True)
         small = QFont(option.font)
         small.setPixelSize(9)
         fm_big, fm_small = QFontMetrics(big), QFontMetrics(small)
         top = cell.center().y() - (fm_big.height() + fm_small.height()) / 2
-        strong = QColor(244, 249, 255, 120 if info.get("thin") else 240)
-        soft = QColor(226, 235, 246, 90 if info.get("thin") else 170)
+        strong = QColor(244, 249, 255, 240)
+        soft = QColor(226, 235, 246, 170)
+        if info.get("mirror"):
+            headline = "mirror"
+        elif unsure:
+            headline = f"{info['low'] * 100:.0f}–{info['high'] * 100:.0f}%"
+        else:
+            headline = f"{info['rate'] * 100:.0f}%"
         painter.setFont(big)
         painter.setPen(strong if not info.get("mirror") else QColor(226, 235, 246, 140))
-        painter.drawText(QRectF(cell.left(), top, cell.width(), fm_big.height()), Qt.AlignmentFlag.AlignCenter,
-                         f"{info['rate'] * 100:.0f}%" if not info.get("mirror") else "mirror")
+        painter.drawText(QRectF(cell.left(), top, cell.width(), fm_big.height()), Qt.AlignmentFlag.AlignCenter, headline)
         painter.setFont(small)
         painter.setPen(soft)
         painter.drawText(QRectF(cell.left() + 2, top + fm_big.height(), cell.width() - 4, fm_small.height()),
                          Qt.AlignmentFlag.AlignCenter,
                          fm_small.elidedText(info.get("record", ""), Qt.TextElideMode.ElideRight, int(cell.width() - 4)))
         painter.restore()
+
+
+HEADER_PIXMAP_ROLE = Qt.ItemDataRole.UserRole + 20  # a header item's sprites, drawn at their real size
+
+
+class IconHeader(QHeaderView):
+    """Matrix header that draws each section's sprites (HEADER_PIXMAP_ROLE,
+    one or two side by side) at their real size - Qt's own header shrinks
+    icons to the style's small-icon size. Columns: sprites centred; rows:
+    sprites, then the deck name."""
+
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self.setSectionsClickable(False)
+
+    def paintSection(self, painter, rect, index):
+        painter.save()
+        painter.fillRect(rect, QColor(12, 17, 26))
+        model = self.model()
+        pix = model.headerData(index, self.orientation(), HEADER_PIXMAP_ROLE) if model else None
+        w = h = 0
+        if isinstance(pix, QPixmap) and not pix.isNull():
+            w, h = pix.width() / pix.devicePixelRatio(), pix.height() / pix.devicePixelRatio()
+        if self.orientation() == Qt.Orientation.Horizontal:
+            if w:
+                painter.drawPixmap(QPointF(rect.center().x() - w / 2 + 1, rect.center().y() - h / 2 + 1), pix)
+        else:
+            x = rect.left() + 8
+            if w:
+                painter.drawPixmap(QPointF(x, rect.center().y() - h / 2 + 1), pix)
+                x += w + 6
+            text = model.headerData(index, self.orientation(), Qt.ItemDataRole.DisplayRole) if model else ""
+            color = model.headerData(index, self.orientation(), Qt.ItemDataRole.ForegroundRole) if model else None
+            painter.setPen(color.color() if hasattr(color, "color") else QColor(220, 230, 244, 220))
+            painter.setFont(self.font())
+            painter.drawText(QRectF(x, rect.top(), rect.right() - x - 4, rect.height()),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             QFontMetrics(self.font()).elidedText(str(text or ""), Qt.TextElideMode.ElideRight,
+                                                                  int(rect.right() - x - 4)))
+        painter.restore()
+
+
+# The matchup hover card: the two decks at either end of a range bar.
+CARD_FAVOURED = QColor("#3987e5")    # left (row) deck ahead: band leans its way, blue as in the grid
+CARD_UNFAVOURED = QColor("#e66767")  # right (column) deck ahead
+
+
+def matchup_card(left, right, record, low, mid, high, par=0.5, unsure=False, dpr=1.0, width=320):
+    """A pixmap: left deck (sprites + name) and right deck at the two ends,
+    a bar between them where the dot and the 90% range sit toward whichever
+    deck wins it (the left deck's win chance runs from the right end, 0%,
+    to the left end, 100%), a white tick at even, the left deck's W-L-T and
+    the range printed under the bar. left / right = (name, [sprite pixmaps])."""
+    font = chart_font()
+    bold = QFont(font)
+    bold.setBold(True)
+    fm, fm_b = QFontMetrics(font), QFontMetrics(bold)
+    height = 30 + 22 + fm.height() + 2
+    pix = QPixmap(round(width * dpr), round(height * dpr))
+    pix.setDevicePixelRatio(dpr)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    def deck(side, name, sprites):
+        x = 0.0 if side == "left" else float(width)
+        sprites = [s for s in sprites if s is not None and not s.isNull()][:2]
+        widths = [s.width() / s.devicePixelRatio() for s in sprites]
+        if side == "right":
+            sprites, widths = sprites[::-1], widths[::-1]
+        for sp, sw in zip(sprites, widths):
+            sx = x if side == "left" else x - sw
+            p.drawPixmap(QPointF(sx, 13 - sp.height() / sp.devicePixelRatio() / 2), sp)
+            x = x + sw + 1 if side == "left" else x - sw - 1
+        room = width / 2 - (widths and sum(widths) or 0) - 10
+        text = fm_b.elidedText(name, Qt.TextElideMode.ElideRight, int(room))
+        p.setFont(bold)
+        p.setPen(TEXT_STRONG)
+        tx = x + 4 if side == "left" else x - 4 - fm_b.horizontalAdvance(text)
+        p.drawText(QRectF(tx, 13 - fm_b.height() / 2, fm_b.horizontalAdvance(text) + 2, fm_b.height()),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+
+    deck("left", *left)
+    deck("right", *right)
+
+    x0, x1, cy = 6.0, width - 6.0, 40.0
+
+    def x(v):  # the left deck's win chance -> position (100% at the left end)
+        return x0 + (1.0 - max(0.0, min(1.0, v))) * (x1 - x0)
+
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(255, 255, 255, 22))
+    p.drawRoundedRect(QRectF(x0, cy - 3, x1 - x0, 6), 3, 3)
+    lean = CARD_FAVOURED if mid >= par else CARD_UNFAVOURED
+    band = QRectF(x(high), cy - 3, max(3.0, x(low) - x(high)), 6)
+    color = QColor(lean)
+    color.setAlpha(110 if unsure else 200)
+    p.setBrush(color)
+    p.drawRoundedRect(band, 3, 3)
+    if unsure:
+        _paint_stripes(p, band.adjusted(0, -1, 0, 1), QColor(255, 255, 255, 70), gap=4.0)
+    p.setPen(QPen(QColor(255, 255, 255, 150), 1.2))
+    p.drawLine(QPointF(x(par), cy - 7), QPointF(x(par), cy + 7))
+    p.setPen(QPen(SURFACE, 1.5))
+    p.setBrush(lean)
+    p.drawEllipse(QPointF(x(mid), cy), 4.5, 4.5)
+
+    ty = cy + 9
+    p.setFont(font)
+    p.setPen(TEXT)
+    p.drawText(QRectF(0, ty, width / 2, fm.height()), Qt.AlignmentFlag.AlignLeft, record)
+    span = f"{low * 100:.0f}–{high * 100:.0f}%"
+    sw = fm_b.horizontalAdvance(span)
+    sx = min(max(band.center().x() - sw / 2, fm.horizontalAdvance(record) + 10), width - sw)
+    p.setFont(bold)
+    p.setPen(lean.lighter(125))
+    p.drawText(QRectF(sx, ty, sw + 2, fm_b.height()), Qt.AlignmentFlag.AlignLeft, span)
+    p.end()
+    return pix
 
 
 class MatchupLegend(QWidget):
@@ -1024,9 +1171,21 @@ class MatchupLegend(QWidget):
             tw = fm.horizontalAdvance(text)
             p.drawText(QRectF(x + at * w - tw / 2 if 0 < at < 1 else (x if at == 0 else x + w - tw), y + h + 1, tw + 2,
                               fm.height()), Qt.AlignmentFlag.AlignLeft, text)
+        # "Not sure yet" key: a striped swatch, as in the grid.
+        sx = x + w + 18
+        swatch = QRectF(sx, y - 2, 26, 14)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(MATCHUP_NEUTRAL)
+        p.drawRoundedRect(swatch, 3, 3)
+        _paint_stripes(p, swatch, QColor(255, 255, 255, 60), gap=5.0)
+        p.setPen(TEXT)
+        label = "range = not enough games to call it"
+        p.drawText(QRectF(sx + 32, 0, fm.horizontalAdvance(label) + 4, self.height()),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label)
         if self.note:
-            p.drawText(QRectF(x + w + 18, 0, self.width() - w - 22, self.height()),
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.note)
+            nx = sx + 32 + fm.horizontalAdvance(label) + 18
+            p.drawText(QRectF(nx, 0, max(0, self.width() - nx - 4), self.height()),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "·  " + self.note)
 
 
 # ── Rank per deck (deck page) ─────────────────────────────────────────────

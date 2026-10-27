@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGraphic
                                QHeaderView, QLabel, QVBoxLayout, QWidget)
 
 MORE = "<!--more-->"
+WHOLE = "<!--whole-->"  # never split: the whole tip shows on hover
 MAX_WIDTH = 320
 TICK_MS = 40
 EXPAND_MS = 180
@@ -42,6 +43,11 @@ def tip(summary, details=None):
     return f"{summary}{MORE}{details}" if details else summary
 
 
+def whole(text):
+    """Tip text that always shows in full on hover (no right-click step)."""
+    return WHOLE + text
+
+
 def _words(html):
     return len(_TAG.sub(" ", html or "").split())
 
@@ -49,6 +55,8 @@ def _words(html):
 def split(text):
     """(summary, details or '') for a tip's text."""
     text = (text or "").strip()
+    if text.startswith(WHOLE):
+        return text[len(WHOLE):].strip(), ""
     if MORE in text:
         head, _, tail = text.partition(MORE)
         return head.strip(), tail.strip()

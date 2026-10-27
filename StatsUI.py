@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QButtonGroup, QListView, QSpinBox
 )
 from PySide6.QtCore import Qt, QTimer, QEasingCurve, QThread, Signal, QSize, QObject, QPoint, QEvent, QRectF, QPointF, QRect
-from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QIcon, QCursor, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QIcon, QCursor, QGuiApplication, QKeySequence, QShortcut, QImage
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QSizePolicy, QAbstractItemView
 from BattleDatabase import BattleDatabase
 from weights import cached_expansions, load_weights, save_weights, DEFAULT_WEIGHTS, LABELS as WEIGHT_LABELS
@@ -54,7 +54,8 @@ from deck_analytics import (
     verdict_from_probability,
     win_rate_posterior,
 )
-from charts import SeriesChart, TrendChart, MAX_SERIES, series_style, MatchupCellDelegate, MatchupLegend
+from charts import SeriesChart, TrendChart, MAX_SERIES, series_style, MatchupCellDelegate, MatchupLegend, MATCHUP_SURE_WIDTH
+from charts import IconHeader, HEADER_PIXMAP_ROLE, matchup_card
 from charts import deck_rank_points, deck_rank_summary, make_deck_rank_chart, WIN_COLOR, LOSS_COLOR
 import meta_trend
 import trainerhill_trend
@@ -223,6 +224,10 @@ TRAINERHILL_TOOLS = [
     ("Card Matchups", "dashboards/card-matchups/"),
     ("Bracket", "dashboards/bracket/"),
 ]
+ALL_META_SOURCES = ("online", "in_person", "japan")  # Meta tab Data toggles (meta_sources.ALL_SOURCES)
+# Meta archetype rows: what the search box matches (name, icon Pokemon, Pokemon in the lists).
+META_SEARCH_ROLE = Qt.ItemDataRole.UserRole + 8
+META_MATCH_ROLE = Qt.ItemDataRole.UserRole + 9  # that row's match tier for the current search (None = no match)
 STATS_WINDOW_STATE_FILE = os.path.join(BASE_DIR, ".stats_window_geometry.json")
 LIMITLESS_DASHBOARD_URL = "https://play.limitlesstcg.com/dashboard"
 LIMITLESS_LOGIN_URL = "https://play.limitlesstcg.com/login"
@@ -269,6 +274,37 @@ def _invert_str(value):
     if not value:
         return "\uffff"
     return "".join(chr(0xFFFF - ord(ch)) for ch in value)
+
+
+def _pixel_art_pixmap(source, size, dpr=1.0):
+    """A size x size (logical) pixmap of a pixel-art sprite that stays sharp:
+    trimmed to its opaque pixels and drawn at the screen's real resolution
+    (dpr), enlarged only by whole steps with hard edges. A sprite bigger than
+    the slot is shrunk smoothly instead (dropping pixels would break it up)."""
+    image = source.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    box = QRect()
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if image.pixelColor(x, y).alpha():
+                box = box.united(QRect(x, y, 1, 1))
+    if not box.isNull():
+        image = image.copy(box)
+    target = max(1, round(size * dpr))
+    side = max(image.width(), image.height())
+    if side <= target:
+        step = target // side
+        image = image.scaled(image.width() * step, image.height() * step,
+                             Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
+    else:
+        image = image.scaled(target, target, Qt.AspectRatioMode.KeepAspectRatio,
+                             Qt.TransformationMode.SmoothTransformation)
+    canvas = QPixmap(target, target)
+    canvas.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(canvas)
+    painter.drawImage((target - image.width()) // 2, (target - image.height()) // 2, image)
+    painter.end()
+    canvas.setDevicePixelRatio(dpr)
+    return canvas
 
 
 def _sprite_cache_path(sprite_name):
@@ -2986,6 +3022,27 @@ def _console_python():
 _RUNNING_THREADS = set()
 
 
+class MatchupItem(QTableWidgetItem):
+    """A matrix cell whose hover card is made the first time it's asked for
+    (tip_maker), since each one renders a small picture."""
+
+    tip_maker = None
+
+    def data(self, role):
+        if role == Qt.ItemDataRole.ToolTipRole and self.tip_maker is not None:
+            maker, self.tip_maker = self.tip_maker, None
+            self.setToolTip(maker())
+        return super().data(role)
+
+
+def _count_text(value):
+    """A game count: whole numbers plainly (1,234), weighted ones with a decimal (0.4)."""
+    value = float(value or 0)
+    if 0 < value < 0.05:
+        return "<0.1"
+    return f"{value:,.0f}" if abs(value - round(value)) < 0.05 else f"{value:,.1f}"
+
+
 def _ago(timestamp):
     """'just now', '25 min ago', '3 h ago', '2 days ago' (or '?')."""
     if not timestamp:
@@ -4828,10 +4885,12 @@ class StatsWindow(QWidget):
             details += f"<br><span style='color:#FFD54F'>▍</span> Limitless average: {limitless_wr * 100:.1f}%"
         if post.get("alpha"):
             details += "<br>" + formulas.estimate(post)
-        tip = infotip.tip(f"<b>Estimated {est:.0f}%</b> · actual {analysis.get('record')} "
+        tip = infotip.tip(f"<b>Adjusted {est:.0f}%</b> · actual {analysis.get('record')} "
                           f"({(observed or 0) * 100:.0f}%)", details)
+        # Adjusted, not your raw record: games weighted (format, league) and
+        # pulled toward even while there are few of them.
         top.addWidget(self._create_estimate_card(
-            "WIN RATE", f"{est:.0f}%" if games else "--", deck_accent,
+            "ADJUSTED WIN RATE", f"{est:.0f}%" if games else "--", deck_accent,
             post.get("low", 0), post.get("mean", 0.5), post.get("high", 1),
             ("Older format: not counted" if post.get("games", 0) <= 0 else None) if games else "No games yet",
             tip, benchmark=limitless_wr, benchmark_label="Limitless", par=post.get("par", 0.5),
@@ -4845,7 +4904,7 @@ class StatsWindow(QWidget):
             ranked = score_info.get("ranked", 0)
             caption = f"{self._rank_text(score, with_range=False)} of {ranked}" if score.get("rank") else None
             meta_card = self._create_estimate_card(
-                "META SCORE", f"{sc:.0f}", self._confidence_accent(score["p_above_even"]),
+                "META SCORE · EXPECTED WIN %", f"{sc:.0f}", self._confidence_accent(score["p_above_even"]),
                 score["low"], score["score"], score["high"], caption,
                 self._score_tooltip(analysis.get("deck_name", ""), score, score_info, True),
                 par=score.get("par", 0.5),
@@ -4865,12 +4924,12 @@ class StatsWindow(QWidget):
                 f"{formulas.DIM}Your matchups weighted by how common each deck is on Limitless; "
                 f"unfaced decks count at your overall rate.{formulas.END}")
             top.addWidget(self._create_estimate_card(
-                "VS THE META", f"{adj:.0f}%", self._confidence_accent(meta_adj.get("p_above_even")),
+                "EXPECTED WIN % VS META", f"{adj:.0f}%", self._confidence_accent(meta_adj.get("p_above_even")),
                 meta_adj["low"], meta_adj["mean"], meta_adj["high"], None, tip,
             ), 0, 1)
         else:
             top.addWidget(self._create_estimate_card(
-                "VS THE META", "--", "#AAB7CB", 0, None, 0, "Needs meta data",
+                "EXPECTED WIN % VS META", "--", "#AAB7CB", 0, None, 0, "Needs meta data",
                 "Open the Meta tab once to load it."), 0, 1)
 
         # 3. Verdict
@@ -4910,7 +4969,7 @@ class StatsWindow(QWidget):
             caption = (f"{self._rank_text(own, with_range=False)} of {score_info.get('ranked', 0)}"
                        if own.get("rank") else None)
             own_card = self._create_mini_stat(
-                "SCORE · YOUR GAMES", f"{own['score'] * 100:.0f} ±{(own['high'] - own['low']) * 50:.1f}", "#B39DDB",
+                "META SCORE · OWN GAMES ONLY", f"{own['score'] * 100:.0f} ±{(own['high'] - own['low']) * 50:.1f}", "#B39DDB",
                 infotip.tip(f"<b>{own['score'] * 100:.1f}</b> from your games only"
                             + (f" · {self._rank_text(own)} of {score_info.get('ranked', 0)}" if own.get("rank") else ""),
                             f"Range {_pct_range(own['low'], own['high'])}<br>" + formulas.own_score(own, score_info)),
@@ -4920,7 +4979,7 @@ class StatsWindow(QWidget):
         else:
             rw = rank_summary.get("weighted_winrate", 0.0) * 100.0
             adv.addWidget(self._create_mini_stat(
-                "RANK-WEIGHTED", f"{rw:.0f}%" if games else "--", self.NEUTRAL,
+                "RANK-WEIGHTED WIN RATE", f"{rw:.0f}%" if games else "--", self.NEUTRAL,
                 "Higher-rank games count more"
                 + (f" · avg rank {rank_summary['avg_rank']:.0f}" if rank_summary.get("avg_rank") is not None else "")), 0, 0)
         form = analysis.get("recent_form") or {}
@@ -4939,18 +4998,18 @@ class StatsWindow(QWidget):
             hi_edge = (post.get("high", 0) - limitless_wr) * 100.0
             # Coloured only when the difference is likely real (P >= 70% / <= 30%).
             adv.addWidget(self._create_mini_stat(
-                "VS LIMITLESS", f"{edge:+.0f} pts", self._confidence_accent(p_beat),
+                "ADJUSTED VS LIMITLESS AVG", f"{edge:+.0f} pts", self._confidence_accent(p_beat),
                 infotip.tip(
-                    f"<b>{edge:+.0f} pts</b> vs the Limitless average ({limitless_wr * 100:.1f}%)",
+                    f"<b>{edge:+.0f} pts</b>: your adjusted win rate vs the Limitless average ({limitless_wr * 100:.1f}%)",
                     f"Likely {lo_edge:+.0f} to {hi_edge:+.0f} pts"
                     + (f" · {p_beat * 100:.0f}% chance you're above it" if p_beat is not None else "")
                     + f"<br>{formulas.DIM}Limitless is mostly best-of-three, the ladder best-of-one: "
                       f"small gaps are noise.{formulas.END}")), 0, 2)
         else:
-            adv.addWidget(self._create_mini_stat("VS LIMITLESS", "--", "#AAB7CB",
+            adv.addWidget(self._create_mini_stat("ADJUSTED VS LIMITLESS AVG", "--", "#AAB7CB",
                                                  "No Limitless archetype matches this deck name"), 0, 2)
         faced = self._create_mini_stat(
-            "META FACED", f"{(meta_adj or {}).get('coverage', 0) * 100:.0f}%", self.NEUTRAL,
+            "META SHARE FACED", f"{(meta_adj or {}).get('coverage', 0) * 100:.0f}%", self.NEUTRAL,
             "Share of the meta you've faced with this deck")
         faced.make_clickable(lambda c=faced: self._scroll_to_matchups(c))
         adv.addWidget(faced, 0, 3)
@@ -4960,7 +5019,7 @@ class StatsWindow(QWidget):
 
     def _deck_trend_points(self, deck_name):
         """SeriesChart points for a deck page: the weighted estimate after
-        each game with its 90% range (same maths as the Win rate card and
+        each game with its 90% range (same maths as the Adjusted win rate card and
         the dashboard chart), the raw win % so far dashed."""
         battles = [b for b in self.db.get_deck_battles_detailed(deck_name) if not b.get("imported")]
         expansions = cached_expansions("en")
@@ -5007,7 +5066,7 @@ class StatsWindow(QWidget):
         return points
 
     def _create_deck_trend_card(self, analysis):
-        card, layout = self._create_dashboard_card("WIN RATE OVER TIME")
+        card, layout = self._create_dashboard_card("ADJUSTED WIN RATE OVER TIME")
         points = self._deck_trend_points(analysis.get("deck_name", ""))
         if not points:
             empty = QLabel("No battle history is available for this deck yet.")
@@ -5023,12 +5082,12 @@ class StatsWindow(QWidget):
         chart.set_data(points, animate=False)
         layout.addWidget(chart)
         legend = QLabel(
-            "<span style='color:#6BB6E8'>━●</span> estimate &nbsp;&nbsp;"
+            "<span style='color:#6BB6E8'>━●</span> adjusted &nbsp;&nbsp;"
             "<span style='color:rgba(255,255,255,0.55)'>┅</span> actual so far &nbsp;&nbsp;"
             "<span style='color:#6BB6E8'>▒</span> range")
         legend.setToolTip(infotip.tip(
-            "Estimate vs actual win rate per game",
-            "Estimate is weighted like the Win rate card (format age × league). Actual is your raw win % so far. "
+            "Adjusted vs actual win rate per game",
+            "Adjusted is weighted like the Adjusted win rate card (format age × league). Actual is your raw win % so far. "
             "Early swings are mostly noise.<br>" + RANGE_EXPLAINED.format(level=90)))
         legend.setTextFormat(Qt.TextFormat.RichText)
         legend.setObjectName("deckMetricNote")
@@ -5181,13 +5240,17 @@ class StatsWindow(QWidget):
         return deck_name if len(deck_name) <= 22 else f"{deck_name[:19]}..."
 
     def _icon_for_deck(self, deck_name, icons=None, size=20):
+        return QIcon(self._deck_sprite(deck_name, icons, size))
+
+    def _deck_sprite(self, deck_name, icons=None, size=20):
+        """The deck's first sprite (sharp, screen resolution) or its placeholder."""
         if self._deck_initial(deck_name) == "?":
             icons = []  # catch-all bucket: pixel "?" icon
         for sprite_name in (icons or [])[:2]:
             pixmap = self._load_sprite_pixmap(sprite_name, size)
             if pixmap is not None:
-                return QIcon(pixmap)
-        return QIcon(self._build_placeholder_sprite(self._deck_initial(deck_name), size))
+                return pixmap
+        return self._build_placeholder_sprite(self._deck_initial(deck_name), size)
 
     def _build_top_meta_matrix(self, matchup_entries, limit=8):
         aggregate = {}
@@ -5409,7 +5472,7 @@ class StatsWindow(QWidget):
         matter stand out.
         """
         table = self._make_meta_table(
-            ["Opponent", "Meta share", "Your record", "Estimate", "Range", "Field", "Verdict", "Impact"],
+            ["Opponent", "Meta share", "Your record", "Adjusted win %", "Range", "Limitless win %", "Verdict", "Impact"],
             [None, 76, 82, 72, 130, 64, 120, 70],
         )
         # This archetype's matchup records across Limitless online games
@@ -5538,9 +5601,10 @@ class StatsWindow(QWidget):
             infotip.tip("Opposing archetype", "'Other' = decks outside the listed ones. Double-click to open on Limitless."),
             "Share of today's Limitless meta",
             "Your wins-losses vs this deck",
-            infotip.tip("Estimated win rate in this matchup", "Leans on your overall rate until there are a few games."),
+            infotip.tip("Adjusted win rate in this matchup",
+                        "Your weighted record here, leaning on your overall rate until there are a few games."),
             "90% range · tick = even",
-            "Limitless benchmark for your archetype",
+            "Your archetype's win rate vs this deck on Limitless (weighted)",
             "Verdict needs 3+ games",
             "▲ helps / ▼ hurts vs the meta",
         ]
@@ -5646,10 +5710,8 @@ class StatsWindow(QWidget):
         index = next((i for i in range(self.tab_widget.count()) if self.tab_widget.tabText(i) == "Meta"), None)
         if index is None:
             return
-        if getattr(self, "_meta_source", "all") == "japan":
-            self._meta_source = "all"
-            for key, btn in getattr(self, "meta_source_buttons", {}).items():
-                btn.setChecked(key == "all")
+        if self._meta_sources() == ("japan",):  # Japan alone has no records: show everything
+            self._set_meta_sources(ALL_META_SOURCES)
         views = getattr(self, "meta_views", None)
         if views is not None:
             views.setCurrentIndex(0)
@@ -8295,7 +8357,8 @@ class StatsWindow(QWidget):
     def _load_sprite_pixmap(self, sprite_name, size=24):
         if not sprite_name:
             return None
-        cache_key = (sprite_name, size)
+        dpr = max(1.0, self.devicePixelRatioF())
+        cache_key = (sprite_name, size, dpr)
         cached = self._sprite_pixmap_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -8310,7 +8373,7 @@ class StatsWindow(QWidget):
         pixmap = QPixmap(cache_path)
         if pixmap.isNull():
             return None
-        scaled = pixmap.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+        scaled = _pixel_art_pixmap(pixmap, size, dpr)
         # Bound the cache so it can't grow unboundedly across many decks/sizes.
         if len(self._sprite_pixmap_cache) > 512:
             self._sprite_pixmap_cache.clear()
@@ -8327,7 +8390,9 @@ class StatsWindow(QWidget):
         return "?" if not name or name.lower() == "other" else name[:1]
 
     def _build_placeholder_sprite(self, label_text, size=24, accent="#4A9FD8"):
-        pixmap = QPixmap(size, size)
+        dpr = max(1.0, self.devicePixelRatioF())  # drawn at screen resolution, not stretched
+        pixmap = QPixmap(round(size * dpr), round(size * dpr))
+        pixmap.setDevicePixelRatio(dpr)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         if (label_text or "?") == "?":
@@ -8354,7 +8419,7 @@ class StatsWindow(QWidget):
         font.setBold(True)
         font.setPointSize(max(8, size // 2 - 2))
         painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, (label_text or "?")[:1].upper())
+        painter.drawText(QRect(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, (label_text or "?")[:1].upper())
         painter.end()
         return pixmap
 
@@ -8961,20 +9026,19 @@ class StatsWindow(QWidget):
         # Applied to this tab only (deck pages keep the full weighted sheet).
         view_row = QHBoxLayout()
         view_row.setSpacing(4)
-        view_row.addWidget(label("Data:", "Which events feed this sheet"))
+        view_row.addWidget(label("Data:", "Which events feed this sheet (all on by default)"))
         self.meta_source_buttons = {}
-        for key, text, tip in (("all", "All sources", "Online + in-person + Japan"),
-                               ("online", "Online", "play.limitlesstcg.com events: shares, records, matchups"),
+        for key, text, tip in (("online", "Online", "play.limitlesstcg.com events: shares, records, matchups"),
                                ("in_person", "In-person", "Regionals / Internationals / Worlds: shares, top cuts, and "
                                 "every round's results from Limitless Labs (records, matchups)"),
                                ("japan", "Japan", "City Leagues: shares and top cuts")):
             btn = QPushButton(text)
             btn.setObjectName("eloScaleBtn")
             btn.setCheckable(True)
-            btn.setChecked(key == "all")
+            btn.setChecked(True)
             btn.setFixedHeight(24)
             btn.setToolTip(tip)
-            btn.clicked.connect(lambda _c=False, k=key: self._set_meta_view(source=k))
+            btn.clicked.connect(lambda _c=False, k=key: self._toggle_meta_source(k))
             view_row.addWidget(btn)
             self.meta_source_buttons[key] = btn
         view_row.addSpacing(14)
@@ -9012,11 +9076,22 @@ class StatsWindow(QWidget):
         view_row.addStretch()
         self.meta_search = QLineEdit()
         self.meta_search.setObjectName("deckSearchInput")
-        self.meta_search.setPlaceholderText("Search decks (just type)")
+        self.meta_search.setPlaceholderText("Search")
         self.meta_search.setClearButtonEnabled(True)
-        self.meta_search.setFixedSize(190, 24)
-        self.meta_search.textChanged.connect(lambda *_: self._filter_meta_rows())
+        self.meta_search.setFixedSize(170, 24)
+        self.meta_search.setToolTip("Deck name, or a Pokémon in its icon or its lists")
+        self.meta_search.textChanged.connect(lambda *_: self._filter_meta_rows(jump=True))
+        self.meta_search.installEventFilter(self)  # Enter / Shift+Enter: next / previous match
         view_row.addWidget(self.meta_search)
+        self.meta_filter_btn = QPushButton()
+        self.meta_filter_btn.setObjectName("eloScaleBtn")
+        self.meta_filter_btn.setCheckable(True)
+        self.meta_filter_btn.setFixedHeight(24)
+        self.meta_filter_btn.setIcon(self._funnel_icon())
+        self.meta_filter_btn.setToolTip("Show only the decks that match the search")
+        self.meta_filter_btn.toggled.connect(lambda *_: self._filter_meta_rows(jump=True))
+        view_row.addWidget(self.meta_filter_btn)
+        self._update_meta_filter_btn(None)
         vlayout.addLayout(view_row)
 
         self.meta_status = QLabel("Loading meta data…")
@@ -9036,7 +9111,8 @@ class StatsWindow(QWidget):
         # the zoomed error bars get room.
         self.meta_arch_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         self.meta_arch_table.setColumnWidth(3, 150)
-        self.meta_arch_table.installEventFilter(self)  # typing on the table searches
+        self.meta_arch_table.setFocusPolicy(Qt.FocusPolicy.ClickFocus)  # click a deck, then type to jump
+        self.meta_arch_table.installEventFilter(self)  # typing on the table jumps to a deck (_meta_type_jump)
         self.meta_arch_table.cellDoubleClicked.connect(lambda row, col: self._open_table_row_link(self.meta_arch_table, row))
         self._meta_row_delegate = MineRowDelegate(self.meta_arch_table)
         self.meta_arch_table.setItemDelegate(self._meta_row_delegate)
@@ -9078,10 +9154,13 @@ class StatsWindow(QWidget):
             "QHeaderView::section { background: rgb(12,17,26); color: rgba(220,230,244,0.85);"
             " border: none; padding: 3px 8px; font-size: 11px; }"
             "QTableCornerButton::section { background: rgb(12,17,26); border: none; }")
+        self.meta_matrix.setHorizontalHeader(IconHeader(Qt.Orientation.Horizontal, self.meta_matrix))
+        self.meta_matrix.setVerticalHeader(IconHeader(Qt.Orientation.Vertical, self.meta_matrix))
         self.meta_matrix.setItemDelegate(MatchupCellDelegate(self.meta_matrix))
         self.meta_matrix.setMouseTracking(True)
         self.meta_matrix.viewport().setMouseTracking(True)
-        self.meta_matrix.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # A click shows the same card as hovering (handy on a trackpad, or to re-open it).
+        self.meta_matrix.cellClicked.connect(self._show_matchup_tip)
         matrix_view = QWidget()
         matrix_layout = QVBoxLayout(matrix_view)
         matrix_layout.setContentsMargins(0, 8, 0, 0)
@@ -9225,11 +9304,25 @@ class StatsWindow(QWidget):
             self.meta_mine_basis.setVisible(on)
         self._populate_meta_tab()
 
-    def _set_meta_view(self, source=None, weights=None):
-        if source is not None:
-            self._meta_source = source
-            for key, btn in getattr(self, "meta_source_buttons", {}).items():
-                btn.setChecked(key == source)
+    def _meta_sources(self):
+        """The Data toggles that are on, in a fixed order (all three by default)."""
+        return tuple(k for k in ALL_META_SOURCES if k in getattr(self, "_meta_source_set", set(ALL_META_SOURCES)))
+
+    def _set_meta_sources(self, sources):
+        self._meta_source_set = set(sources)
+        for key, btn in getattr(self, "meta_source_buttons", {}).items():
+            btn.setChecked(key in self._meta_source_set)
+
+    def _toggle_meta_source(self, key):
+        """A Data toggle: each source on or off; the last one can't be turned off."""
+        sources = set(self._meta_sources()) ^ {key}
+        if not sources:
+            self.meta_source_buttons[key].setChecked(True)
+            return
+        self._set_meta_sources(sources)
+        self._populate_meta_tab()
+
+    def _set_meta_view(self, weights=None):
         if weights is not None:
             self._meta_use_weights = bool(weights)
         self._populate_meta_tab()
@@ -9241,20 +9334,19 @@ class StatsWindow(QWidget):
         background thread and kept in memory. Returns "pending" while one is
         being built, None if it can't be built."""
         base = self.limitless_standard_meta or {}
-        source = getattr(self, "_meta_source", "all")
+        sources = self._meta_sources()
         use_weights = getattr(self, "_meta_use_weights", True)
-        if source == "all" and use_weights:
+        if sources == ALL_META_SOURCES and use_weights:
             return base
-        key = (base.get("fetched_at"), source, use_weights)
+        key = (base.get("fetched_at"), sources, use_weights)
         cache = getattr(self, "_meta_view_cache", {})
         if key in cache:
             return cache[key]
         if getattr(self, "_meta_view_building", None) != key:
-            from meta_sources import ALL_SOURCES, rebuild_meta_sheet
+            from meta_sources import rebuild_meta_sheet
             self._meta_view_building = key
             self._meta_view_token = getattr(self, "_meta_view_token", 0) + 1
-            fetcher = CallFetcher(self._meta_view_token, lambda: rebuild_meta_sheet(
-                use_weights, ALL_SOURCES if source == "all" else (source,)))
+            fetcher = CallFetcher(self._meta_view_token, lambda: rebuild_meta_sheet(use_weights, sources))
             fetcher.done.connect(lambda token, result, k=key: self._meta_view_built(token, k, result))
             self._meta_view_fetcher = fetcher
             _start_thread(fetcher)
@@ -9318,6 +9410,11 @@ class StatsWindow(QWidget):
 
     def _apply_meta_header_tips(self, use_weights):
         table = getattr(self, "meta_arch_table", None)
+        # Say what the numbers are: weighted while Custom weights is on.
+        for col, plain in ((6, "Record"), (7, "Win %")):
+            item = table.horizontalHeaderItem(col) if table is not None else None
+            if item is not None:
+                item.setText(f"Weighted {plain[0].lower()}{plain[1:]}" if use_weights else plain)
         for col, tip in enumerate(getattr(self, "_meta_header_tips", [])):
             item = table.horizontalHeaderItem(col) if table is not None else None
             if item is None or not tip:
@@ -9391,16 +9488,161 @@ class StatsWindow(QWidget):
         self._populate_meta_rows()
         self._filter_meta_rows()
 
-    def _filter_meta_rows(self):
-        """Meta → Archetypes: hide rows whose deck name doesn't contain the search text."""
+    @staticmethod
+    def _meta_search_text(row):
+        """(name, icon Pokemon, Pokemon in the lists, other cards) for the search, casefolded."""
+        icons = " ".join(str(i).replace("-", " ") for i in row.get("icons") or [])
+        cards = row.get("cards") or []
+        pokemon = " | ".join(c.get("name", "") for c in cards if c.get("cat") == "P")
+        others = " | ".join(c.get("name", "") for c in cards if c.get("cat") != "P")
+        return (row.get("deck", "").casefold(), icons.casefold(), pokemon.casefold(), others.casefold())
+
+    @staticmethod
+    def _meta_search_rank(fields, query):
+        """How well a row matches (lower is better), None for no match.
+        Deck name first (starts with it, then a word starts with it, then
+        anywhere: "ninja" is Mega Greninja), then its icon Pokemon, then the
+        Pokemon in its lists, then its other cards. Matching inside a word
+        and the lists need 3+ letters, so one key doesn't match everything."""
+        if not fields:
+            return None
+        name, icons, pokemon, others = (tuple(fields) + ("", "", ""))[:4]
+        inside = len(query) >= 3
+
+        def found(text):
+            words = [w for w in re.split(r"[\s'|-]+", text) if w]
+            return any(w.startswith(query) for w in words) or (inside and query in text)
+
+        if name.startswith(query):
+            return 0
+        if any(w.startswith(query) for w in re.split(r"[\s'-]+", name) if w):
+            return 1
+        if inside and query in name:
+            return 2
+        if found(icons):
+            return 3
+        if inside and found(pokemon):
+            return 4
+        if inside and found(others):
+            return 5
+        return None
+
+    def _funnel_icon(self):
+        dpr = max(1.0, self.devicePixelRatioF())
+        pix = QPixmap(round(14 * dpr), round(14 * dpr))
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(226, 235, 246, 210))
+        painter.drawPolygon([QPointF(1.5, 2.5), QPointF(12.5, 2.5), QPointF(8.2, 7.6), QPointF(8.2, 12),
+                             QPointF(5.8, 10.8), QPointF(5.8, 7.6)])
+        painter.end()
+        return QIcon(pix)
+
+    def _update_meta_filter_btn(self, matches):
+        """The filter button shows how many decks match (and is off without a search)."""
+        btn = self.meta_filter_btn
+        btn.setEnabled(matches is not None)
+        btn.setText(f" {matches}" if matches is not None else "")
+        if matches is None and btn.isChecked():
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
+
+    def _filter_meta_rows(self, jump=False):
+        """Meta → Archetypes search. While there's a search the matches move to
+        the top in order (deck name > Pokemon > cards, then by Score) and the
+        best one is highlighted; Enter steps to the next (_meta_search_next).
+        The filter button hides the rest. Clearing restores the column sort."""
         table, search = getattr(self, "meta_arch_table", None), getattr(self, "meta_search", None)
         if table is None or search is None:
             return
         query = search.text().strip().casefold()
+        header = table.horizontalHeader()
+        if query and getattr(self, "_meta_sort_before_search", None) is None:
+            self._meta_sort_before_search = (header.sortIndicatorSection(), header.sortIndicatorOrder())
+        sorting = table.isSortingEnabled()
+        table.setSortingEnabled(False)  # or every setData below re-sorts the rows mid-loop
+        hits = 0
+        for row in range(table.rowCount()):
+            item, rank_item = table.item(row, 1), table.item(row, 0)
+            if item is None:
+                continue
+            fields = item.data(META_SEARCH_ROLE)
+            rank = self._meta_search_rank(fields, query) if query else None
+            hits += rank is not None
+            item.setData(META_MATCH_ROLE, rank)
+            if query:  # sort key while searching: match tier, then Score rank
+                score_rank = rank_item.data(Qt.ItemDataRole.UserRole) if rank_item else 9999
+                item.setData(Qt.ItemDataRole.UserRole, (99 if rank is None else rank, score_rank or 9999))
+            elif fields:
+                item.setData(Qt.ItemDataRole.UserRole, fields[0])  # the deck-name sort again
+        if query:
+            header.setSortIndicatorShown(False)
+            table.sortItems(1, Qt.SortOrder.AscendingOrder)
+        elif getattr(self, "_meta_sort_before_search", None) is not None:
+            section, order = self._meta_sort_before_search
+            self._meta_sort_before_search = None
+            header.setSortIndicatorShown(True)
+            if not 0 <= section < table.columnCount():  # never header-sorted: back to the Score order (#)
+                section, order = 0, Qt.SortOrder.AscendingOrder
+            table.sortItems(section, order)
+        table.setSortingEnabled(sorting)
+        filtering = bool(query) and self.meta_filter_btn.isChecked()
         for row in range(table.rowCount()):
             item = table.item(row, 1)
-            name = item.text().casefold() if item else ""
-            table.setRowHidden(row, bool(query) and query not in name)
+            table.setRowHidden(row, filtering and (item is None or item.data(META_MATCH_ROLE) is None))
+        self._update_meta_filter_btn(hits if query else None)
+        if not query:
+            return
+        if not hits:
+            table.clearSelection()
+        elif jump:
+            self._meta_select_row(0)  # the best match is now the top row
+
+    META_TYPE_PAUSE_S = 1.0  # typing on the table: a longer pause starts a new word
+
+    def _meta_type_jump(self, text):
+        """Typing on the table (not in the search box): jump to the best-matching
+        deck where it is - nothing moves or hides. Letters typed together build
+        one word ("dr" -> Dragapult); after a pause it starts over."""
+        now = time.monotonic()
+        if now - getattr(self, "_meta_typed_at", 0.0) > self.META_TYPE_PAUSE_S:
+            self._meta_typed = ""
+        self._meta_typed = getattr(self, "_meta_typed", "") + text.casefold()
+        self._meta_typed_at = now
+        query = self._meta_typed.strip()
+        table = self.meta_arch_table
+        best = None
+        for row in range(table.rowCount()):
+            item = table.item(row, 1)
+            if item is None or table.isRowHidden(row):
+                continue
+            rank = self._meta_search_rank(item.data(META_SEARCH_ROLE), query) if query else None
+            if rank is not None and (best is None or rank < best[0]):
+                best = (rank, row)
+        if best is not None:
+            table.selectRow(best[1])
+            table.scrollToItem(table.item(best[1], 1), QAbstractItemView.ScrollHint.PositionAtCenter)
+
+    def _meta_select_row(self, row):
+        table = self.meta_arch_table
+        table.selectRow(row)
+        table.scrollToItem(table.item(row, 1), QAbstractItemView.ScrollHint.EnsureVisible)
+
+    def _meta_search_next(self, step=1):
+        """Enter in the search: highlight the next matching deck (Shift+Enter: back), wrapping round."""
+        table = self.meta_arch_table
+        rows = [r for r in range(table.rowCount())
+                if table.item(r, 1) is not None and table.item(r, 1).data(META_MATCH_ROLE) is not None]
+        if not rows:
+            return
+        current = table.selectionModel().selectedRows()
+        at = current[0].row() if current else None
+        index = (rows.index(at) + step) % len(rows) if at in rows else 0
+        self._meta_select_row(rows[index])
 
     def _populate_meta_rows(self):
         if not hasattr(self, "meta_arch_table"):
@@ -9418,7 +9660,7 @@ class StatsWindow(QWidget):
             self.meta_status.setText("No meta data yet - press ↻ Refresh.")
             return
         use_weights = getattr(self, "_meta_use_weights", True)
-        include_jp = getattr(self, "_meta_source", "all") == "japan"
+        include_jp = self._meta_sources() == ("japan",)
         min_games = self.meta_min_games.value()
         share_key = "share" if include_jp else "share_en"
         rows = [r for r in rows if (r.get(share_key) or 0) > 0]
@@ -9513,6 +9755,7 @@ class StatsWindow(QWidget):
             self._set_meta_deck_cell(table, i, 1, r.get("deck", ""), r.get("icons", []),
                                      subtitle=(f"{r.get('raw_games', 0)} games · {basis}" if is_mine else None),
                                      sort_value=r.get("deck", "").lower(), link=link, mine=is_mine)
+            table.item(i, 1).setData(META_SEARCH_ROLE, self._meta_search_text(r))
             # Score + its range
             if res and res.get("eff_games", 0) > 0:
                 sc = res["score"]
@@ -9924,7 +10167,7 @@ class StatsWindow(QWidget):
         left.setSpacing(6)
         self._trend_search = QLineEdit()
         self._trend_search.setObjectName("metaSearch")
-        self._trend_search.setPlaceholderText("Search decks…")
+        self._trend_search.setPlaceholderText("Search")
         self._trend_search.setClearButtonEnabled(True)
         self._trend_search.textChanged.connect(self._trend_filter_list)
         left.addWidget(self._trend_search)
@@ -9998,11 +10241,14 @@ class StatsWindow(QWidget):
         list_widget = getattr(self, "_trend_list", None)
         if list_widget is not None and obj is list_widget.viewport() and event.type() == QEvent.Type.Leave:
             self._trend_chart.set_focus(None)
+        if obj is getattr(self, "meta_search", None) and event.type() == QEvent.Type.KeyPress                 and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            back = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self._meta_search_next(-1 if back else 1)
+            return True
         if obj is getattr(self, "meta_arch_table", None) and event.type() == QEvent.Type.KeyPress:
             text = event.text()
             if text and text.isprintable() and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
-                self.meta_search.setFocus()
-                self.meta_search.insert(text)
+                self._meta_type_jump(text)
                 return True
         return super().eventFilter(obj, event)
 
@@ -10078,7 +10324,9 @@ class StatsWindow(QWidget):
                 self._trend_slots[deck] = free
 
     def _trend_swatch_icon(self, archetype, slot):
-        pix = QPixmap(30, 20)
+        dpr = max(1.0, self.devicePixelRatioF())
+        pix = QPixmap(round(30 * dpr), round(20 * dpr))
+        pix.setDevicePixelRatio(dpr)
         pix.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pix)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -10091,8 +10339,7 @@ class StatsWindow(QWidget):
                 painter.drawRoundedRect(QRectF(0, 11, 4, 6), 1.5, 1.5)
             else:
                 painter.drawRoundedRect(QRectF(0, 2, 4, 16), 2, 2)
-        sprite = self._icon_for_deck(archetype.get("name", ""), archetype.get("icons") or [], size=20).pixmap(20, 20)
-        painter.drawPixmap(9, 0, sprite)
+        painter.drawPixmap(9, 0, self._deck_sprite(archetype.get("name", ""), archetype.get("icons") or [], size=20))
         painter.end()
         return QIcon(pix)
 
@@ -10307,12 +10554,14 @@ class StatsWindow(QWidget):
         m.setRowCount(len(row_decks))
         m.setColumnCount(len(top))
         for j, r in enumerate(top):
-            head = QTableWidgetItem(self._icon_for_deck(r.get("deck", ""), r.get("icons", []), size=26), "")
+            head = QTableWidgetItem("")
+            head.setData(HEADER_PIXMAP_ROLE, self._deck_sprite_pair(r.get("deck", ""), r.get("icons", []), 26))
             head.setToolTip(r.get("deck", ""))
             m.setHorizontalHeaderItem(j, head)
         for i, r in enumerate(row_decks):
             label = f"★ {r.get('deck', '')}" if r.get("is_mine") else r.get("deck", "")
-            row_head = QTableWidgetItem(self._icon_for_deck(r.get("deck", ""), r.get("icons", []), size=24), label)
+            row_head = QTableWidgetItem(label)
+            row_head.setData(HEADER_PIXMAP_ROLE, self._deck_sprite_pair(r.get("deck", ""), r.get("icons", []), 24))
             if r.get("is_mine"):
                 row_head.setForeground(QColor("#B39DDB"))
                 row_head.setToolTip("Your deck · your games vs each archetype")
@@ -10320,7 +10569,7 @@ class StatsWindow(QWidget):
         cells = 0
         for i, a in enumerate(row_decks):
             for j, b in enumerate(top):
-                item = QTableWidgetItem()
+                item = MatchupItem()
                 rec = self._matrix_record(a, b["id"])
                 mirror = a.get("id") == b.get("id")
                 if not rec:
@@ -10332,33 +10581,91 @@ class StatsWindow(QWidget):
                 w, l, t = rec
                 games = w + l + t
                 rate = result_rate(w, l, t)
-                fmt = "{:,.0f}"
-                record = "-".join(fmt.format(x) for x in rec)
-                item.setData(Qt.ItemDataRole.UserRole, {
-                    "rate": rate, "record": record, "games": games, "mirror": mirror,
-                    "edge": rate - record_par(w, l, t), "thin": games < min_games})
-                item.setText(f"{rate * 100:.0f}% {record}")  # copy / accessibility
+                record = "-".join(_count_text(x) for x in rec)
                 mean, sd = self._beta_mean_sd(w, l, t)
                 low, high = max(0.0, mean - 1.645 * sd), min(1.0, mean + 1.645 * sd)
-                basis = ("your games" if a.get("is_mine") else "games since the latest expansion" if plain
-                         else "weighted games" if getattr(self, "_meta_use_weights", True) else "games")
-                item.setToolTip(f"<b>{html.escape(a.get('deck', ''))}</b> vs <b>{html.escape(b.get('deck', ''))}</b>"
-                                + (" (mirror)" if mirror else "")
-                                + f"<br>{rate * 100:.1f}% · {record} ({basis})"
-                                + f"<br>90% range {_pct_range(low, high)}"
-                                + ("" if games >= min_games else f"<br><i>under {min_games} games: a rough guide</i>"))
+                unsure = high - low > MATCHUP_SURE_WIDTH or games < min_games
+                item.setData(Qt.ItemDataRole.UserRole, {
+                    "rate": rate, "low": low, "high": high, "unsure": unsure, "record": record, "games": games,
+                    "mirror": mirror, "edge": rate - record_par(w, l, t)})
+                item.setText(f"{low * 100:.0f}–{high * 100:.0f}% {record}" if unsure
+                             else f"{rate * 100:.0f}% {record}")  # copy / accessibility
+                # Built on first hover (it renders a picture), not for every cell up front.
+                item.tip_maker = (lambda a=a, b=b, rate=rate, low=low, high=high, record=record, unsure=unsure,
+                                  mirror=mirror, par=record_par(w, l, t):
+                                  self._matchup_tip(a, b, rate, low, high, record, unsure, mirror, par))
                 m.setItem(i, j, item)
         m.horizontalHeader().setDefaultSectionSize(64)
         m.horizontalHeader().setMinimumSectionSize(64)
         m.horizontalHeader().setFixedHeight(40)
         m.verticalHeader().setDefaultSectionSize(44)
-        m.verticalHeader().setMinimumWidth(200)
+        m.verticalHeader().setMinimumWidth(240)
         m.setIconSize(QSize(26, 26))
         self.meta_matrix_legend.note = (
-            "Row deck's result vs the column deck  ·  pale = few games  ·  "
+            "row deck vs column deck  ·  "
             + ("games since the latest expansion" if plain else "the sheet's data (Data / Custom weights)")
             + ("" if cells else "  ·  no games yet"))
         self.meta_matrix_legend.update()
+
+    def _deck_sprites(self, deck, icons, size):
+        """Up to two sharp sprites for a deck (a placeholder when it has none)."""
+        if self._deck_initial(deck) == "?":
+            icons = []
+        sprites = [px for px in (self._load_sprite_pixmap(n, size) for n in (icons or [])[:2]) if px is not None]
+        return sprites or [self._build_placeholder_sprite(self._deck_initial(deck), size)]
+
+    def _deck_sprite_pair(self, deck, icons, size):
+        """The deck's sprites side by side in one pixmap (one or two), screen resolution."""
+        sprites = self._deck_sprites(deck, icons, size)
+        dpr = max(1.0, self.devicePixelRatioF())
+        width = size * len(sprites) + 2 * (len(sprites) - 1)
+        pix = QPixmap(round(width * dpr), round(size * dpr))
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        for k, sprite in enumerate(sprites):
+            painter.drawPixmap(QPointF(k * (size + 2), 0), sprite)
+        painter.end()
+        return pix
+
+    def _tip_image(self, pixmap, name):
+        """<img> for rich-text tips (they can't take a QPixmap): the pixmap
+        saved under .ui_cache at its real resolution, shown at its logical size."""
+        from PySide6.QtCore import QUrl
+        folder = os.path.join(BASE_DIR, ".ui_cache", "tip_icons")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, re.sub(r"[^a-z0-9_.-]", "_", name.lower())[:80] + ".png")
+        if not pixmap.save(path, "PNG"):
+            return ""
+        dpr = pixmap.devicePixelRatio() or 1.0
+        return (f'<img src="{QUrl.fromLocalFile(path).toString()}" width="{round(pixmap.width() / dpr)}" '
+                f'height="{round(pixmap.height() / dpr)}">')
+
+    def _matchup_tip(self, a, b, rate, low, high, record, unsure, mirror, par):
+        """The hover card: one short line, then both decks at the ends of a bar
+        with the 90% range leaning toward the winner, an even tick and W-L-T."""
+        dpr = max(1.0, self.devicePixelRatioF())
+        name_a, name_b = a.get("deck", ""), b.get("deck", "")
+        card = matchup_card((name_a, self._deck_sprites(name_a, a.get("icons"), 22)),
+                            (name_b, self._deck_sprites(name_b, b.get("icons"), 22)),
+                            record, low, rate, high, par=par, unsure=unsure, dpr=dpr)
+        key = f"mu_{name_a}_{name_b}_{record}_{low:.3f}_{high:.3f}_{int(dpr * 100)}"
+        if mirror:
+            head = f"<b>{html.escape(name_a)}</b> mirror match"
+        else:
+            head = (f"<b>{low * 100:.0f}–{high * 100:.0f}%</b> chance <b>{html.escape(name_a)}</b> "
+                    f"beats <b>{html.escape(name_b)}</b>")
+        if unsure and not mirror:
+            head += " <span style='color:#E8C26A'>· few games</span>"
+        return infotip.whole(f"{head}<br>{self._tip_image(card, key)}")
+
+    def _show_matchup_tip(self, row, col):
+        item = self.meta_matrix.item(row, col)
+        text = item.toolTip() if item is not None else ""
+        if text:
+            rect = self.meta_matrix.visualItemRect(item)
+            infotip.show_text(self.meta_matrix.viewport().mapToGlobal(rect.bottomLeft()), text,
+                              self.meta_matrix.viewport(), rect)
 
     def _export_meta_matrix(self):
         """The matrix as CSV: one row per deck, "rate% (W-L-T)" per opponent."""
@@ -11846,7 +12153,7 @@ class StatsWindow(QWidget):
         self.headline_cards = {}
         cards = [
             ("rank", "CURRENT RANK", "#F9A825"),
-            ("winrate", "WIN RATE", "#9CC344"),
+            ("winrate", "ACTUAL WIN RATE", "#9CC344"),
             ("session", "TODAY", "#4A9FD8"),
             ("form", "LAST 10", "#B388FF"),
         ]
@@ -11979,7 +12286,7 @@ class StatsWindow(QWidget):
         boxes_row.setSpacing(6)
         boxes_row.addWidget(self.winrate_deck_box)
         boxes_row.addWidget(window_box)
-        row.addWidget(self.create_graph_card("WIN RATE", self.winrate_chart, header_widget=boxes,
+        row.addWidget(self.create_graph_card("ADJUSTED WIN RATE", self.winrate_chart, header_widget=boxes,
                                              summary_label=self.winrate_summary_label), 1)
         outer.addLayout(row)
         return container
@@ -12181,10 +12488,10 @@ class StatsWindow(QWidget):
             expansions = cached_expansions("en")
             post = win_rate_posterior(*weighted_record([b["raw"] | {"result": b["result"]} for b in battles], expansions))
             if post["games"] > 0:
-                estimate = f" · est. {post['mean'] * 100:.0f}%"
+                estimate = f" · adjusted {post['mean'] * 100:.0f}%"
                 level = int(round(post["level"] * 100))
                 tip = infotip.tip(
-                    f"<b>Estimated {post['mean'] * 100:.0f}%</b> · actual {record_text(w, l, t)}",
+                    f"<b>Adjusted {post['mean'] * 100:.0f}%</b> · actual {record_text(w, l, t)}",
                     f"Range {_pct_range(post['low'], post['high'])} · {post['games']:.1f} weighted games<br>"
                     f"{formulas.DIM}{RANGE_EXPLAINED.format(level=level)}{formulas.END}<br>" + formulas.estimate(post))
         except Exception:
