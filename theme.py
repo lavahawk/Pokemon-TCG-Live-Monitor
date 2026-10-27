@@ -106,6 +106,38 @@ def theme_key(settings=None):
     return key if key in THEMES else DEFAULT_THEME
 
 
+_FONT_PX = re.compile(r"(font-size\s*:\s*)(\d+(?:\.\d+)?)px")
+_text_scale = 1.0
+
+
+def _scale_font_px(text, factor):
+    return _FONT_PX.sub(lambda m: f"{m.group(1)}{max(1, round(float(m.group(2)) * factor))}px", text)
+
+
+def _install_text_scale(app):
+    """Settings -> Text size: every stylesheet font size and the default font
+    grow by the saved factor. The mini GUI has its own size (hud_scale)."""
+    global _text_scale
+    from app_settings import get_scale
+    _text_scale = get_scale("text_scale")
+    if _text_scale == 1.0:
+        return
+    from PySide6.QtWidgets import QApplication, QWidget
+    widget_set, app_set = QWidget.setStyleSheet, QApplication.setStyleSheet
+
+    def widget_scaled(self, text):
+        factor = 1.0 if type(self).__name__ == "MinimalOverlay" else _text_scale
+        return widget_set(self, _scale_font_px(text, factor) if text and factor != 1.0 else text)
+
+    QWidget.setStyleSheet = widget_scaled
+    QApplication.setStyleSheet = lambda self, text: app_set(self, _scale_font_px(text, _text_scale) if text else text)
+    if app is not None:
+        font = app.font()
+        if font.pointSizeF() > 0:
+            font.setPointSizeF(font.pointSizeF() * _text_scale)
+            app.setFont(font)
+
+
 def _palette():
     return PALETTE.get(_parts[2])
 
@@ -277,6 +309,11 @@ def install(app=None, key=None):
     global _current, _parts
     if _current is not None:
         return _current
+    try:
+        from PySide6.QtWidgets import QApplication
+        _install_text_scale(app or QApplication.instance())
+    except Exception:
+        pass
     key = key or theme_key()
     _current, _parts = key, THEMES[key]
     if key == "legacy":

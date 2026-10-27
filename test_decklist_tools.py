@@ -57,6 +57,8 @@ def test_list_lines_sections_and_counts():
 def test_card_image_urls():
     assert D.card_image_url("TWM", "95").endswith("/TWM/TWM_095_R_EN_SM.png")
     assert "/SVP/SVP_149_" in D.card_image_url("PR-SV", "149")
+    assert D.card_image_url("LOR-TG", "24").endswith("/LOR/LOR_TG24_R_EN_SM.png")
+    assert D.card_image_url("CRZ-GG", "5").endswith("/CRZ/CRZ_GG5_R_EN_SM.png")
 
 
 def test_product_ids_by_set_and_number():

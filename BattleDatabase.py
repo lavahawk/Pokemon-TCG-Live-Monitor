@@ -265,6 +265,24 @@ class BattleDatabase:
             self.rebuild_session_stats()
         return changed
 
+    def rename_deck(self, old, new):
+        """Rename one of your decks, or merge it into `new` when that deck
+        already exists (all its battles, imports and rank readings move over).
+        Returns the number of battles moved."""
+        old, new = (old or "").strip(), (new or "").strip()
+        if not old or not new or old == new:
+            return 0
+        conn = self._connect()
+        try:
+            moved = conn.execute("UPDATE battles SET my_deck = ? WHERE my_deck = ?", (new, old)).rowcount
+            conn.execute("UPDATE rank_history SET deck_name = ? WHERE deck_name = ?", (new, old))
+            conn.commit()
+        finally:
+            conn.close()
+        if moved:
+            self.rebuild_session_stats()
+        return moved
+
     def get_known_deck_names(self):
         conn = self._connect()
         try:

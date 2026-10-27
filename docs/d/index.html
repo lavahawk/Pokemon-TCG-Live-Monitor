@@ -22,10 +22,11 @@
 <style>
   :root { --bg: #0c0d0f; --fg: #d8dbe0; --dim: #6c7380; --rule: #23262c; --accent: #e8c547; --ok: #8fd18f;
           --bad: #ef8f8f; --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace; }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) { --bg: #f6f5f1; --fg: #1d1f23; --dim: #7b7f88; --rule: #dcdad3; --accent: #9a6f00;
-                                      --ok: #2e7d32; --bad: #b3261e; }
-  }
+  :root[data-theme="light"] { --bg: #f6f5f1; --fg: #1d1f23; --dim: #7b7f88; --rule: #dcdad3; --accent: #9a6f00;
+                              --ok: #2e7d32; --bad: #b3261e; }
+  #theme { color: var(--dim); margin-left: 14px; }
+  #theme:hover { color: var(--fg); }
+  #theme::before, #theme::after { content: none; }
   * { box-sizing: border-box; }
   html { background: var(--bg); }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.6 var(--mono); }
@@ -95,7 +96,7 @@
 <main>
   <header>
     <a class="brand" href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor#readme" aria-label="PTCGL Monitor"><pre class="logo" id="logo" aria-hidden="true">PTCGL MONITOR</pre></a>
-    <nav><a href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor#readme">about</a><a href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor/releases/latest">get the app</a></nav>
+    <nav><a href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor#readme">about</a><a href="https://github.com/lavahawk/Pokemon-TCG-Live-Monitor/releases/latest">get the app</a><button id="theme" title="Switch light / dark">light</button></nav>
   </header>
   <div class="rule" aria-hidden="true">────────────────────────────────────────────────────────────────────────────────────────────────────────</div>
   <div id="out" aria-live="polite">
@@ -189,7 +190,9 @@ const $ = id => document.getElementById(id);
 const pretty = name => name.replace(/\{(\w)\}/g, (m, s) => ENERGY[s.toUpperCase()] || s);
 const IMAGE_SETS = { "PR-SV": "SVP", "PR-SW": "SWSHP" };  // same as decklists.card_image_url
 function cardImage(set, number) {
-  const code = IMAGE_SETS[set.toUpperCase()] || set.toUpperCase();
+  let code = IMAGE_SETS[set.toUpperCase()] || set.toUpperCase();
+  const gallery = /^(\w+)-(TG|GG)$/.exec(code);  // Trainer/Galarian Gallery: LOR-TG 24 -> LOR/LOR_TG24, unpadded
+  if (gallery) return `https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/tpci/${gallery[1]}/${gallery[1]}_${gallery[2]}${number}_R_EN_SM.png`;
   const m = /^(\d+)(.*)$/.exec(number);
   const padded = m ? m[1].padStart(3, "0") + m[2] : number;
   return `https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/tpci/${code}/${code}_${padded}_R_EN_SM.png`;
@@ -414,6 +417,18 @@ function openApp(url) {
     note.className = "bad";
     note.textContent = String(err.message || err).toLowerCase();
   }
+})();
+// dark by default; the toggle remembers a light choice
+(function () {
+  const root = document.documentElement, btn = document.getElementById("theme");
+  const apply = light => { if (light) root.dataset.theme = "light"; else delete root.dataset.theme; btn.textContent = light ? "dark" : "light"; };
+  let light = false;
+  try { light = localStorage.getItem("theme") === "light"; } catch (e) {}
+  apply(light);
+  btn.onclick = () => {
+    light = !light; apply(light);
+    try { localStorage.setItem("theme", light ? "light" : "dark"); } catch (e) {}
+  };
 })();
 </script>
 </body>

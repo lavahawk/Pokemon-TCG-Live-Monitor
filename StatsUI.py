@@ -5820,6 +5820,13 @@ class StatsWindow(QWidget):
             flag_btn.toggled.connect(lambda on, k=kind, name=flag_deck: self._set_deck_flag(k, name, on))
             flag_row.addWidget(flag_btn)
         hero_top.addWidget(flag_group)
+        rename_btn = QPushButton("Rename / Merge")
+        rename_btn.setObjectName("limitlessBtn")
+        rename_btn.setFixedHeight(30)
+        rename_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        rename_btn.setToolTip("Rename this deck, or merge it into another (fixes a misread deck name)")
+        rename_btn.clicked.connect(lambda checked=False, name=flag_deck: self._rename_or_merge_deck(name))
+        hero_top.addWidget(rename_btn)
         hero_top.addWidget(self._create_decklist_button(flag_deck, matched_row))
         from decklists import decklist_for_deck
         list_entry = decklist_for_deck(flag_deck)
@@ -7003,6 +7010,58 @@ class StatsWindow(QWidget):
             self._meta_tab_dirty = True
             if hasattr(self, "tab_widget") and self.tab_widget.tabText(self.tab_widget.currentIndex()) == "Meta":
                 self._populate_meta_tab()
+
+    def _rename_or_merge_deck(self, old):
+        """Pick a name: a new one renames the deck, an existing deck's name
+        merges this deck's battles into it (then this deck is gone)."""
+        from PySide6.QtWidgets import QInputDialog
+        others = [n for n in self.db.get_known_deck_names() if n != old]
+        self.begin_protected_interaction()
+        try:
+            new, ok = QInputDialog.getItem(
+                self, "Rename / Merge deck",
+                f"New name for \"{old}\".\nPick another deck from the list to merge into it:",
+                others, 0, True)
+            new = (new or "").strip() if ok else ""
+            if not new or new == old:
+                return
+            merging = new in others
+            if merging:
+                answer = QMessageBox.question(
+                    self, "Merge decks",
+                    f"Move all battles of \"{old}\" into \"{new}\"?\n\n\"{old}\" will no longer exist.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No)
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+        finally:
+            self.end_protected_interaction()
+        try:
+            self.db.rename_deck(old, new)
+            from decklists import move_deck_links
+            move_deck_links(old, new)
+            # Pin / star / ignore and the base archetype follow the new name.
+            changed = False
+            for flags in (self.pinned_decks, self.starred_decks, self.ignored_decks):
+                if old in flags:
+                    flags.remove(old)
+                    if new not in flags:
+                        flags.append(new)
+                    changed = True
+            if changed:
+                self._save_pinned_decks()
+                self._save_deck_flags()
+            archetype = deck_archetypes().get(old)
+            if archetype:
+                if not deck_archetypes().get(new):
+                    set_deck_archetype(new, archetype)
+                set_deck_archetype(old, "")
+        except Exception as exc:
+            QMessageBox.warning(self, "Rename / Merge deck", f"Could not update the deck: {exc}")
+            return
+        self._deck_dashboards_dirty = True
+        self._meta_tab_dirty = True
+        self.load_stats()
 
     def _reorder_deck_tabs(self):
         """Move tabs into sort order without rebuilding any page."""
@@ -10956,6 +11015,28 @@ class StatsWindow(QWidget):
             # A theme is applied when the UI starts: restart it now.
             QTimer.singleShot(150, lambda: self.restart_ui())
         combo.currentIndexChanged.connect(changed)
+        # Size for high-resolution screens (4K): applied when the UI starts.
+        from app_settings import SCALE_CHOICES
+        size_row = QHBoxLayout()
+        size_row.setSpacing(8)
+        for title, key, tip in (("HUD size", "hud_scale", "Size of the mini GUI overlay"),
+                                ("Text size", "text_scale", "Size of the text in every window")):
+            size_label = QLabel(title)
+            size_label.setObjectName("settingsDesc")
+            size_combo = QComboBox()
+            size_combo.setObjectName("metaCombo")
+            size_combo.setToolTip(tip + ". Restarts the app to apply.")
+            current = int(self.app_settings.get(key, 100) or 100)
+            for pct in SCALE_CHOICES:
+                size_combo.addItem(f"{pct}%", pct)
+            size_combo.setCurrentIndex(max(0, size_combo.findData(current)))
+            size_combo.currentIndexChanged.connect(
+                lambda _i, c=size_combo, k=key: (self._save_app_setting(k, c.currentData()),
+                                                 QTimer.singleShot(150, lambda: self.restart_ui())))
+            size_row.addWidget(size_label)
+            size_row.addWidget(size_combo)
+        size_row.addStretch()
+        body.addLayout(size_row)
         card.layout().addLayout(body)
         return card
 
