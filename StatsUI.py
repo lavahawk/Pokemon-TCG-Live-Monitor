@@ -8402,6 +8402,8 @@ class StatsWindow(QWidget):
                 self._refresh_decks_meta()
             elif getattr(self, "_meta_tab_dirty", True):
                 self._populate_meta_tab()
+            if hasattr(self, "meta_search"):
+                self.meta_search.setFocus()  # just start typing to search
         elif tab_name == "Decks":
             if not self._top_limitless_rows():
                 self._refresh_decks_meta()
@@ -8911,6 +8913,13 @@ class StatsWindow(QWidget):
         self.meta_mine_basis.currentIndexChanged.connect(lambda *_: self._populate_meta_tab())
         view_row.addWidget(self.meta_mine_basis)
         view_row.addStretch()
+        self.meta_search = QLineEdit()
+        self.meta_search.setObjectName("deckSearchInput")
+        self.meta_search.setPlaceholderText("Search decks (just type)")
+        self.meta_search.setClearButtonEnabled(True)
+        self.meta_search.setFixedSize(190, 24)
+        self.meta_search.textChanged.connect(lambda *_: self._filter_meta_rows())
+        view_row.addWidget(self.meta_search)
         vlayout.addLayout(view_row)
 
         self.meta_status = QLabel("Loading meta data…")
@@ -8930,6 +8939,7 @@ class StatsWindow(QWidget):
         # the zoomed error bars get room.
         self.meta_arch_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         self.meta_arch_table.setColumnWidth(3, 150)
+        self.meta_arch_table.installEventFilter(self)  # typing on the table searches
         self.meta_arch_table.cellDoubleClicked.connect(lambda row, col: self._open_table_row_link(self.meta_arch_table, row))
         self._meta_row_delegate = MineRowDelegate(self.meta_arch_table)
         self.meta_arch_table.setItemDelegate(self._meta_row_delegate)
@@ -9270,6 +9280,21 @@ class StatsWindow(QWidget):
         return infotip.tip(summary, "<br>".join(details))
 
     def _populate_meta_tab(self):
+        self._populate_meta_rows()
+        self._filter_meta_rows()
+
+    def _filter_meta_rows(self):
+        """Meta → Archetypes: hide rows whose deck name doesn't contain the search text."""
+        table, search = getattr(self, "meta_arch_table", None), getattr(self, "meta_search", None)
+        if table is None or search is None:
+            return
+        query = search.text().strip().casefold()
+        for row in range(table.rowCount()):
+            item = table.item(row, 1)
+            name = item.text().casefold() if item else ""
+            table.setRowHidden(row, bool(query) and query not in name)
+
+    def _populate_meta_rows(self):
         if not hasattr(self, "meta_arch_table"):
             return
         data = self._meta_view_sheet()
@@ -9856,6 +9881,12 @@ class StatsWindow(QWidget):
         list_widget = getattr(self, "_trend_list", None)
         if list_widget is not None and obj is list_widget.viewport() and event.type() == QEvent.Type.Leave:
             self._trend_chart.set_focus(None)
+        if obj is getattr(self, "meta_arch_table", None) and event.type() == QEvent.Type.KeyPress:
+            text = event.text()
+            if text and text.isprintable() and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+                self.meta_search.setFocus()
+                self.meta_search.insert(text)
+                return True
         return super().eventFilter(obj, event)
 
     def _trend_save(self):
