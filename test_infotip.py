@@ -28,6 +28,11 @@ def test_long_tip_without_marker_splits_at_first_break():
     assert I.split("A<br>B c")[1] == ""
 
 
+def test_whole_tip_is_never_split():
+    text = "<b>Headline</b><br>" + " ".join(["word"] * 20)
+    assert I.split(I.whole(text)) == (text, "")
+
+
 def test_plain_newlines_become_breaks():
     head, more = I.split("Opponents:\n" + "\n".join(f"Player number {i}" for i in range(8)))
     assert head == "Opponents:" and "<br>" in more
