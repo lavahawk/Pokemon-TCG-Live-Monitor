@@ -772,7 +772,28 @@ class _NoNetwork:
         raise RuntimeError("offline rebuild")
 
 
-def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, sources=ALL_SOURCES):
+# Background refresh (StatsUI's trickle): at most this many new events per
+# source per run, so the app catches up a little at a time instead of in one
+# long burst. Online events cost 2 API calls each (limit: 50 per 5 minutes).
+TRICKLE_NEW = {"online": 6, "in_person": 2, "japan": 12}
+
+
+def _newest_uncached(events, store_name, cap):
+    """Cached events plus at most `cap` uncached ones (newest first): the
+    rest wait for a later run. cap None = no limit."""
+    if cap is None:
+        return events, 0
+    cached = [e for e in events if os.path.exists(_store_path(store_name(e)))]
+    new = sorted((e for e in events if not os.path.exists(_store_path(store_name(e)))),
+                 key=lambda e: e["date"], reverse=True)
+    return cached + new[:cap], max(0, len(new) - cap)
+
+
+def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, sources=ALL_SOURCES,
+                     trickle=False):
+    """The sheet with every event downloaded (cached ones are free). trickle:
+    download only a few new events per source (TRICKLE_NEW); sheet["pending"]
+    is how many are left for later runs."""
     global WEIGHTS
     WEIGHTS = current_weights()
     session = session or make_session()
@@ -786,6 +807,13 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
     in_person = [e for e in list_in_person(session) if e["date"] >= since_en]
     japan = list_japan(session, since_jp)
     online = list_online(session, since_en)
+
+    pending = 0
+    if trickle:
+        online, left_o = _newest_uncached(online, lambda e: f"online_v3_{e['id']}", TRICKLE_NEW["online"])
+        in_person, left_i = _newest_uncached(in_person, lambda e: f"inperson_v2_{e['id']}", TRICKLE_NEW["in_person"])
+        japan, left_j = _newest_uncached(japan, lambda e: f"japan_{e['id']}", TRICKLE_NEW["japan"])
+        pending = left_o + left_i + left_j
 
     progress(f"Loading {len(online)} online, {len(in_person)} in-person and {len(japan)} Japanese events…")
     inperson_data = _fetch_all(session, fetch_in_person_event, in_person, "in-person", progress)
@@ -804,8 +832,10 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
         os.replace(path + ".tmp", path)
     except Exception:
         pass
-    return _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data, japan_data, online_data, labs_data,
-                     use_weights, sources, lists_data)
+    sheet = _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data, japan_data, online_data,
+                      labs_data, use_weights, sources, lists_data)
+    sheet["pending"] = pending
+    return sheet
 
 
 def rebuild_meta_sheet(use_weights=True, sources=ALL_SOURCES, progress=lambda msg: None):
@@ -919,6 +949,7 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                                    "sw": 0.0, "sw2": 0.0, "pilots": [],
                                    "sources": {"online": 0, "in_person": 0, "japan": 0},
                                    "matchups": {},
+                                   "mcur": {},  # raw [w, l, t] per opponent, current format only
                                    # card usage: weighted / raw list counts, per card [lists, copies, set, no.]
                                    "lists_w": 0.0, "lists_n": 0, "cards": {},
                                    "recent": 0,  # players in the last RECENT_DAYS of online events
@@ -957,6 +988,9 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
     in_person_events = []
     events_used = {"online": 0, "in_person": 0, "japan": 0}
     in_person_records = 0  # in-person events with Labs match results
+    # Players per archetype per event (every event in the window, whatever
+    # the Data view): the Meta -> Trend view is drawn from these.
+    trend_events = []
 
     # Current popularity: every player of the online (PTCGL) events of the
     # last RECENT_DAYS counts once, whatever the Data view. It's the closest
@@ -974,10 +1008,15 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
 
     for data in online_data:
         ev = data["event"]
-        weight = event_weight("online", ev, era_of(ev["date"], exp_en))
+        era = era_of(ev["date"], exp_en)
+        weight = event_weight("online", ev, era)
         total = len(data["decks"])
         if weight <= 0 or not total:
             continue
+        counts = {}
+        for d in data["decks"]:
+            counts[_key(d["deck"])] = counts.get(_key(d["deck"]), 0) + 1
+        trend_events.append({"d": ev["date"], "k": "online", "p": int(ev.get("players") or total), "c": counts})
         if "online" not in sources:
             for d in data["decks"]:
                 arch(d["deck"], d["deck_id"], d["icons"],
@@ -1023,6 +1062,11 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                 rec[1] += weight * l
                 rec[2] += weight * t
                 a["mraw"][_key(opp)] = a["mraw"].get(_key(opp), 0) + w + l + t
+                if era == 0:
+                    cur = a["mcur"].setdefault(_key(opp), [0, 0, 0])
+                    cur[0] += w
+                    cur[1] += l
+                    cur[2] += t
 
     # In-person names are sometimes shorter than the online ones ("Ogerpon
     # Meganium" vs "Ogerpon Meganium Hydrapple"). Map a name to the single
@@ -1045,6 +1089,11 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
         points = sum(d["points"] for d in data["decks"]) or 1
         if weight <= 0 or not total:
             continue
+        counts = {}
+        for d in data["decks"]:
+            key = _key(resolve_in_person(d["deck"]))
+            counts[key] = counts.get(key, 0) + d["count"]
+        trend_events.append({"d": ev["date"], "k": "in_person", "p": int(ev.get("players") or total), "c": counts})
         if "in_person" not in sources:
             for d in data["decks"]:
                 arch(resolve_in_person(d["deck"]), d["deck_id"], d["icons"],
@@ -1106,6 +1155,11 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                     rec[1] += weight * ol
                     rec[2] += weight * ot
                     a["mraw"][cell] = a["mraw"].get(cell, 0) + ow + ol + ot
+                    if era == 0:
+                        cur = a["mcur"].setdefault(cell, [0, 0, 0])
+                        cur[0] += ow
+                        cur[1] += ol
+                        cur[2] += ot
         # Day 2 decklists (card usage).
         day2_lists = (lists_data or {}).get(ev["id"])
         if day2_lists:
@@ -1250,6 +1304,8 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
             "sources": a["sources"],
             "matchups": {k: [round(x, 2) for x in on_real_games(v, a["mraw"].get(k, 0))]
                          for k, v in a["matchups"].items() if a["mraw"].get(k)},
+            # Plain game counts in the current format (since the latest expansion).
+            "matchups_cur": a["mcur"],
             "in_person": _in_person_summary(a["ip"], ip_totals),
             "record_source": "unified",
             "lists": a["lists_n"],
@@ -1277,6 +1333,9 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
         "pilot_sd": round(pilot_var ** 0.5, 4),
         "view": {"use_weights": bool(use_weights), "sources": sorted(sources)},
         "window": {"en_since": since_en, "jp_since": since_jp},
+        "trend_events": sorted(trend_events, key=lambda e: e["d"]),
+        "trend_names": {k: [a["deck"], a["icons"]] for k, a in archetypes.items()
+                        if any(k in e["c"] for e in trend_events)},
     }
     return sheet
 

@@ -20,7 +20,7 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, Signal, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QFont, QFontMetrics, QFontDatabase
-from PySide6.QtWidgets import QApplication, QWidget, QScrollArea, QSizePolicy
+from PySide6.QtWidgets import QApplication, QWidget, QScrollArea, QSizePolicy, QStyledItemDelegate, QStyle
 
 
 TEXT = QColor(226, 235, 246, 150)
@@ -923,6 +923,110 @@ def _hatch_brush(color):
     """Diagonal hatch (45 degrees) in the surface colour, for texture slots."""
     from PySide6.QtGui import QBrush
     return QBrush(color, Qt.BrushStyle.BDiagPattern)
+
+
+# ── Matchup heatmap (Meta → Matchups) ─────────────────────────────────────
+# Diverging blue (favoured) <-> red (unfavoured) around a neutral grey, the
+# dataviz reference pair stepped dark enough that white text stays >= 4.5:1.
+MATCHUP_FAVOURED = QColor("#256abf")
+MATCHUP_UNFAVOURED = QColor("#b03a3a")
+MATCHUP_NEUTRAL = QColor("#2c3038")
+MATCHUP_SPAN = 0.20       # 50% +- this reaches the full pole colour
+MATCHUP_CONFIDENT = 40    # games at which a cell gets most of its colour
+
+
+def _mix(a, b, t):
+    t = max(0.0, min(1.0, t))
+    return QColor(round(a.red() + (b.red() - a.red()) * t), round(a.green() + (b.green() - a.green()) * t),
+                  round(a.blue() + (b.blue() - a.blue()) * t))
+
+
+def matchup_color(edge, games):
+    """Cell colour for a result `edge` (rate - par, e.g. +0.08) over `games`.
+    Few games pull the colour back toward neutral, so thin samples can't shout."""
+    confidence = games / (games + MATCHUP_CONFIDENT) if games > 0 else 0.0
+    pole = MATCHUP_FAVOURED if edge >= 0 else MATCHUP_UNFAVOURED
+    return _mix(MATCHUP_NEUTRAL, pole, abs(edge) / MATCHUP_SPAN * (0.25 + 0.75 * confidence))
+
+
+
+class MatchupCellDelegate(QStyledItemDelegate):
+    """Paints one matchup cell: the result rate large, the W-L-T record small
+    underneath, on its diverging colour with a 2px surface gap between cells.
+    The item's UserRole holds {"rate", "record", "edge", "games", "thin", "mirror"}
+    (None = no games)."""
+
+    def paint(self, painter, option, index):
+        info = index.data(Qt.ItemDataRole.UserRole)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cell = QRectF(option.rect).adjusted(1, 1, -1, -1)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        if not info:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 6))
+            painter.drawRoundedRect(cell, 4, 4)
+            painter.setPen(QColor(255, 255, 255, 50))
+            painter.drawText(cell, Qt.AlignmentFlag.AlignCenter, "·")
+            painter.restore()
+            return
+        if info.get("mirror"):
+            fill = QColor(255, 255, 255, 10)
+        else:
+            fill = matchup_color(info["edge"], info["games"])
+        painter.setPen(QPen(QColor(255, 255, 255, 150), 1.2) if hovered else Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(cell, 4, 4)
+
+        big = QFont(option.font)
+        big.setPixelSize(13)
+        big.setBold(True)
+        small = QFont(option.font)
+        small.setPixelSize(9)
+        fm_big, fm_small = QFontMetrics(big), QFontMetrics(small)
+        top = cell.center().y() - (fm_big.height() + fm_small.height()) / 2
+        strong = QColor(244, 249, 255, 120 if info.get("thin") else 240)
+        soft = QColor(226, 235, 246, 90 if info.get("thin") else 170)
+        painter.setFont(big)
+        painter.setPen(strong if not info.get("mirror") else QColor(226, 235, 246, 140))
+        painter.drawText(QRectF(cell.left(), top, cell.width(), fm_big.height()), Qt.AlignmentFlag.AlignCenter,
+                         f"{info['rate'] * 100:.0f}%" if not info.get("mirror") else "mirror")
+        painter.setFont(small)
+        painter.setPen(soft)
+        painter.drawText(QRectF(cell.left() + 2, top + fm_big.height(), cell.width() - 4, fm_small.height()),
+                         Qt.AlignmentFlag.AlignCenter,
+                         fm_small.elidedText(info.get("record", ""), Qt.TextElideMode.ElideRight, int(cell.width() - 4)))
+        painter.restore()
+
+
+class MatchupLegend(QWidget):
+    """The heatmap's scale: unfavoured - even - favoured, and what pale means."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(30)
+        self.setFont(chart_font())
+        self.note = ""
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fm = QFontMetrics(self.font())
+        x, y, w, h = 4, 6, 180, 10
+        steps = 9
+        for i in range(steps):
+            edge = (i / (steps - 1) * 2 - 1) * MATCHUP_SPAN
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(matchup_color(edge, 10 ** 6))
+            p.drawRoundedRect(QRectF(x + i * w / steps + 1, y, w / steps - 2, h), 2, 2)
+        p.setPen(TEXT)
+        for text, at in ((f"{50 - MATCHUP_SPAN * 100:.0f}%", 0.0), ("50%", 0.5), (f"{50 + MATCHUP_SPAN * 100:.0f}%+", 1.0)):
+            tw = fm.horizontalAdvance(text)
+            p.drawText(QRectF(x + at * w - tw / 2 if 0 < at < 1 else (x if at == 0 else x + w - tw), y + h + 1, tw + 2,
+                              fm.height()), Qt.AlignmentFlag.AlignLeft, text)
+        if self.note:
+            p.drawText(QRectF(x + w + 18, 0, self.width() - w - 22, self.height()),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.note)
 
 
 # ── Rank per deck (deck page) ─────────────────────────────────────────────
