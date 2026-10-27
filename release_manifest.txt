@@ -73,6 +73,7 @@ decklists.py
 weights.py
 meta_sources.py
 trainerhill_trend.py
+meta_trend.py
 card_usage.py
 
 # Data and assets
@@ -203,3 +204,4 @@ RELEASE_NOTES_v2.9.md
 RELEASE_NOTES_v2.10.md
 RELEASE_NOTES_v2.11.md
 RELEASE_NOTES_v2.12.md
+RELEASE_NOTES_v2.13.md
