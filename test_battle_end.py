@@ -78,6 +78,17 @@ def test_export_reuses_the_early_cover():
     assert ("wait", "blocker") in f.events and ("close", "blocker") in f.events
 
 
+def test_click_step_does_not_re_read_the_text():
+    f = Fake(0.98)
+    f.auto._find_calls = []
+    find = f.auto._find
+    f.auto._find = lambda sct, name, rect, region=None, verify=None: (
+        f.auto._find_calls.append(verify) or find(sct, name, rect, region, verify))
+    f.text_ok = False  # the button is mid-animation: OCR would fail now
+    assert f.auto._button_still_there(None, RECT)
+    assert f.auto._find_calls == [None] and "ocr" not in f.events
+
+
 def test_user_already_exported_drops_the_cover():
     f = Fake(0.98)
     hit = f.auto._battle_log_visible(None, RECT, cover_hwnd=1)
