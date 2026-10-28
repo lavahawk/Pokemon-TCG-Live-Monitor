@@ -10,5 +10,7 @@ Run **`PokemonTCGLiveMonitor-2.13.0-Free-Setup.exe`**. Install over any 2.x vers
 - **Search.** Matches move to the top: deck names, then Pokémon, then cards. Enter goes to the next one. The filter button hides the rest. Click a deck and type to jump instead.
 - **Data sources** are separate toggles: Online, In-person, Japan.
 - **Sharper Pokémon sprites** on scaled displays.
+- **Text size is a slider** (80–200%), and text no longer gets cut off at larger sizes.
+- **Rename a deck by double-clicking its name.** Type another deck's name to merge them.
 - **Clearer labels.** Win rates are marked Adjusted, Actual or Expected vs meta.
 - **TrainerHill Deck Diff** loads your list for you.

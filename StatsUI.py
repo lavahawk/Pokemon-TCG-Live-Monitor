@@ -66,7 +66,7 @@ import formulas
 import ai_provider
 import theme
 import infotip
-from ui_widgets import DeckFlagButton, DeckTabBar, EditHintDelegate, MineRowDelegate, MINE_ROLE
+from ui_widgets import DeckFlagButton, DeckTabBar, DeckTitle, EditHintDelegate, MineRowDelegate, MINE_ROLE
 from leagues import LEAGUES, league_name
 from app_settings import (
     clear_api_key,
@@ -5890,8 +5890,10 @@ class StatsWindow(QWidget):
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(2)
 
-        deck_title = QLabel(analysis.get("deck_name", ""))
-        deck_title.setObjectName("deckPageTitle")
+        # The name renames in place: double-click it, Enter saves.
+        title_name = analysis.get("deck_name", "")
+        deck_title = DeckTitle(title_name, self.db.get_known_deck_names())
+        deck_title.rename_requested.connect(lambda new, merge, old=title_name: self._rename_deck(old, new, merge))
         text_col.addWidget(deck_title)
 
         record_label = QLabel(f"{analysis.get('record')} across {analysis.get('games')} games")
@@ -5916,13 +5918,6 @@ class StatsWindow(QWidget):
             flag_btn.toggled.connect(lambda on, k=kind, name=flag_deck: self._set_deck_flag(k, name, on))
             flag_row.addWidget(flag_btn)
         hero_top.addWidget(flag_group)
-        rename_btn = QPushButton("Rename / Merge")
-        rename_btn.setObjectName("limitlessBtn")
-        rename_btn.setFixedHeight(30)
-        rename_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        rename_btn.setToolTip("Rename this deck, or merge it into another (fixes a misread deck name)")
-        rename_btn.clicked.connect(lambda checked=False, name=flag_deck: self._rename_or_merge_deck(name))
-        hero_top.addWidget(rename_btn)
         hero_top.addWidget(self._create_decklist_button(flag_deck, matched_row))
         from decklists import decklist_for_deck
         list_entry = decklist_for_deck(flag_deck)
@@ -7107,31 +7102,12 @@ class StatsWindow(QWidget):
             if hasattr(self, "tab_widget") and self.tab_widget.tabText(self.tab_widget.currentIndex()) == "Meta":
                 self._populate_meta_tab()
 
-    def _rename_or_merge_deck(self, old):
-        """Pick a name: a new one renames the deck, an existing deck's name
-        merges this deck's battles into it (then this deck is gone)."""
-        from PySide6.QtWidgets import QInputDialog
-        others = [n for n in self.db.get_known_deck_names() if n != old]
-        self.begin_protected_interaction()
-        try:
-            new, ok = QInputDialog.getItem(
-                self, "Rename / Merge deck",
-                f"New name for \"{old}\".\nPick another deck from the list to merge into it:",
-                others, 0, True)
-            new = (new or "").strip() if ok else ""
-            if not new or new == old:
-                return
-            merging = new in others
-            if merging:
-                answer = QMessageBox.question(
-                    self, "Merge decks",
-                    f"Move all battles of \"{old}\" into \"{new}\"?\n\n\"{old}\" will no longer exist.",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No)
-                if answer != QMessageBox.StandardButton.Yes:
-                    return
-        finally:
-            self.end_protected_interaction()
+    def _rename_deck(self, old, new, merge=False):
+        """Rename a deck from its page title (DeckTitle). merge: `new` is
+        another deck's name, so this deck's battles move into it and this
+        deck is gone (the title already showed that before Enter)."""
+        if not new or new == old:
+            return
         try:
             self.db.rename_deck(old, new)
             from decklists import move_deck_links
@@ -7153,7 +7129,7 @@ class StatsWindow(QWidget):
                     set_deck_archetype(new, archetype)
                 set_deck_archetype(old, "")
         except Exception as exc:
-            QMessageBox.warning(self, "Rename / Merge deck", f"Could not update the deck: {exc}")
+            QMessageBox.warning(self, "Merge decks" if merge else "Rename deck", f"Could not update the deck: {exc}")
             return
         self._deck_dashboards_dirty = True
         self._meta_tab_dirty = True
