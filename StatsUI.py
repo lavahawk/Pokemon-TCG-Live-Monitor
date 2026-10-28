@@ -8049,6 +8049,35 @@ class StatsWindow(QWidget):
         self.auto_export_checkbox.toggled.connect(self._save_auto_export_setting)
         parser_layout.addWidget(self.auto_export_checkbox)
 
+        self.ocr_debug_checkbox = QCheckBox("OCR Bounding Box Debug")
+        self.ocr_debug_checkbox.setObjectName("settingsCheck")
+        self.ocr_debug_checkbox.setToolTip(infotip.tip(
+            "Shows the areas the app reads on the game screen",
+            "Semi-transparent boxes over the game, live: green found what it looks for, "
+            "red found nothing, blue is text OCR read (shown on the box). "
+            "Also saves the end of each battle as pictures in Logs/end_screens (the last 5)."))
+        self.ocr_debug_checkbox.setChecked(bool(self.app_settings.get("debug_mode", False)))
+        parser_layout.addWidget(self.ocr_debug_checkbox)
+
+        self.ocr_edit_checkbox = QCheckBox("Edit boxes: drag the OCR boxes over the game")
+        self.ocr_edit_checkbox.setObjectName("settingsCheck")
+        self.ocr_edit_checkbox.setToolTip(infotip.tip(
+            "Move or resize where rank, deck name and menu text are read",
+            "Drag a corner to resize, the middle to move. Saved when you let go; "
+            "the original boxes are kept in screen_regions.before_debug.json."))
+        self.ocr_edit_checkbox.setChecked(bool(self.app_settings.get("ocr_box_edit", False)))
+        self.ocr_edit_checkbox.setEnabled(self.ocr_debug_checkbox.isChecked())
+        self.ocr_edit_checkbox.toggled.connect(
+            lambda checked: self._save_app_setting("ocr_box_edit", bool(checked)))
+        parser_layout.addWidget(self.ocr_edit_checkbox)
+
+        def debug_toggled(checked):
+            self._save_app_setting("debug_mode", bool(checked))
+            self.ocr_edit_checkbox.setEnabled(checked)
+            if not checked:
+                self.ocr_edit_checkbox.setChecked(False)
+        self.ocr_debug_checkbox.toggled.connect(debug_toggled)
+
         parser_btn_row = QHBoxLayout()
         parser_btn_row.setSpacing(8)
 

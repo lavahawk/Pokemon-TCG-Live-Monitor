@@ -172,6 +172,8 @@ class RankDetector:
         }
         
         try:
+            import ocr_debug
+            ocr_debug.report(region_name, monitor)
             with mss.mss() as sct:
                 screenshot = sct.grab(monitor)
             img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
@@ -456,6 +458,13 @@ class RankDetector:
         
         # Clean the result
         text = text.strip()
+        try:
+            import ocr_debug
+            box = self.get_absolute_region(region_name)
+            if box:
+                ocr_debug.report(region_name, box, hit=bool(text), text=text or "(nothing read)")
+        except Exception:
+            pass
         
         if text:
             if not silent:

@@ -83,6 +83,8 @@ def check_hud(game_rect=None, sct=None):
         if tpl.shape[0] > gray.shape[0] or tpl.shape[1] > gray.shape[1]:
             return False, 0, ["window_too_small"]
         score = float(cv2.minMaxLoc(cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED))[1])
+        import ocr_debug
+        ocr_debug.report("HUD gear", box, hit=score >= THRESHOLD, score=score)
         return score >= THRESHOLD, int(score * 100), [f"gear={score:.2f}"]
     except Exception as exc:
         return False, 0, [f"error:{exc}"]
