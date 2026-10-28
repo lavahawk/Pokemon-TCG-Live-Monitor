@@ -277,7 +277,7 @@ def set_low_priority(low):
 
 
 def play_sound_async():
-    """The import sound chosen in Advanced → Preferences · Sound (sounds.py)."""
+    """The import sound chosen in Settings → Sound (sounds.py)."""
     try:
         import sounds
         sounds.play_import_sound()
@@ -547,7 +547,7 @@ class Monitor:
             return
         import ui_restart
         if ui_restart.pending():
-            pass  # Advanced -> Restart app / a theme change: not a crash
+            pass  # Settings -> Restart app / a theme change: not a crash
         elif self.overlay_starts >= 5:
             return  # crashing repeatedly; see Logs/overlay_error.log
         else:
@@ -560,7 +560,7 @@ class Monitor:
         except Exception as exc:
             log(f"Could not start overlay: {exc}")
 
-    # ── OCR Bounding Box Debug (Advanced) ──
+    # ── OCR Bounding Box Debug (Settings) ──
     def ensure_debug_overlay(self):
         """Boxes over the game showing what the checks read, while debug
         mode is on (the overlay exits by itself when it is turned off)."""

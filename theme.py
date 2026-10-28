@@ -1,5 +1,5 @@
 """
-UI themes (setting "ui_theme", Advanced -> Preferences · Appearance).
+UI themes (setting "ui_theme", Settings -> Appearance).
 
 A theme is three parts, taken from the style picker's sources:
   type     the fonts:   legacy (Segoe UI / Consolas), geist (Geist / Geist Mono),

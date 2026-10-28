@@ -1,5 +1,5 @@
 """
-User-adjustable data weights (Dashboard → Advanced → Preferences).
+User-adjustable data weights (Dashboard → Settings → Data Weights).
 
 Stored under "weights" in .app_settings.json; anything missing falls back to
 the defaults below. Read by meta_sources (meta sheet), leagues/deck_analytics

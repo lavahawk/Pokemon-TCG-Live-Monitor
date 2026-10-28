@@ -1,5 +1,5 @@
 """
-Restart the UI in place (Advanced -> Restart app, or after a theme change).
+Restart the UI in place (Settings -> Restart app, or after a theme change).
 
 The dashboard usually lives inside the overlay process. A restart leaves a
 note (.ui_restart.json) and quits; the monitor sees the note and relaunches

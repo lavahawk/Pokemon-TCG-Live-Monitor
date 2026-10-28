@@ -96,7 +96,7 @@ def _ladder_settings():
 
 
 def _league_weights():
-    """User-adjusted league weights (Advanced → Preferences), else defaults."""
+    """User-adjusted league weights (Settings → Data Weights), else defaults."""
     ladder = _ladder_settings()
     try:
         return {key: float(ladder.get(key, LEAGUE_WEIGHTS[key])) for key in LEAGUE_WEIGHTS}

@@ -8,7 +8,7 @@ page's own site are never blocked, so a site can't break itself. No cosmetic
 filtering: blocked ad slots may leave empty space.
 
 Setting: "browser_adblock" in .app_settings.json (default on), toggled from
-Advanced → Preferences · Overlay; takes effect on the next request.
+Settings → Overlay; takes effect on the next request.
 """
 
 import os

@@ -18,9 +18,9 @@ R.MARKER = os.path.join(TMP, ".ui_restart.json")
 
 
 def test_note_is_read_once():
-    R.request("Advanced")
+    R.request("Settings")
     assert R.pending()
-    assert R.take()["tab"] == "Advanced"
+    assert R.take()["tab"] == "Settings"
     assert not R.pending() and R.take() is None
 
 

@@ -242,7 +242,10 @@ LIMITLESS_TOURNAMENT_FLAG_FILE = os.path.join(BASE_DIR, ".in_tournament")
 # attached to the battle record for later review.
 LIMITLESS_CHAT_CAPTURE_FILE = os.path.join(BASE_DIR, ".chat_capture.json")
 LIMITLESS_SOUND_FILE = os.path.join(BASE_DIR, "ding.mp3")
-BATTLE_MGMT_LIMIT = 50  # rows in Advanced → Battle Database Management
+BATTLE_MGMT_LIMIT = 50  # rows in Settings → Battle Database
+SETTINGS_TAB = "Settings"
+# Old tab names still in saved tab orders, restart notes and other windows' calls.
+TAB_ALIASES = {"Advanced": SETTINGS_TAB}
 LIMITLESS_CHECK_INTERVAL_MS = 60000
 LIMITLESS_CHECK_DELAY_MS = 12000
 LIMITLESS_CHAT_POLL_INTERVAL_MS = 3000
@@ -2070,7 +2073,7 @@ class HoverCard(QFrame):
 
 
 class EloWeightCurve(QWidget):
-    """Advanced → Preferences: how a ladder game's weight climbs from the
+    """Settings → Data Weights: how a ladder game's weight climbs from the
     Master Ball weight (1400 Elo and below) to the Limitless tournament
     weight (1800+), drawn instead of written out."""
 
@@ -4035,7 +4038,7 @@ class StatsWindow(QWidget):
         
         # Settings Tab
         settings_tab = self.create_settings_tab()
-        self.tab_widget.addTab(settings_tab, "Advanced")
+        self.tab_widget.addTab(settings_tab, SETTINGS_TAB)
         
         # Donate Tab
         support_tab = self.create_support_tab()
@@ -4191,6 +4194,7 @@ class StatsWindow(QWidget):
         self._save_app_setting("main_tab_order", names)
 
     def _main_tab_index(self, name):
+        name = TAB_ALIASES.get(name, name)
         tabs = getattr(self, "tab_widget", None)
         if tabs is None:
             return -1
@@ -4420,9 +4424,9 @@ class StatsWindow(QWidget):
             self.end_protected_interaction()
     
     def _create_data_transfer_card(self):
-        """Advanced → Your data: one .zip to back up, move to a new PC, restore."""
+        """Settings → Back Up & Move: one .zip to back up, move to a new PC, restore."""
         import datatransfer
-        card = self.create_card("Your Data · Back Up & Move")
+        card = self.create_card("Back Up & Move")
         body = QVBoxLayout()
         body.setContentsMargins(12, 4, 12, 12)
         body.setSpacing(8)
@@ -4555,9 +4559,9 @@ class StatsWindow(QWidget):
             QMessageBox.information(self, "Up to date", f"You have the latest version ({APP_VERSION}).")
 
     def show_api_key_setting(self):
-        """Advanced tab, scrolled to the OpenAI key field, focused and pulsed
+        """Settings tab, scrolled to the OpenAI key field, focused and pulsed
         (the manual-mode notice and the deck card link here)."""
-        index = self._main_tab_index("Advanced")
+        index = self._main_tab_index(SETTINGS_TAB)
         if index < 0 or not hasattr(self, "api_key_input"):
             return
         self.tab_widget.setCurrentIndex(index)
@@ -5329,7 +5333,7 @@ class StatsWindow(QWidget):
 
         # ── v2.4.1 statistics (see deck_analytics) ──
         # Your games are weighted (expansion era x tournament / league; adjustable
-        # in Advanced → Preferences) and rescaled to the effective sample size.
+        # in Settings → Data Weights) and rescaled to the effective sample size.
         detailed = self.db.get_deck_battles_detailed(deck_name)
         expansions = cached_expansions("en")
         ww, wl, wt = weighted_record(detailed, expansions)
@@ -7700,9 +7704,9 @@ class StatsWindow(QWidget):
         threading.Thread(target=worker, daemon=True).start()
     
     def _create_weights_card(self):
-        """Advanced → Preferences: data weights for the meta sheet and your games."""
+        """Settings → Data Weights: data weights for the meta sheet and your games."""
         from PySide6.QtWidgets import QDoubleSpinBox
-        card = self.create_card("Preferences · Data Weights")
+        card = self.create_card("Data Weights")
         body = QVBoxLayout()
         body.setContentsMargins(12, 8, 12, 12)
         body.setSpacing(10)
@@ -7727,7 +7731,7 @@ class StatsWindow(QWidget):
                 spin.setSingleStep(0.5 if is_gap else 0.05)
                 spin.setDecimals(1 if is_gap else 2)
                 spin.setSuffix(" pts" if is_gap else "×")
-                spin.setFixedWidth(84)
+                spin.setFixedWidth(104 if is_gap else 84)  # room for "15.0 pts"
                 spin.setValue(float(current[group][key]))
                 default = DEFAULT_WEIGHTS[group][key]
                 label.setToolTip(tip or "")
@@ -7829,25 +7833,29 @@ class StatsWindow(QWidget):
             self._weights_status.setText("Applied to your stats.")
 
     def create_settings_tab(self):
-        """Create settings/advanced tab with debug controls"""
+        """Settings: the cards in five sections, most-used first, with a
+        section list on the left that jumps to (and follows) the page."""
         scroll = self._create_standard_scroll_area()
         self.settings_scroll = scroll
-        
+
         content = QWidget()
         content.setObjectName("contentWidget")
         layout = QVBoxLayout(content)
         layout.setSpacing(12)
         layout.setContentsMargins(12, 12, 12, 12)
 
-        layout.addWidget(self._create_weights_card())
-        layout.addWidget(self._create_appearance_prefs_card())
-        layout.addWidget(self._create_overlay_prefs_card())
-        layout.addWidget(self._create_sound_prefs_card())
-        layout.addWidget(self._create_import_card())
-        layout.addWidget(self._create_data_transfer_card())
+        weights_card = self._create_weights_card()
+        appearance_card = self._create_appearance_prefs_card()
+        overlay_card = self._create_overlay_prefs_card()
+        sound_card = self._create_sound_prefs_card()
+        import_card = self._create_import_card()
+        transfer_card = self._create_data_transfer_card()
 
-        # Debugging Section
-        debug_card = self.create_card("Debugging & Development")
+        export_card, capture_layout = self._settings_card("Auto-export")
+        ocr_card, ocr_layout = self._settings_card("OCR Bounding Box Debug")
+
+        # Tools (troubleshooting)
+        debug_card = self.create_card("Tools")
         debug_layout = QVBoxLayout()
         debug_layout.setSpacing(8)
         debug_layout.setContentsMargins(12, 8, 12, 12)
@@ -7857,33 +7865,36 @@ class StatsWindow(QWidget):
         self.console_btn.setObjectName("settingsBtn")
         self.console_btn.setFixedHeight(40)
         self.console_btn.clicked.connect(self.toggle_console)
-        debug_layout.addWidget(self.console_btn)
 
         refresh_console_btn = QPushButton("Re-scan Monitor Console")
         refresh_console_btn.setObjectName("settingsBtn")
         refresh_console_btn.setFixedHeight(36)
         refresh_console_btn.clicked.connect(self.check_console_availability)
-        debug_layout.addWidget(refresh_console_btn)
         
         # OCR Test Window button
         ocr_test_btn = QPushButton("Open OCR Test Window")
         ocr_test_btn.setObjectName("settingsBtn")
         ocr_test_btn.setFixedHeight(40)
         ocr_test_btn.clicked.connect(self.launch_ocr_test)
-        debug_layout.addWidget(ocr_test_btn)
         
         # Run AI Parse button
         ai_parse_btn = QPushButton("Run AI Battle Log Parser")
         ai_parse_btn.setObjectName("settingsBtn")
         ai_parse_btn.setFixedHeight(40)
         ai_parse_btn.clicked.connect(self.launch_ai_parser)
-        debug_layout.addWidget(ai_parse_btn)
 
         open_logs_btn = QPushButton("Open Logs Folder")
         open_logs_btn.setObjectName("settingsBtn")
         open_logs_btn.setFixedHeight(36)
         open_logs_btn.clicked.connect(self.open_logs_folder)
-        debug_layout.addWidget(open_logs_btn)
+
+        tools = QGridLayout()
+        tools.setSpacing(8)
+        for i, btn in enumerate((ocr_test_btn, open_logs_btn, ai_parse_btn,
+                                 self.console_btn, refresh_console_btn)):
+            btn.setFixedHeight(34)
+            tools.addWidget(btn, i // 3, i % 3)
+        debug_layout.addLayout(tools)
 
         self.debug_status_label = QLabel("")
         self.debug_status_label.setObjectName("settingsDesc")
@@ -7894,7 +7905,6 @@ class StatsWindow(QWidget):
         self.check_console_availability()
         
         debug_card.layout().addLayout(debug_layout)
-        layout.addWidget(debug_card)
 
         # Meta data: optional Limitless API key (raises the 50 requests / 5 min limit)
         meta_card = self.create_card("Meta Data")
@@ -7921,17 +7931,12 @@ class StatsWindow(QWidget):
         meta_desc.setOpenExternalLinks(True)
         meta_layout.addWidget(meta_desc)
         meta_card.layout().addLayout(meta_layout)
-        layout.addWidget(meta_card)
 
         # AI / Local Parsing Section
-        parser_card = self.create_card("AI Parsing Mode")
+        parser_card = self.create_card("Deck Detection (AI)")
         parser_layout = QVBoxLayout()
         parser_layout.setSpacing(8)
         parser_layout.setContentsMargins(12, 8, 12, 12)
-
-        provider_label = QLabel("Deck detection")
-        provider_label.setObjectName("settingsDesc")
-        parser_layout.addWidget(provider_label)
 
         self.ai_provider_combo = QComboBox()
         self.ai_provider_combo.setObjectName("metaCombo")
@@ -8047,9 +8052,9 @@ class StatsWindow(QWidget):
             "Takes effect within a few seconds."))
         self.auto_export_checkbox.setChecked(bool(self.app_settings.get("auto_export_battle_log", True)))
         self.auto_export_checkbox.toggled.connect(self._save_auto_export_setting)
-        parser_layout.addWidget(self.auto_export_checkbox)
+        capture_layout.addWidget(self.auto_export_checkbox)
 
-        self.ocr_debug_checkbox = QCheckBox("OCR Bounding Box Debug")
+        self.ocr_debug_checkbox = QCheckBox("Show the boxes the app reads, over the game")
         self.ocr_debug_checkbox.setObjectName("settingsCheck")
         self.ocr_debug_checkbox.setToolTip(infotip.tip(
             "Shows the areas the app reads on the game screen",
@@ -8057,7 +8062,7 @@ class StatsWindow(QWidget):
             "red found nothing, blue is text OCR read (shown on the box). "
             "Also saves the end of each battle as pictures in Logs/end_screens (the last 5)."))
         self.ocr_debug_checkbox.setChecked(bool(self.app_settings.get("debug_mode", False)))
-        parser_layout.addWidget(self.ocr_debug_checkbox)
+        ocr_layout.addWidget(self.ocr_debug_checkbox)
 
         self.ocr_edit_checkbox = QCheckBox("Edit boxes: drag the OCR boxes over the game")
         self.ocr_edit_checkbox.setObjectName("settingsCheck")
@@ -8069,7 +8074,13 @@ class StatsWindow(QWidget):
         self.ocr_edit_checkbox.setEnabled(self.ocr_debug_checkbox.isChecked())
         self.ocr_edit_checkbox.toggled.connect(
             lambda checked: self._save_app_setting("ocr_box_edit", bool(checked)))
-        parser_layout.addWidget(self.ocr_edit_checkbox)
+        ocr_layout.addWidget(self.ocr_edit_checkbox)
+        end_screens_btn = QPushButton("Open end-of-battle pictures")
+        end_screens_btn.setObjectName("settingsBtn")
+        end_screens_btn.setFixedHeight(34)
+        end_screens_btn.setToolTip("Logs/end_screens: the last 5 battle endings recorded while the boxes are on.")
+        end_screens_btn.clicked.connect(self._open_end_screens_folder)
+        ocr_layout.addWidget(end_screens_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
         def debug_toggled(checked):
             self._save_app_setting("debug_mode", bool(checked))
@@ -8101,34 +8112,35 @@ class StatsWindow(QWidget):
         parser_layout.addWidget(self.parser_mode_status_label)
 
         parser_card.layout().addLayout(parser_layout)
-        layout.addWidget(parser_card)
         self.parser_card = parser_card
         self._update_ai_provider_fields()
         self.refresh_parser_mode_status()
         
         # AutoRun Section
-        autorun_card = self.create_card("AutoRun Configuration")
+        autorun_card = self.create_card("Startup")
         autorun_layout = QVBoxLayout()
         autorun_layout.setSpacing(8)
         autorun_layout.setContentsMargins(12, 8, 12, 12)
         
         add_autorun_btn = QPushButton("Add to Windows Startup")
         add_autorun_btn.setObjectName("settingsBtn")
-        add_autorun_btn.setFixedHeight(40)
+        add_autorun_btn.setFixedHeight(34)
         add_autorun_btn.clicked.connect(self.add_autorun)
-        autorun_layout.addWidget(add_autorun_btn)
-        
+
         remove_autorun_btn = QPushButton("Remove from Windows Startup")
         remove_autorun_btn.setObjectName("settingsBtn")
-        remove_autorun_btn.setFixedHeight(40)
+        remove_autorun_btn.setFixedHeight(34)
         remove_autorun_btn.clicked.connect(self.remove_autorun)
-        autorun_layout.addWidget(remove_autorun_btn)
+        startup_row = QHBoxLayout()
+        startup_row.setSpacing(8)
+        startup_row.addWidget(add_autorun_btn)
+        startup_row.addWidget(remove_autorun_btn)
+        autorun_layout.addLayout(startup_row)
         
         autorun_card.layout().addLayout(autorun_layout)
-        layout.addWidget(autorun_card)
         
         # Battle Management Section
-        battle_mgmt_card = self.create_card("Battle Database Management")
+        battle_mgmt_card = self.create_card("Battle Database")
         battle_mgmt_layout = QVBoxLayout()
         battle_mgmt_layout.setSpacing(8)
         battle_mgmt_layout.setContentsMargins(12, 8, 12, 12)
@@ -8174,13 +8186,12 @@ class StatsWindow(QWidget):
         battle_mgmt_layout.addWidget(self.battle_mgmt_status_label)
         
         battle_mgmt_card.layout().addLayout(battle_mgmt_layout)
-        layout.addWidget(battle_mgmt_card)
         
         # Load initial battles
         self.refresh_battle_management()
         
         # Application Control Section
-        app_control_card = self.create_card("Application Control")
+        app_control_card = self.create_card("Application")
         app_control_layout = QVBoxLayout()
         app_control_layout.setSpacing(8)
         app_control_layout.setContentsMargins(12, 8, 12, 12)
@@ -8211,12 +8222,94 @@ class StatsWindow(QWidget):
         
         
         app_control_card.layout().addLayout(app_control_layout)
-        layout.addWidget(app_control_card)
-        
+
+        sections = [
+            ("General", (appearance_card, overlay_card, sound_card, autorun_card)),
+            ("Battle tracking", (export_card, parser_card)),
+            ("Data && weights", (weights_card, meta_card)),  # && shows one & on a button
+            ("Your data", (import_card, transfer_card, battle_mgmt_card)),
+            ("Troubleshooting", (ocr_card, debug_card, app_control_card)),
+        ]
+        headers = []
+        for title, cards in sections:
+            header = QLabel(title.replace("&&", "&").upper())
+            header.setObjectName("settingsSection")
+            layout.addWidget(header)
+            headers.append(header)
+            for card in cards:
+                layout.addWidget(card)
         layout.addStretch()
-        
         scroll.setWidget(content)
-        return scroll
+        return self._settings_with_nav(scroll, [t for t, _ in sections], headers)
+
+    def _settings_card(self, title):
+        """A settings card and the padded layout its controls go in."""
+        card = self.create_card(title)
+        body = QVBoxLayout()
+        body.setSpacing(8)
+        body.setContentsMargins(12, 8, 12, 12)
+        card.layout().addLayout(body)
+        return card, body
+
+    def _settings_with_nav(self, scroll, titles, headers):
+        """The section list beside the page: a click scrolls to the section,
+        and scrolling highlights the section in view."""
+        page = QWidget()
+        page.setObjectName("contentWidget")
+        row = QHBoxLayout(page)
+        row.setContentsMargins(12, 12, 0, 0)
+        row.setSpacing(4)
+        nav = QVBoxLayout()
+        nav.setSpacing(2)
+        nav.setContentsMargins(0, 0, 0, 0)
+        group = QButtonGroup(page)
+        group.setExclusive(True)
+        buttons = []
+        bar = scroll.verticalScrollBar()
+        state = {"clicked": None}
+
+        def jump(index):
+            state["clicked"] = index
+            bar.setValue(max(0, headers[index].y() - 12))
+            buttons[index].setChecked(True)
+
+        def follow(value):
+            if value >= bar.maximum() and state["clicked"] is not None:
+                return  # the last sections can't reach the top: keep the clicked one
+            state["clicked"] = None
+            current = 0
+            for i, header in enumerate(headers):
+                if header.y() - 24 <= value:
+                    current = i
+            buttons[current].setChecked(True)
+
+        for i, title in enumerate(titles):
+            btn = QPushButton(title)
+            btn.setObjectName("settingsNavBtn")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, i=i: jump(i))
+            group.addButton(btn)
+            nav.addWidget(btn)
+            buttons.append(btn)
+        buttons[0].setChecked(True)
+        nav.addStretch()
+        nav_box = QWidget()
+        nav_box.setFixedWidth(150)
+        nav_box.setLayout(nav)
+        bar.valueChanged.connect(follow)
+        row.addWidget(nav_box)
+        row.addWidget(scroll, 1)
+        self.settings_nav_buttons = buttons
+        return page
+
+    def _open_end_screens_folder(self):
+        import ocr_debug
+        os.makedirs(ocr_debug.END_SCREEN_DIR, exist_ok=True)
+        try:
+            os.startfile(ocr_debug.END_SCREEN_DIR)
+        except Exception as exc:
+            print(f"Could not open {ocr_debug.END_SCREEN_DIR}: {exc}")
     
     def create_support_tab(self):
         """Create support tab with Buy Me a Coffee"""
@@ -8570,7 +8663,7 @@ class StatsWindow(QWidget):
             self._ensure_trainerhill_view()
         elif tab_name == "Japan Data":
             self._render_japan_table()
-        elif tab_name == "Advanced":
+        elif tab_name == SETTINGS_TAB:
             self._refresh_battle_mgmt_if_stale()
 
     # ── In Person tab ────────────────────────────────────────────────────
@@ -8935,7 +9028,7 @@ class StatsWindow(QWidget):
     # ── Meta tab: unified, preference-weighted analysis ───────────────────
     def create_meta_tab(self):
         """All sources combined (online W/L + matchups, in-person placings,
-        Japan), weighted per Advanced → Preferences. TrainerHill-style
+        Japan), weighted per Settings → Data Weights. TrainerHill-style
         result-rate options for ties."""
         from PySide6.QtWidgets import QSpinBox
         outer = QWidget()
@@ -9054,7 +9147,7 @@ class StatsWindow(QWidget):
         self.meta_weights_btn.setFixedHeight(24)
         self.meta_weights_btn.setToolTip(infotip.tip(
             "On: your custom weights · Off: raw data",
-            "<b>On</b>: weighted by your Preferences (Advanced → Preferences)<br>" + formulas.event_weights()
+            "<b>On</b>: weighted by your data weights (Settings → Data Weights)<br>" + formulas.event_weights()
             + "<br>" + formulas.game_weights()
             + "<br><b>Off</b>: every event and game counts once (same date window)."))
         self.meta_weights_btn.toggled.connect(lambda on: self._set_meta_view(weights=on))
@@ -11553,9 +11646,9 @@ class StatsWindow(QWidget):
             self.parser_mode_status_label.setText(text)
 
     def _create_appearance_prefs_card(self):
-        """Advanced -> Preferences · Appearance: the UI theme (theme.py).
+        """Settings -> Appearance: the UI theme (theme.py).
         Saved immediately; applies when the dashboard and overlay next start."""
-        card = self.create_card("Preferences · Appearance")
+        card = self.create_card("Appearance")
         body = QVBoxLayout()
         body.setContentsMargins(12, 0, 12, 12)
         body.setSpacing(6)
@@ -11647,9 +11740,10 @@ class StatsWindow(QWidget):
         apply_timer.timeout.connect(apply)
         return row
 
-    def restart_ui(self, tab="Advanced"):
+    def restart_ui(self, tab=None):
         """Restart the UI and come back to `tab`: inside the overlay the
         monitor relaunches it; a standalone dashboard relaunches itself."""
+        tab = tab or SETTINGS_TAB
         overlay = getattr(self, "parent_overlay", None)
         if overlay is not None and hasattr(overlay, "restart_ui"):
             overlay.restart_ui(tab)
@@ -11663,9 +11757,9 @@ class StatsWindow(QWidget):
         os._exit(0)  # background threads would keep this copy alive next to the new one
 
     def _create_overlay_prefs_card(self):
-        """Advanced → Preferences · Overlay: what the in-game mini GUI shows.
+        """Settings → Overlay: what the in-game mini GUI shows.
         Saved immediately; the overlay re-reads them every few seconds."""
-        card = self.create_card("Preferences · Overlay")
+        card = self.create_card("Overlay")
         body = QVBoxLayout()
         body.setContentsMargins(12, 0, 12, 12)
         body.setSpacing(6)
@@ -11741,9 +11835,9 @@ class StatsWindow(QWidget):
         return card
 
     def _create_sound_prefs_card(self):
-        """Advanced → Preferences · Sound: what plays when a battle is imported."""
+        """Settings → Sound: what plays when a battle is imported."""
         import sounds
-        card = self.create_card("Preferences · Sound")
+        card = self.create_card("Sound")
         body = QVBoxLayout()
         body.setContentsMargins(12, 0, 12, 12)
         body.setSpacing(8)
@@ -11795,7 +11889,7 @@ class StatsWindow(QWidget):
         return card
 
     def _create_import_card(self):
-        """Advanced → Import your results: games played before using the app
+        """Settings → Import your results: games played before using the app
         or at an in-person event, entered as a record with a weight."""
         from PySide6.QtWidgets import QDateEdit, QDoubleSpinBox
         from PySide6.QtCore import QDate
@@ -11908,7 +12002,7 @@ class StatsWindow(QWidget):
         self._imp_scale = WeightScale(marks, ladder["master"])
         self._imp_scale.setToolTip(infotip.tip(
             "Blue dot = the weight you're adding",
-            "Ticks are the leagues and tournament games, as weighted in Advanced → Preferences."))
+            "Ticks are the leagues and tournament games, as weighted in Settings → Data Weights."))
         body.addWidget(self._imp_scale)
         self._imp_type.currentIndexChanged.connect(
             lambda *_: self._imp_weight.setValue(ladder["tournament"] if self._imp_type.currentData() else ladder["master"]))
@@ -12657,7 +12751,7 @@ class StatsWindow(QWidget):
 
     def load_stats(self):
         """Load and display all statistics"""
-        if self.tab_widget.tabText(self.tab_widget.currentIndex()) == "Advanced":
+        if self.tab_widget.tabText(self.tab_widget.currentIndex()) == SETTINGS_TAB:
             QTimer.singleShot(0, self._refresh_battle_mgmt_if_stale)
         try:
             try:
@@ -12794,7 +12888,7 @@ class StatsWindow(QWidget):
         (narrows as games accumulate), rolling last-N dashed, result strip.
 
         Same maths as the deck pages: each game weighted by era x league /
-        tournament (Advanced → Preferences), record rescaled to Kish's
+        tournament (Settings → Data Weights), record rescaled to Kish's
         effective sample, Beta(2, 2) posterior under the tie rule.
         """
         try:
@@ -14122,6 +14216,35 @@ class StatsWindow(QWidget):
                 color: rgba(255,255,255,0.25);
             }
             
+            QPushButton#settingsNavBtn {
+                background: transparent;
+                border: none;
+                border-left: 2px solid transparent;
+                border-radius: 0;
+                color: rgba(255,255,255,0.6);
+                font-size: 12px;
+                font-weight: 600;
+                padding: 7px 10px;
+                text-align: left;
+            }
+            QPushButton#settingsNavBtn:hover {
+                background: rgba(255,255,255,0.04);
+                color: rgba(255,255,255,0.9);
+            }
+            QPushButton#settingsNavBtn:checked {
+                background: rgba(74,159,216,0.12);
+                border-left: 2px solid rgba(74,159,216,0.9);
+                color: rgba(255,255,255,0.95);
+            }
+
+            QLabel#settingsSection {
+                color: rgba(255, 255, 255, 0.55);
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 1.5px;
+                padding: 10px 2px 0 2px;
+            }
+
             QPushButton#metaNavBtn {
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);

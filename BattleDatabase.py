@@ -458,7 +458,7 @@ class BattleDatabase:
             conn.close()
         return True
 
-    # ── imported results (Advanced → Import your results) ──────────────
+    # ── imported results (Settings → Import your results) ──────────────
     def add_imported_record(self, deck, wins, losses, ties, weight, date, *, tournament=False, note=""):
         """Add results played before / outside the app as one game row each
         (opponent unknown), with an explicit per-game weight. They count in

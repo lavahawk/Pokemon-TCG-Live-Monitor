@@ -62,7 +62,7 @@ LABS = "https://labs.limitlesstcg.com"
 PLAY_API = "https://play.limitlesstcg.com/api"
 
 def current_weights():
-    """Meta weights from Advanced → Preferences (weights.py), as used below."""
+    """Meta weights from Settings → Data Weights (weights.py), as used below."""
     from weights import load_weights, era_weights
     meta = load_weights()["meta"]
     return {"online": meta["online"], "in_person": meta["in_person"], "worlds": meta["worlds"],
@@ -102,7 +102,7 @@ def make_session():
 # Without a key the API allows 50 requests per 5 minutes ("RateLimit:
 # "50-in-5min"; r=<left>; t=<seconds to reset>"). Finished events are cached
 # forever, so the full window fills in over a few refreshes and after that a
-# refresh only needs the handful of new events. A key (Advanced → Preferences,
+# refresh only needs the handful of new events. A key (Settings → Meta Data,
 # or LIMITLESS_API_KEY) raises the limit: play.limitlesstcg.com/account/settings/api
 class RateLimited(Exception):
     pass

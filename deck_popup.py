@@ -169,7 +169,7 @@ class DeckConfirmPopup(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFixedWidth(CARD_W)
         self.db = db
-        self.open_settings = open_settings  # callback: dashboard -> Advanced (API key)
+        self.open_settings = open_settings  # callback: dashboard -> Settings (API key)
         self.request = None
         self.mode = None
         self.current = ""
