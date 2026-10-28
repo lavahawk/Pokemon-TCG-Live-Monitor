@@ -11583,29 +11583,64 @@ class StatsWindow(QWidget):
             QTimer.singleShot(150, lambda: self.restart_ui())
         combo.currentIndexChanged.connect(changed)
         # Size for high-resolution screens (4K): applied when the UI starts.
-        from app_settings import SCALE_CHOICES
-        size_row = QHBoxLayout()
-        size_row.setSpacing(8)
         for title, key, tip in (("HUD size", "hud_scale", "Size of the mini GUI overlay"),
                                 ("Text size", "text_scale", "Size of the text in every window")):
-            size_label = QLabel(title)
-            size_label.setObjectName("settingsDesc")
-            size_combo = QComboBox()
-            size_combo.setObjectName("metaCombo")
-            size_combo.setToolTip(tip + ". Restarts the app to apply.")
-            current = int(self.app_settings.get(key, 100) or 100)
-            for pct in SCALE_CHOICES:
-                size_combo.addItem(f"{pct}%", pct)
-            size_combo.setCurrentIndex(max(0, size_combo.findData(current)))
-            size_combo.currentIndexChanged.connect(
-                lambda _i, c=size_combo, k=key: (self._save_app_setting(k, c.currentData()),
-                                                 QTimer.singleShot(150, lambda: self.restart_ui())))
-            size_row.addWidget(size_label)
-            size_row.addWidget(size_combo)
-        size_row.addStretch()
-        body.addLayout(size_row)
+            body.addLayout(self._scale_slider_row(title, key, tip))
         card.layout().addLayout(body)
         return card
+
+    def _scale_slider_row(self, title, key, tip):
+        """A size slider (80-200% in steps of 5). The app restarts to apply it,
+        once you let go of the slider (or a moment after the last arrow key)."""
+        from app_settings import SCALE_MAX, SCALE_MIN, SCALE_STEP
+        from PySide6.QtWidgets import QSlider
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        label = QLabel(title)
+        label.setObjectName("settingsDesc")
+        label.setMinimumWidth(70)
+        row.addWidget(label)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(SCALE_MIN // SCALE_STEP, SCALE_MAX // SCALE_STEP)  # one notch = 5%
+        slider.setPageStep(25 // SCALE_STEP)
+        slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        slider.setTickInterval(25 // SCALE_STEP)
+        slider.setMinimumWidth(220)
+        slider.setToolTip(f"{tip}. The app restarts to apply it.")
+        saved = int(self.app_settings.get(key, 100) or 100)
+        slider.setValue(max(SCALE_MIN, min(SCALE_MAX, saved)) // SCALE_STEP)
+        value = QLabel(f"{slider.value() * SCALE_STEP}%")
+        value.setMinimumWidth(44)
+        value.setStyleSheet("color: rgba(236,242,252,0.92); font-size: 12px; font-weight: 600;")
+        row.addWidget(slider)
+        row.addWidget(value)
+        note = QLabel("")
+        note.setObjectName("settingsDesc")
+        row.addWidget(note)
+        row.addStretch()
+        apply_timer = QTimer(slider)
+        apply_timer.setSingleShot(True)
+        apply_timer.setInterval(1200)
+
+        def apply():
+            pct = slider.value() * SCALE_STEP
+            if pct == saved:
+                note.setText("")
+                return
+            self._save_app_setting(key, pct)
+            note.setText("Restarting…")
+            QTimer.singleShot(150, lambda: self.restart_ui())
+
+        def moved(notch):
+            value.setText(f"{notch * SCALE_STEP}%")
+            note.setText("" if notch * SCALE_STEP == saved else "Applies when you let go")
+            if not slider.isSliderDown():
+                apply_timer.start()  # arrow keys / wheel: wait for a pause
+
+        slider.valueChanged.connect(moved)
+        slider.sliderReleased.connect(apply)
+        apply_timer.timeout.connect(apply)
+        return row
 
     def restart_ui(self, tab="Advanced"):
         """Restart the UI and come back to `tab`: inside the overlay the
