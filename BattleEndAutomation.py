@@ -321,8 +321,14 @@ class BattleEndAutomation(threading.Thread):
             # end screen (or the next battle) never needs a cold start.
             self.prewarm_blocker()
 
+    def _button_still_there(self, sct, rect):
+        """Template only: this end screen already passed the OCR check, and
+        re-reading the text mid-animation failed often enough (score 0.95-1.00,
+        text unreadable) to abort real exports as "user pressed Continue"."""
+        return self._find(sct, BATTLE_LOG, rect, self._bottom_half(rect))
+
     def _click_sequence(self, sct, hwnd, rect, seen_at):
-        hit = self._battle_log_visible(sct, rect)
+        hit = self._button_still_there(sct, rect)
         if not hit:
             self.log("BATTLE LOG button vanished before the click (user pressed Continue?).")
             return self._captured_since(seen_at)
@@ -341,7 +347,7 @@ class BattleEndAutomation(threading.Thread):
                 break
             # Popup didn't open (click eaten by an animation)? Re-click once.
             if not reclicked and time.time() > deadline - EXPORT_SEARCH_S + 1.5:
-                again = self._battle_log_visible(sct, rect)
+                again = self._button_still_there(sct, rect)
                 if again and is_foreground(hwnd):
                     AutoClicker.physical_click(again[0], again[1])
                     self.log("Re-clicked BATTLE LOG (popup did not open).")
