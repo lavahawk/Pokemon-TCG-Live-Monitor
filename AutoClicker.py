@@ -143,6 +143,29 @@ class AutoClicker:
                 best = (max_val, scale, max_loc, (tw, th))
         return best
 
+    def next_search_box(self, name, window_height, frame_w, frame_h):
+        """(x0, y0, x1, y1) of the frame the next find_in_frame call will
+        read, or None when it searches the whole frame. Lets a caller grab
+        only that area (a full grab costs ~25 ms, the box ~1 ms)."""
+        tpl = self.templates.get(name)
+        if tpl is None:
+            return None
+        roi_key = (name, int(window_height), frame_w, frame_h)
+        roi = self._loc_cache.get(roi_key)
+        if roi is None:
+            saved = self.scale_cache.get(f"roi:{name}@{int(window_height)}@{frame_w}x{frame_h}")
+            if isinstance(saved, list) and len(saved) == 2:
+                roi = (saved[0] * frame_w, saved[1] * frame_h)
+        if roi is None or (self._roi_calls.get(roi_key, 0) + 1) % 8 == 0:
+            return None
+        cx, cy = roi
+        grow = 1.6 * (window_height / max(1, tpl["capture_height"] or window_height))
+        pad_x = int(tpl["image"].shape[1] * grow)
+        pad_y = int(tpl["image"].shape[0] * grow)
+        x0, y0 = max(0, int(cx - pad_x)), max(0, int(cy - pad_y))
+        x1, y1 = min(frame_w, int(cx + pad_x)), min(frame_h, int(cy + pad_y))
+        return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
+
     def find_in_frame(self, name, frame, origin, window_height, window_origin=None, verify=None):
         """Find a template in a captured frame.
 
@@ -165,21 +188,12 @@ class AutoClicker:
         scales, cache_key = self._candidate_scales(name, window_height)
 
         roi_key = (name, int(window_height), gray.shape[1], gray.shape[0])
-        roi = self._loc_cache.get(roi_key)
-        if roi is None:
-            saved = self.scale_cache.get(f"roi:{name}@{int(window_height)}@{gray.shape[1]}x{gray.shape[0]}")
-            if isinstance(saved, list) and len(saved) == 2:
-                roi = (saved[0] * gray.shape[1], saved[1] * gray.shape[0])
-        calls = self._roi_calls.get(roi_key, 0) + 1
-        self._roi_calls[roi_key] = calls
+        box = self.next_search_box(name, window_height, gray.shape[1], gray.shape[0])
+        self._roi_calls[roi_key] = self._roi_calls.get(roi_key, 0) + 1
         best = (-1.0, None, None, None)
         offset = (0, 0)
-        if roi is not None and calls % 8 != 0:
-            cx, cy = roi
-            pad_x = int(tpl["image"].shape[1] * 1.6 * (window_height / max(1, tpl["capture_height"] or window_height)))
-            pad_y = int(tpl["image"].shape[0] * 1.6 * (window_height / max(1, tpl["capture_height"] or window_height)))
-            x0, y0 = max(0, int(cx - pad_x)), max(0, int(cy - pad_y))
-            x1, y1 = min(gray.shape[1], int(cx + pad_x)), min(gray.shape[0], int(cy + pad_y))
+        if box is not None:
+            x0, y0, x1, y1 = box
             sub = gray[y0:y1, x0:x1]
             if sub.size:
                 small = cv2.resize(sub, None, fx=factor, fy=factor, interpolation=cv2.INTER_AREA) if factor < 1.0 else sub

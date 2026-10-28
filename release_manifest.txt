@@ -12,6 +12,8 @@ BattleEndAutomation.py
 BattleState.py
 AutoClicker.py
 ContinueBlocker.py
+debug_overlay.py
+ocr_debug.py
 SetupAutoClicker.py
 RankDetector.py
 game_window.py

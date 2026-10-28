@@ -119,8 +119,8 @@ class ContinueBlocker(QWidget):
         self.life_timer.timeout.connect(lambda: self.dismiss(close_after=True))
 
         if standby:
-            # Pre-warmed during a battle: Qt is already loaded, so showing
-            # takes one poll (<= 30 ms) instead of a 1-2 s process start.
+            # Pre-warmed while the game is open: Qt is already loaded, so
+            # showing takes one poll (<= 10 ms) instead of a 1-2 s process start.
             _dbg("standby: waiting for show signal")
             # Pay the one-time costs now: game-window lookup, and the first
             # show() (~320 ms of Qt window/paint setup; later shows ~10 ms),
@@ -129,7 +129,7 @@ class ContinueBlocker(QWidget):
             QTimer.singleShot(0, self._warm_up)
             self.show_timer = QTimer(self)
             self.show_timer.timeout.connect(self._check_show_signal)
-            self.show_timer.start(30)
+            self.show_timer.start(10)  # one stat() per tick: negligible CPU
             self.parent_timer = QTimer(self)
             self.parent_timer.timeout.connect(self._check_parent)
             self.parent_timer.start(5000)
@@ -142,6 +142,10 @@ class ContinueBlocker(QWidget):
         self.border_timer.start(33)  # ~30fps: smooth, low CPU
         self.fade_timer.start(16)
         self.dismiss_timer.start(100)
+        # Start mostly opaque: the box must stop a click on Continue from the
+        # first frame, so only the last stretch of the fade-in is animated.
+        self._opacity = max(self._opacity, 0.6)
+        self.setWindowOpacity(self._opacity)
         self.life_timer.start(int(BLOCKER_MAX_LIFE * 1000))
         self._follow_game()
         self._begin_fade_in()

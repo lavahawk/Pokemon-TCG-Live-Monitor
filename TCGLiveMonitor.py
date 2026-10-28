@@ -40,6 +40,7 @@ LOG_DIR = os.path.join(BASE_DIR, "Logs")
 PARSER_SCRIPT = os.path.join(BASE_DIR, "AIParseBattleLog.py")
 OVERLAY_SCRIPT = os.path.join(BASE_DIR, "OverlayUI.py")
 BLOCKER_SCRIPT = os.path.join(BASE_DIR, "ContinueBlocker.py")
+DEBUG_OVERLAY_SCRIPT = os.path.join(BASE_DIR, "debug_overlay.py")
 PID_FILE = os.path.join(BASE_DIR, ".monitor_pid")
 LOCK_FILE = os.path.join(BASE_DIR, ".monitor_lock")
 LAST_DECK_FILE = os.path.join(BASE_DIR, ".last_deck")
@@ -382,8 +383,9 @@ def launch_blocker(wait_s=4.0):
     """Cover the Continue button and wait until the blocker is in place.
 
     Uses the pre-warmed standby blocker when there is one (appears in one
-    30 ms poll); otherwise starts a new one (Qt needs 1-2 s). The click
-    sequence only starts once the blocker reports it is positioned.
+    10 ms poll); otherwise starts a new one (Qt needs 1-2 s). The click
+    sequence only starts once the blocker reports it is positioned
+    (wait_blocker). wait_s=0 only signals it and returns at once.
     """
     _remove_files(BLOCKER_DISMISS_FILE, BLOCKER_READY_FILE)
     standby = _standby_blocker["proc"]
@@ -400,16 +402,26 @@ def launch_blocker(wait_s=4.0):
         except Exception as exc:
             alog(f"Continue blocker launch failed: {exc}")
             return None
+    proc.how, proc.signalled = how, time.time()
+    if wait_s > 0:
+        wait_blocker(proc, wait_s)
+    return proc
+
+
+def wait_blocker(proc, wait_s=4.0):
+    """Wait until the blocker reports it covers Continue."""
+    if proc is None:
+        return
+    signalled = getattr(proc, "signalled", time.time())
     started = time.time()
     while time.time() - started < wait_s:
         if os.path.exists(BLOCKER_READY_FILE):
-            alog(f"Continue blocker up after {time.time() - started:.2f}s ({how}).")
-            return proc
+            alog(f"Continue blocker up after {time.time() - signalled:.2f}s ({getattr(proc, 'how', '?')}).")
+            return
         if proc.poll() is not None:
             break
-        time.sleep(0.05)
-    alog(f"Continue blocker not confirmed after {time.time() - started:.1f}s - continuing anyway.")
-    return proc
+        time.sleep(0.02)
+    alog(f"Continue blocker not confirmed after {time.time() - signalled:.1f}s - continuing anyway.")
 
 
 def signal_blocker_dismiss():
@@ -522,6 +534,7 @@ class Monitor:
         self.overlay_proc = None
         self.overlay_starts = 0
         self.automation = None
+        self.debug_overlay_proc = None
         self.recent_hashes = {}  # hash -> time (fast path; DB is the source of truth)
         self.worker = threading.Thread(target=self._worker, daemon=True, name="BattleWorker")
         self.worker.start()
@@ -547,6 +560,23 @@ class Monitor:
         except Exception as exc:
             log(f"Could not start overlay: {exc}")
 
+    # ── OCR Bounding Box Debug (Advanced) ──
+    def ensure_debug_overlay(self):
+        """Boxes over the game showing what the checks read, while debug
+        mode is on (the overlay exits by itself when it is turned off)."""
+        import ocr_debug
+        if not ocr_debug.enabled() or not os.path.exists(DEBUG_OVERLAY_SCRIPT):
+            return
+        if self.debug_overlay_proc is not None and self.debug_overlay_proc.poll() is None:
+            return
+        try:
+            self.debug_overlay_proc = subprocess.Popen(
+                [gui_python(), DEBUG_OVERLAY_SCRIPT, "--parent", str(os.getpid())],
+                cwd=BASE_DIR, creationflags=_no_window_flags())
+            log("OCR Bounding Box Debug overlay started.")
+        except Exception as exc:
+            log(f"Could not start the debug overlay: {exc}")
+
     # ── auto export ──
     def ensure_automation(self):
         if self.automation is not None and self.automation.is_alive():
@@ -556,7 +586,7 @@ class Monitor:
         try:
             from BattleEndAutomation import BattleEndAutomation
             self.automation = BattleEndAutomation(
-                alog, launch_blocker, close_blocker,
+                alog, launch_blocker, close_blocker, wait_blocker=wait_blocker,
                 enabled_fn=lambda: bool(app_setting("auto_export_battle_log", True)),
                 prewarm_blocker=prewarm_blocker,
             )
@@ -716,6 +746,9 @@ class Monitor:
                 if game_running:
                     self.ensure_overlay()
                     self.ensure_automation()
+            if game_running and now - getattr(self, "_debug_checked", 0) >= 2:
+                self._debug_checked = now  # turning debug mode on shows the boxes within ~3 s
+                self.ensure_debug_overlay()
 
             if not game_running:
                 time.sleep(IDLE_POLL_S)
