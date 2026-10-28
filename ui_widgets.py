@@ -8,13 +8,18 @@ few sparks for the star).
 
 DeckTabBar - deck tab bar that marks pinned tabs with a small dot and dims
 ignored ones, independent of the tab stylesheet.
+
+DeckTitle - a deck page's name, renamed in place: double-click it to edit;
+Enter saves, Esc cancels. Typing
+another deck's name offers to merge into it, and only then.
 """
 
 import math
 
-from PySide6.QtCore import Qt, QPointF, QRectF, QSize, QVariantAnimation, QEasingCurve
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF, QTransform
-from PySide6.QtWidgets import QAbstractButton, QStyledItemDelegate, QTabBar
+from PySide6.QtCore import Qt, QPointF, QRectF, QSize, QVariantAnimation, QEasingCurve, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QPolygonF, QTransform
+from PySide6.QtWidgets import (QAbstractButton, QHBoxLayout, QLabel, QLineEdit, QStyledItemDelegate, QTabBar,
+                               QVBoxLayout, QWidget)
 
 
 FLAG_STYLES = {
@@ -31,6 +36,124 @@ def _anim(owner, setter, duration, curve):
     anim.setEasingCurve(curve)
     anim.valueChanged.connect(setter)
     return anim
+
+
+class DeckTitle(QWidget):
+    """A deck page's name that renames in place (no dialog).
+
+    rename_requested(new_name, merge): emitted on Enter. merge is True when
+    the typed name is another deck's (case-insensitive; new_name is then that
+    deck's exact name), shown first as a line under the name. Esc, or leaving
+    the field while it would merge, cancels; leaving it on a plain new name saves.
+    """
+
+    rename_requested = Signal(str, bool)
+
+    STYLE = """
+        QLineEdit#deckTitleEdit { background: transparent; border: none; border-bottom: 1px solid transparent;
+                                  color: rgba(246,250,255,0.98); font-size: 24px; font-weight: 700; padding: 0; }
+        QLineEdit#deckTitleEdit[editing="true"] { border-bottom: 1px solid rgba(74,159,216,0.70); }
+        QLabel#deckTitleHint { color: rgba(232,194,106,0.95); font-size: 10px; }
+    """
+
+    def __init__(self, name, other_names=(), parent=None):
+        super().__init__(parent)
+        self.name = name
+        self._others = {n.casefold(): n for n in other_names if n and n != name}
+        self.setStyleSheet(self.STYLE)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(1)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self.edit = QLineEdit(name)
+        self.edit.setObjectName("deckTitleEdit")
+        self.edit.setReadOnly(True)
+        self.edit.setFrame(False)
+        self.edit.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.edit.setCursor(Qt.CursorShape.ArrowCursor)
+        self.edit.setToolTip("Double-click to rename")
+        self.edit.installEventFilter(self)
+        self.edit.textEdited.connect(self._on_text)
+        self.edit.returnPressed.connect(self._commit)
+        row.addWidget(self.edit)
+        row.addStretch()
+        outer.addLayout(row)
+        self.hint = QLabel("")
+        self.hint.setObjectName("deckTitleHint")
+        self.hint.setVisible(False)
+        outer.addWidget(self.hint)
+        self._merge_into = None
+        self._fit()
+
+    def _fit(self):
+        """Read-only: exactly as wide as the name. Editing: room to type.
+        Measured with the stylesheet's font, so it's polished first."""
+        self.edit.ensurePolished()
+        width = QFontMetrics(self.edit.font()).horizontalAdvance(self.edit.text() or " ") + 6
+        if not self.edit.isReadOnly():
+            width = max(width + 24, 260)
+        self.edit.setMinimumWidth(width)
+        self.edit.setMaximumWidth(width)
+
+    def showEvent(self, event):
+        self._fit()  # the page's own stylesheet (Text size) applies by now
+        super().showEvent(event)
+
+    def _set_editing(self, on):
+        self.edit.setReadOnly(not on)
+        self.edit.setProperty("editing", on)
+        self.edit.style().unpolish(self.edit)
+        self.edit.style().polish(self.edit)
+        self.edit.setCursor(Qt.CursorShape.IBeamCursor if on else Qt.CursorShape.ArrowCursor)
+        self._fit()
+
+    def start_editing(self):
+        self._set_editing(True)
+        self.edit.setFocus()
+        self.edit.selectAll()
+
+    def cancel(self):
+        self.edit.setText(self.name)
+        self._merge_into = None
+        self.hint.setVisible(False)
+        self._set_editing(False)
+
+    def _on_text(self, text):
+        self._merge_into = self._others.get(text.strip().casefold())
+        if self._merge_into:
+            self.hint.setText(f"You already have a \u201c{self._merge_into}\u201d deck. "
+                              f"Enter merges this deck's battles into it \u00b7 Esc cancels")
+        self.hint.setVisible(bool(self._merge_into))
+        self._fit()
+
+    def _commit(self):
+        new = self.edit.text().strip()
+        merge = self._merge_into
+        if not new or new == self.name:
+            self.cancel()
+            return
+        self.hint.setVisible(False)
+        self._set_editing(False)
+        self.rename_requested.emit(merge or new, bool(merge))
+
+    def eventFilter(self, obj, event):
+        if obj is self.edit:
+            kind = event.type()
+            if kind == event.Type.MouseButtonDblClick and self.edit.isReadOnly():
+                self.start_editing()
+                return True
+            if kind == event.Type.KeyPress and event.key() == Qt.Key.Key_Escape and not self.edit.isReadOnly():
+                self.cancel()
+                return True
+            if kind == event.Type.FocusOut and not self.edit.isReadOnly():
+                # Leaving the field saves a plain rename; a merge needs Enter.
+                if self._merge_into or not self.edit.text().strip():
+                    self.cancel()
+                else:
+                    self._commit()
+        return super().eventFilter(obj, event)
 
 
 def _star_path(cx, cy, outer, inner):
