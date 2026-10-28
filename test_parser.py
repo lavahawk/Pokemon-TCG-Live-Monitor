@@ -57,7 +57,7 @@ P.ai_provider.ai_ready = lambda settings=None: False
 
 def _find_test_battle():
     """TestBattle.txt is gitignored (real usernames): look next to this file,
-    then in the main checkout when running from .claude/worktrees/<name>/."""
+    then three folders up (the main checkout, when running from a worktree)."""
     for path in (os.path.join(HERE, "TestBattle.txt"),
                  os.path.normpath(os.path.join(HERE, "..", "..", "..", "TestBattle.txt"))):
         if os.path.exists(path):
