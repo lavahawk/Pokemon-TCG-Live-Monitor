@@ -107,11 +107,52 @@ def theme_key(settings=None):
 
 
 _FONT_PX = re.compile(r"(font-size\s*:\s*)(\d+(?:\.\d+)?)px")
+_HEIGHT_PX = re.compile(r"((?<![\w-])(?:min-height|max-height|height)\s*:\s*)(\d+(?:\.\d+)?)px")
 _text_scale = 1.0
+# Code that sizes the in-game mini GUI and HUD buddy: it has its own size
+# (hud_scale), so Text size leaves its fixed sizes alone.
+_UNSCALED_MODULES = ("OverlayUI", "pet")
 
 
 def _scale_font_px(text, factor):
-    return _FONT_PX.sub(lambda m: f"{m.group(1)}{max(1, round(float(m.group(2)) * factor))}px", text)
+    """Font sizes and box heights in a stylesheet, times `factor` (Text size):
+    bigger text gets taller boxes instead of being cut off."""
+    def times(m):
+        return f"{m.group(1)}{max(1, round(float(m.group(2)) * factor))}px"
+    return _HEIGHT_PX.sub(times, _FONT_PX.sub(times, text))
+
+
+def _scale_fixed_sizes(factor):
+    """setFixedHeight / setFixedWidth / setFixedSize grow with Text size, so a
+    card or button sized for 100% text still fits its text at 125% or 200%.
+    Calls from the mini GUI's code (_UNSCALED_MODULES) are left as they are."""
+    import sys
+    from PySide6.QtCore import QSize
+    from PySide6.QtWidgets import QWidget
+
+    def caller_scales():
+        return sys._getframe(2).f_globals.get("__name__") not in _UNSCALED_MODULES
+
+    def grow(value):
+        return max(1, round(value * factor)) if value > 1 else value
+
+    fixed_h, fixed_w, fixed_size = QWidget.setFixedHeight, QWidget.setFixedWidth, QWidget.setFixedSize
+
+    def set_fixed_height(self, h):
+        fixed_h(self, grow(h) if caller_scales() else h)
+
+    def set_fixed_width(self, w):
+        fixed_w(self, grow(w) if caller_scales() else w)
+
+    def set_fixed_size(self, *args):
+        if not caller_scales():
+            return fixed_size(self, *args)
+        size = args[0] if len(args) == 1 else QSize(*args)
+        return fixed_size(self, QSize(grow(size.width()), grow(size.height())))
+
+    QWidget.setFixedHeight = set_fixed_height
+    QWidget.setFixedWidth = set_fixed_width
+    QWidget.setFixedSize = set_fixed_size
 
 
 def _install_text_scale(app):
@@ -131,6 +172,7 @@ def _install_text_scale(app):
 
     QWidget.setStyleSheet = widget_scaled
     QApplication.setStyleSheet = lambda self, text: app_set(self, _scale_font_px(text, _text_scale) if text else text)
+    _scale_fixed_sizes(_text_scale)
     if app is not None:
         font = app.font()
         if font.pointSizeF() > 0:
