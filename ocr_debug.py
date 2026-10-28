@@ -1,5 +1,5 @@
 """
-OCR Bounding Box Debug (Advanced). Every screen check reports the box it
+OCR Bounding Box Debug (Settings). Every screen check reports the box it
 read, and debug_overlay.py draws those boxes over the game in real time;
 the battle-end watcher also records the end-of-battle sequence (see
 EndScreenRecorder) for building new detectors.

@@ -21,7 +21,7 @@ DEFAULT_SETTINGS = {
     "hud_scale": 100,
     "text_scale": 100,
 }
-SCALE_MIN, SCALE_MAX, SCALE_STEP = 80, 200, 5  # Advanced -> HUD size / Text size sliders
+SCALE_MIN, SCALE_MAX, SCALE_STEP = 80, 200, 5  # Settings -> HUD size / Text size sliders
 
 
 def _read_text_file(path):

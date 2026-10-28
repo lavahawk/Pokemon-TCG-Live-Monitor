@@ -1,5 +1,5 @@
 """
-OCR Bounding Box Debug overlay (Advanced): semi-transparent boxes over the
+OCR Bounding Box Debug overlay (Settings): semi-transparent boxes over the
 game showing every area the app is reading right now, from ocr_debug.
 
   green   the check found what it looks for (with its match score)

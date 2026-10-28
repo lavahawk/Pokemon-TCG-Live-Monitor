@@ -30,8 +30,8 @@ shiny (alternate colours, shiny sparkle when it appears).
   Enigma a rainbow).
 
 Off by default: double-click the mini GUI's Pokeball to call it out (sets
-overlay_pet); double-click again to recall it. Species in Advanced →
-Preferences · Overlay (overlay_pet_species). Hungry or ignored for 10+ min:
+overlay_pet); double-click again to recall it. Species in Settings →
+Overlay (overlay_pet_species). Hungry or ignored for 10+ min:
 a faint thought puff (berry / heart) now and then. Sprites: pet_sprites/<species>/ (shiny in shiny/) from
 the PMD Sprite Repository (SpriteCollab, CC BY-NC 4.0, see
 pet_sprites/CREDITS.txt). Each sheet is one row per facing direction, one

@@ -12,7 +12,7 @@ from functools import lru_cache
 TIE_WIN_WEIGHT = 1.0 / 3.0  # default ("third"); see tie_mode()
 
 # How ties count (TrainerHill-style "Result Rate Calculation"). Chosen in the
-# Meta tab / Advanced → Preferences, stored as "tie_mode" in .app_settings.json.
+# Meta tab / Settings → Data Weights, stored as "tie_mode" in .app_settings.json.
 TIE_MODES = {
     "ignore": ("Ignore ties", "W / (W + L)"),
     "loss": ("Ties as losses", "W / (W + L + T)"),
@@ -435,7 +435,7 @@ def _ladder_weight(key, default):
 
 def rank_weight(rank, is_tournament=False):
     """Weight of one battle given its ladder rank (and tournament flag).
-    Tournament / unranked weights are user-adjustable (Advanced → Preferences)."""
+    Tournament / unranked weights are user-adjustable (Settings → Data Weights)."""
     if is_tournament:
         return _ladder_weight("tournament", TOURNAMENT_WEIGHT)
     if rank is None:
@@ -589,7 +589,7 @@ def battle_weight(battle, expansions=None):
 
     era: games from before the newest expansion count era1 (0.7), two back
     era2 (0.4), older are dropped (0). League/tournament/unranked weights
-    come from rank_weight(). All adjustable in Advanced → Preferences.
+    come from rank_weight(). All adjustable in Settings → Data Weights.
     """
     era_w = 1.0
     stamp = str(battle.get("timestamp") or "")[:10]

@@ -46,7 +46,7 @@ def estimate(post, weighted=True):
 
 
 def game_weights():
-    """How YOUR games are weighted (Advanced → Preferences)."""
+    """How YOUR games are weighted (Settings → Data Weights)."""
     lad = _weights()["ladder"]
     meta = _weights()["meta"]
     return (f"{F}game weight = era × league{END}<br>"

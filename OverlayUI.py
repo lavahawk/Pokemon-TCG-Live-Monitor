@@ -784,12 +784,12 @@ class MinimalOverlay(QWidget):
                "accurate than AI. After each battle, check the guess or pick the deck yourself.")
         if local_only:
             title, text = "LOCAL MODE", how
-            primary = ("Open Advanced", self.open_api_key_setting)
+            primary = ("Open Settings", self.open_api_key_setting)
         elif provider in ("hosted", "compatible"):
             title, text = "MANUAL MODE", ("AI unavailable"
                                           + (" (built-in AI unreachable). " if provider == "hosted"
                                              else ": set a base URL and model. ") + how)
-            primary = ("Open Advanced", self.open_api_key_setting)
+            primary = ("Open Settings", self.open_api_key_setting)
         else:
             title, text = "MANUAL MODE", "No AI is set up. " + how
             primary = ("Add API key", self.open_api_key_setting)
@@ -862,7 +862,7 @@ class MinimalOverlay(QWidget):
             self._show_update_card(None, anchor)
 
     def check_for_updates(self):
-        """Advanced → "Check now": check immediately (skipped version included)."""
+        """Settings → "Check now": check immediately (skipped version included)."""
         self._update_state = {"placed_at": 0, "result": None, "checking": False, "done": False,
                               "manual": True, "download": None}
         old = getattr(self, "_update_card", None)
@@ -975,7 +975,7 @@ class MinimalOverlay(QWidget):
         QApplication.instance().exit(0)
 
     def open_api_key_setting(self):
-        """Dashboard -> Advanced, at the OpenAI key field."""
+        """Dashboard -> Settings, at the OpenAI key field."""
         try:
             if self.stats_window is None or not self.stats_window.isVisible():
                 self.animate_arrow("▼")

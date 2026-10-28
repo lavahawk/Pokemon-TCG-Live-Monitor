@@ -24,7 +24,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DING_FILE = os.path.join(BASE_DIR, "ding.mp3")
 RATE = 44100
 
-# key (stored, never renamed) -> label shown in Advanced → Preferences
+# key (stored, never renamed) -> label shown in Settings → Sound
 SOUNDS = {
     "chime": "Ding",
     "ding": "Chime",
