@@ -4088,6 +4088,8 @@ class StatsWindow(QWidget):
                 age = time.time() - float(saved.get("fetched_at") or 0)
                 if "trend_events" not in saved:  # saved by an older version: rebuild it soon
                     self._schedule_meta_trickle(10)
+                elif int(saved.get("pending") or 0):  # events still waiting: catch up now, not in 90 min
+                    self._schedule_meta_trickle(self.META_TRICKLE_FIRST_S)
                 else:
                     self._schedule_meta_trickle(max(self.META_TRICKLE_FIRST_S, self.META_TRICKLE_IDLE_S - age))
             else:
@@ -7316,7 +7318,10 @@ class StatsWindow(QWidget):
             return
 
         self._decks_meta_fetcher = MetaFetcher("limitless_standard")
-        self._decks_meta_fetcher.data_ready.connect(self._on_decks_meta_data)
+        # Same follow-up as a background refresh: keep trickling in what the
+        # first build left (a fresh install gets only ~50 online events), and
+        # retry after an error instead of waiting for the next launch.
+        self._decks_meta_fetcher.data_ready.connect(self._on_meta_trickle_data)
         self._decks_meta_fetcher.error.connect(self._on_decks_meta_error)
         _start_thread(self._decks_meta_fetcher)
 
@@ -7372,6 +7377,7 @@ class StatsWindow(QWidget):
 
     def _on_decks_meta_error(self, source, message):
         print(f"Deck meta refresh failed: {message}")
+        self._schedule_meta_trickle(self.META_TRICKLE_RETRY_S)
 
     def open_deck_dashboard(self, deck_name):
         if not hasattr(self, "deck_tabs"):

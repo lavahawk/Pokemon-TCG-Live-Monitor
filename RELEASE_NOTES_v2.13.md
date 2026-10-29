@@ -1,9 +1,11 @@
-# Pokemon TCG Live Monitor v2.13.2
+# Pokemon TCG Live Monitor v2.13.3
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.13.2-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.13.3-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
 
 ## What's new
+- **New installs get the full Limitless meta right away.** The installer now ships months of cached tournaments (about 1,350 events), so the Meta and Decks tabs fill in seconds instead of slowly over many hours. *(2.13.3)*
+- **Meta data keeps downloading until it's caught up.** Before, a new install fetched one small batch and then mostly stopped: nothing was scheduled after the first download, a failed download was never retried, and after a restart it could wait 90 minutes. *(2.13.3)*
 - **Auto-export keeps trying until the log is saved.** Clicking or moving the mouse mid-export, or switching windows for a moment, no longer cancels it. *(2.13.2)*
 - **Advanced is now Settings**, split into General, Battle tracking, Data & weights, Your data and Troubleshooting, with a list on the left to jump between them. *(2.13.2)*
 - **Auto-export is quicker to block Continue.** The cover goes up the moment the BATTLE LOG button shows, before its text is checked, so a fast click on Continue no longer skips the export. *(2.13.1)*

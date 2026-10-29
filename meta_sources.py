@@ -55,6 +55,8 @@ from deck_analytics import normalize_deck_name, win_rate_posterior
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STORE_DIR = os.path.join(BASE_DIR, ".meta_store")
 SHEET_FILE = os.path.join(BASE_DIR, ".meta_cache_limitless_standard.json")
+SEED_FILE = os.path.join(BASE_DIR, "meta_seed.zip")  # event caches shipped with the installer
+SEED_MARKER = "seed_unpacked.json"
 SCHEMA_VERSION = 3
 
 LIMITLESS = "https://limitlesstcg.com"
@@ -778,6 +780,44 @@ class _NoNetwork:
 TRICKLE_NEW = {"online": 6, "in_person": 2, "japan": 12}
 
 
+def unpack_seed():
+    """Event caches shipped with the installer (meta_seed.zip, made by
+    make_meta_seed.py) go into .meta_store once per seed, never over a file
+    already there - so a new install starts with months of events instead of
+    the newest handful the API limit allows per refresh. Returns files added."""
+    import zipfile
+    if not os.path.exists(SEED_FILE):
+        return 0
+    stamp = {"size": os.path.getsize(SEED_FILE), "mtime": int(os.path.getmtime(SEED_FILE))}
+    marker = _store_path(SEED_MARKER[:-5])
+    try:
+        with open(marker, "r", encoding="utf-8") as handle:
+            if json.load(handle) == stamp:
+                return 0
+    except Exception:
+        pass
+    added = 0
+    with zipfile.ZipFile(SEED_FILE) as seed:
+        for name in seed.namelist():
+            dest = os.path.join(STORE_DIR, os.path.basename(name))
+            if not name.endswith(".json") or os.path.exists(dest):
+                continue
+            with open(dest + ".tmp", "wb") as handle:
+                handle.write(seed.read(name))
+            os.replace(dest + ".tmp", dest)
+            added += 1
+    with open(marker, "w", encoding="utf-8") as handle:
+        json.dump(stamp, handle)
+    return added
+
+
+def _uncached_count(in_person, japan, online):
+    """Events in the lists with no cache yet (what later refreshes still have to download)."""
+    names = ([f"inperson_v2_{e['id']}" for e in in_person] + [f"japan_{e['id']}" for e in japan]
+             + [f"online_v3_{e['id']}" for e in online])
+    return sum(1 for name in names if not os.path.exists(_store_path(name)))
+
+
 def _newest_uncached(events, store_name, cap):
     """Cached events plus at most `cap` uncached ones (newest first): the
     rest wait for a later run. cap None = no limit."""
@@ -797,6 +837,12 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
     global WEIGHTS
     WEIGHTS = current_weights()
     session = session or make_session()
+    try:
+        added = unpack_seed()
+        if added:
+            progress(f"Unpacked {added} cached events from the installer.")
+    except Exception as exc:
+        progress(f"Seed cache skipped ({exc})")
     exp_en = fetch_expansions(session, "en")
     exp_jp = fetch_expansions(session, "jp") or exp_en
     oldest_era = len(WEIGHTS["era"]) - 1
@@ -824,6 +870,8 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
                   _fetch_all(session, fetch_in_person_lists, in_person, "in-person decklists", progress)}
     japan_data = _fetch_all(session, fetch_japan_event, japan, "Japan", progress)
     online_data = _fetch_online(session, online, exp_en, progress)
+    if not trickle:  # a full build stops at its time budgets / the API limit: the rest is still pending
+        pending = _uncached_count(in_person, japan, online)
     try:
         path = _store_path(INPUTS_FILE)
         with open(path + ".tmp", "w", encoding="utf-8") as handle:
