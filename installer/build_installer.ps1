@@ -35,7 +35,10 @@ param(
     # ai: built-in AI through the hosted proxy (edition.HOSTED_AI_URL must be set).
     # free: no built-in AI (local predictor, or the user's own model / key).
     [ValidateSet("ai", "free")]
-    [string]$Edition = "ai"
+    [string]$Edition = "ai",
+    # Limitless event caches to ship as meta_seed.zip (make_meta_seed.py).
+    # Default: the repo's own .meta_store; missing = no seed (a warning).
+    [string]$MetaStore = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -240,6 +243,17 @@ foreach ($dir in @("Logs", "Backups", ".card_image_cache", ".tcgcsv_cache", ".me
 }
 $leftover = Get-ChildItem $Stage -Force -File | Where-Object { $_.Name -like "*.db" -or $_.Name -like ".*" }
 if ($leftover) { throw "User data in the staged bundle (would overwrite users' data): $($leftover.Name -join ', ')" }
+
+# ── Meta seed ────────────────────────────────────────────────────────────
+# After the smoke test, so it can't be unpacked into the stage.
+if (-not $MetaStore) { $MetaStore = Join-Path $Root ".meta_store" }
+if (Test-Path $MetaStore) {
+    Step "Limitless meta seed"
+    & (Join-Path $Stage "runtime\python.exe") -I (Join-Path $Root "make_meta_seed.py") $MetaStore (Join-Path $Stage "meta_seed.zip")
+    Check-Exit "Meta seed"
+} else {
+    Write-Warning "No .meta_store at $MetaStore - building without a meta seed (new installs start with few events)."
+}
 
 # ── 5. Wizard artwork ────────────────────────────────────────────────────
 Step "Wizard artwork"
