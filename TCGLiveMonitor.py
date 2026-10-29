@@ -416,7 +416,13 @@ def wait_blocker(proc, wait_s=4.0):
     started = time.time()
     while time.time() - started < wait_s:
         if os.path.exists(BLOCKER_READY_FILE):
-            alog(f"Continue blocker up after {time.time() - signalled:.2f}s ({getattr(proc, 'how', '?')}).")
+            # The blocker writes when it was placed: with the early cover that
+            # is during the text check, long before this loop looks.
+            try:
+                up_at = float(read_text(BLOCKER_READY_FILE))
+            except ValueError:
+                up_at = time.time()
+            alog(f"Continue blocker up after {max(0.0, up_at - signalled):.2f}s ({getattr(proc, 'how', '?')}).")
             return
         if proc.poll() is not None:
             break
