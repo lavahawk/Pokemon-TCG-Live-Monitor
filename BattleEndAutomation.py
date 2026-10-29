@@ -19,9 +19,10 @@ State machine (one daemon thread, runs only while the game is running):
      * a battle log hit the clipboard in the last 25 s?  -> user did it, done
      * wait (<=20 s) for the game to be the foreground window (never click
        into another app)
-     * show ONE Continue blocker, click BATTLE LOG, wait for the export icon,
-       click export, wait for the monitor to confirm the clipboard capture,
-       retry export at most twice, close the blocker
+     * show ONE Continue blocker, then until the log is on the clipboard
+       (<=25 s): export icon showing -> click it; popup closed -> click
+       BATTLE LOG again; game unfocused -> wait; mouse moving -> let it
+       settle first. Stops early if the end screen is gone. Close the blocker
   DISARMED         after an end screen is handled, nothing is clicked again
                    until a new battle HUD is seen, or the BATTLE LOG button
                    has been absent for 60 s (covers arenas where the HUD
@@ -76,9 +77,14 @@ COLD_POLL_S = 1.5
 HUD_POLL_S = 0.5
 USER_EXPORT_GRACE_S = 25
 FOREGROUND_WAIT_S = 20
-EXPORT_SEARCH_S = 6.0
-CAPTURE_CONFIRM_S = 2.5
-EXPORT_RETRIES = 2
+# The export keeps retrying until the log is on the clipboard: a click of
+# the user's can close the BATTLE LOG popup or move focus mid-sequence.
+SEQUENCE_MAX_S = 25        # under the blocker's 30 s failsafe
+REOPEN_EVERY_S = 1.5       # popup closed: click BATTLE LOG again after this
+CAPTURE_CONFIRM_S = 2.5    # after an export click, wait this long for the log
+GONE_S = 2.0               # neither button for this long: the end screen is gone
+MOUSE_STILL_S = 0.25       # the user's mouse must rest this long before a click
+MOUSE_WAIT_MAX_S = 1.5     # ...but never wait longer than this
 REARM_ABSENT_S = 60
 # A real BATTLE LOG button scores 0.97-1.00; in-battle look-alikes 0.83-0.86.
 # At this score Continue is covered before the OCR check (0.1-0.5 s, longer on
@@ -327,47 +333,81 @@ class BattleEndAutomation(threading.Thread):
         text unreadable) to abort real exports as "user pressed Continue"."""
         return self._find(sct, BATTLE_LOG, rect, self._bottom_half(rect))
 
-    def _click_sequence(self, sct, hwnd, rect, seen_at):
-        hit = self._button_still_there(sct, rect)
-        if not hit:
-            self.log("BATTLE LOG button vanished before the click (user pressed Continue?).")
-            return self._captured_since(seen_at)
-        self._capture_event.clear()
-        AutoClicker.physical_click(hit[0], hit[1])
-        self.log(f"Clicked BATTLE LOG at ({hit[0]},{hit[1]}).")
+    @staticmethod
+    def _wait_for_still_mouse():
+        """Let a moving mouse settle before clicking, so the click doesn't
+        fight the user (the click itself pins the cursor). Never waits long."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            point = wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(point))
+            last, still_since, give_up = (point.x, point.y), time.time(), time.time() + MOUSE_WAIT_MAX_S
+            while time.time() < give_up:
+                time.sleep(0.05)
+                user32.GetCursorPos(ctypes.byref(point))
+                held = user32.GetAsyncKeyState(0x01) & 0x8000
+                if (point.x, point.y) != last or held:
+                    last, still_since = (point.x, point.y), time.time()
+                elif time.time() - still_since >= MOUSE_STILL_S:
+                    return
+        except Exception:
+            pass
 
-        export = None
-        reclicked = False
-        deadline = time.time() + EXPORT_SEARCH_S
+    def _click(self, x, y):
+        self._wait_for_still_mouse()
+        AutoClicker.physical_click(x, y)
+
+    def _click_sequence(self, sct, hwnd, rect, seen_at):
+        """BATTLE LOG -> export, retried until the log is on the clipboard.
+        A click of the user's that closes the popup, or focus moving away for
+        a moment, only costs a retry; the sequence ends when the log lands,
+        the end screen is gone (Continue pressed), or after SEQUENCE_MAX_S."""
+        self._capture_event.clear()
+        deadline = time.time() + SEQUENCE_MAX_S
+        last_open = last_export = 0.0
+        opens = exports = 0
+        gone_since = None
+        waiting_focus = False
         while time.time() < deadline and not self._stop.is_set():
             if self._captured_since(seen_at):
-                return True  # user beat us to it
+                return True
+            if not is_foreground(hwnd):
+                if not waiting_focus:
+                    self.log("Game lost focus - waiting for it to come back.")
+                    waiting_focus = True
+                time.sleep(0.2)
+                continue
+            waiting_focus = False
+            now = time.time()
             export = self._find(sct, EXPORT, rect)
             if export:
-                break
-            # Popup didn't open (click eaten by an animation)? Re-click once.
-            if not reclicked and time.time() > deadline - EXPORT_SEARCH_S + 1.5:
-                again = self._button_still_there(sct, rect)
-                if again and is_foreground(hwnd):
-                    AutoClicker.physical_click(again[0], again[1])
-                    self.log("Re-clicked BATTLE LOG (popup did not open).")
-                reclicked = True
+                gone_since = None
+                if now - last_export >= CAPTURE_CONFIRM_S:
+                    self._click(export[0], export[1])
+                    exports += 1
+                    last_export = time.time()
+                    self.log(f"Clicked export at ({export[0]},{export[1]})" + (f" (try {exports})" if exports > 1 else "") + ".")
+                    if self._capture_event.wait(CAPTURE_CONFIRM_S):
+                        return True
+                    continue
+            else:
+                hit = self._button_still_there(sct, rect)
+                if hit:
+                    gone_since = None
+                    if now - last_open >= REOPEN_EVERY_S:
+                        self._click(hit[0], hit[1])
+                        opens += 1
+                        last_open = time.time()
+                        self.log(f"Clicked BATTLE LOG at ({hit[0]},{hit[1]})" + (f" (try {opens})" if opens > 1 else "") + ".")
+                else:
+                    gone_since = gone_since or now
+                    if now - gone_since >= GONE_S:
+                        self.log("End screen gone before the export (Continue pressed?).")
+                        return self._captured_since(seen_at)
             time.sleep(0.12)
-        if not export:
-            self.log(f"Export button not found within {EXPORT_SEARCH_S:.0f}s "
-                     f"(best score {self.clicker.last_score.get(EXPORT, 0):.2f}).")
-            return self._captured_since(seen_at)
-
-        for attempt in range(EXPORT_RETRIES + 1):
-            if not is_foreground(hwnd):
-                self.log("Game lost focus - stopped clicking.")
-                break
-            AutoClicker.physical_click(export[0], export[1])
-            self.log(f"Clicked export at ({export[0]},{export[1]})" + (f" (retry {attempt})" if attempt else "") + ".")
-            if self._capture_event.wait(CAPTURE_CONFIRM_S) or self._captured_since(seen_at):
-                return True
-            again = self._find(sct, EXPORT, rect)
-            if not again:
-                break
-            export = again
+        if not self._captured_since(seen_at):
+            self.log(f"Export not confirmed after {SEQUENCE_MAX_S}s "
+                     f"({opens} BATTLE LOG and {exports} export clicks).")
         return self._captured_since(seen_at)
