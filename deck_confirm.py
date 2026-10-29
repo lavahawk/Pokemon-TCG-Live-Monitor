@@ -271,3 +271,69 @@ def play_chime():
         except Exception:
             pass
     threading.Thread(target=_play, daemon=True).start()
+
+
+# ── Conceded battles ──────────────────────────────────────────────────
+# Conceding skips the end screen: the game goes straight from the battle to
+# the main menu, so there is no battle log. BattleEndAutomation notices
+# (HUD gone, no end screen, main menu), the monitor reads the rank and calls
+# ask_concede(), and the overlay asks "Did you concede?". Yes adds the loss.
+CONCEDE_FILE = os.path.join(LOG_DIR, ".concede_check.json")
+
+
+def ask_concede(battle_started, my_deck=None, rank_before=None, rank_after=None):
+    _write_json(CONCEDE_FILE, {
+        "battle_started": float(battle_started),
+        "my_deck": my_deck or "",
+        "rank_before": rank_before,
+        "rank_after": rank_after,
+        "created": time.time(),
+        "handled": False,
+    })
+
+
+def read_concede():
+    """The pending question, or None (none, answered, or older than 15 min)."""
+    try:
+        with open(CONCEDE_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("handled"):
+        return None
+    if time.time() - float(data.get("created") or 0) > REQUEST_MAX_AGE_S:
+        return None
+    return data
+
+
+def mark_concede_handled():
+    try:
+        with open(CONCEDE_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        data["handled"] = True
+        _write_json(CONCEDE_FILE, data)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def concede_text(question):
+    """The card's line; the rank change only when there was one (only
+    Master league loses points)."""
+    text = "The battle ended without an end screen, so there's no battle log. Add it as a loss?"
+    before, after = question.get("rank_before"), question.get("rank_after")
+    if before and after and after != before:
+        text += f" Rank {before} \u2192 {after}."
+    return text
+
+
+def record_concede(db, question):
+    """Add the conceded battle as a loss; returns its id (None if this battle
+    was already added - the key is the battle's start time)."""
+    return db.add_battle(
+        my_deck=question.get("my_deck") or None,
+        opponent_deck="Unknown",
+        result="Loss",
+        my_rank=question.get("rank_after"),
+        deck_source="Conceded",
+        log_hash=f"conceded:{float(question.get('battle_started') or 0):.0f}",
+    )

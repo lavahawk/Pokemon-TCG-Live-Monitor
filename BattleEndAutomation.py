@@ -23,6 +23,9 @@ State machine (one daemon thread, runs only while the game is running):
        (<=25 s): export icon showing -> click it; popup closed -> click
        BATTLE LOG again; game unfocused -> wait; mouse moving -> let it
        settle first. Stops early if the end screen is gone. Close the blocker
+  CONCEDED?        HUD gone 4 s, no end screen, then the main menu (checked
+                   every 2 s on its own thread, for up to 90 s): conceding
+                   skips the end screen, so on_menu_without_end() asks
   DISARMED         after an end screen is handled, nothing is clicked again
                    until a new battle HUD is seen, or the BATTLE LOG button
                    has been absent for 60 s (covers arenas where the HUD
@@ -85,6 +88,10 @@ CAPTURE_CONFIRM_S = 2.5    # after an export click, wait this long for the log
 GONE_S = 2.0               # neither button for this long: the end screen is gone
 MOUSE_STILL_S = 0.25       # the user's mouse must rest this long before a click
 MOUSE_WAIT_MAX_S = 1.5     # ...but never wait longer than this
+# Conceding goes from the battle straight to the main menu (no end screen).
+MENU_WATCH_AFTER_S = 4     # HUD gone this long without an end screen: look for the menu
+MENU_WATCH_S = 90
+MENU_CHECK_EVERY_S = 2
 REARM_ABSENT_S = 60
 # A real BATTLE LOG button scores 0.97-1.00; in-battle look-alikes 0.83-0.86.
 # At this score Continue is covered before the OCR check (0.1-0.5 s, longer on
@@ -95,13 +102,18 @@ PREWARM_EVERY_S = 30
 
 class BattleEndAutomation(threading.Thread):
     def __init__(self, log_fn, launch_blocker, close_blocker, enabled_fn=lambda: True,
-                 prewarm_blocker=lambda: None, wait_blocker=lambda proc: None):
+                 prewarm_blocker=lambda: None, wait_blocker=lambda proc: None,
+                 on_menu_without_end=lambda battle_started: None):
         super().__init__(daemon=True, name="BattleEndAutomation")
         self.log = log_fn
         self.launch_blocker = launch_blocker
         self.close_blocker = close_blocker
         self.prewarm_blocker = prewarm_blocker
         self.wait_blocker = wait_blocker
+        self.on_menu_without_end = on_menu_without_end
+        self._battle_since = None   # first HUD of the battle in progress
+        self._last_hud_at = 0.0
+        self._menu_watch = None
         self.enabled_fn = enabled_fn
         self.clicker = AutoClicker()
         self.window = GameWindowCache(refresh_s=5.0)
@@ -223,6 +235,7 @@ class BattleEndAutomation(threading.Thread):
                     rect = self.window.rect() if hwnd else None
                     if not rect:
                         in_battle, streak = False, 0
+                        self._battle_since = None  # game closed: that battle is over
                         time.sleep(3 if is_game_process_running() else 10)
                         continue
 
@@ -246,6 +259,9 @@ class BattleEndAutomation(threading.Thread):
                             # cover Continue the instant the end screen shows.
                             self.prewarm_blocker()
                         in_battle, last_hud, armed = True, now, True
+                        self._last_hud_at = now
+                        if self._battle_since is None:
+                            self._battle_since = now
                         self.recorder.hud_back()
                     elif in_battle:
                         in_battle = False
@@ -253,6 +269,12 @@ class BattleEndAutomation(threading.Thread):
                         if ocr_debug.enabled():
                             self.recorder.start()
                     self.recorder.tick(sct, rect)
+                    if (not hud and armed and self._battle_since and self._menu_watch is None
+                            and now - self._last_hud_at >= MENU_WATCH_AFTER_S):
+                        self._menu_watch = threading.Thread(
+                            target=self._watch_for_menu, args=(self._battle_since, self._last_hud_at),
+                            daemon=True, name="ConcedeWatch")
+                        self._menu_watch.start()
 
                     # Searched even while the HUD is visible (the in-battle gear
                     # may still be showing on the end screen); OCR verification
@@ -271,6 +293,7 @@ class BattleEndAutomation(threading.Thread):
                         self.recorder.end_screen(sct, rect)
                         self._handle_end_screen(hwnd, sct, rect, hit, last_hud)
                         armed, streak, last_hud = False, 0, 0.0
+                        self._battle_since = None  # this battle had its end screen
                         absent_since = time.time()
                         continue
                     if in_battle and streak == 0:
@@ -281,6 +304,33 @@ class BattleEndAutomation(threading.Thread):
                 except Exception as exc:  # never let the thread die
                     self.log(f"Auto-export loop error: {exc}")
                     time.sleep(3)
+
+    # ── conceded battles ───────────────────────────────────────────────
+    def _watch_for_menu(self, battle_since, hud_seen_at):
+        """The HUD went away with no end screen: if the main menu shows up,
+        the battle ended without one (a concede). Stops as soon as the HUD
+        comes back (a deck search covered it) or the end screen is handled."""
+        try:
+            from RankDetector import RankDetector
+            detector = RankDetector()
+            deadline = time.time() + MENU_WATCH_S
+            while time.time() < deadline and not self._stop.is_set():
+                if self._battle_since != battle_since or self._last_hud_at > hud_seen_at:
+                    return
+                try:
+                    on_menu = detector.is_on_main_menu(validation_method="auto")
+                except Exception:
+                    on_menu = False
+                if on_menu and self._battle_since == battle_since and self._last_hud_at <= hud_seen_at:
+                    self._battle_since = None
+                    self.log("Main menu after a battle with no end screen - asking if you conceded.")
+                    self.on_menu_without_end(battle_since)
+                    return
+                time.sleep(MENU_CHECK_EVERY_S)
+        except Exception as exc:
+            self.log(f"Concede check failed: {exc}")
+        finally:
+            self._menu_watch = None
 
     # ── one end-of-battle screen ───────────────────────────────────────
     def _handle_end_screen(self, hwnd, sct, rect, hit, last_hud=0.0):

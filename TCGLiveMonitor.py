@@ -521,6 +521,22 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
         log(f"Menu OCR ({reason}): main menu not seen within {timeout_s}s.")
 
 
+def ask_if_conceded(battle_started):
+    """The battle went straight to the main menu (no end screen, so no log):
+    read the rank, then let the overlay ask whether it was a concede."""
+    def run():
+        rank_before = read_int(LAST_RANK_FILE)
+        detect_menu_stats(20, "after a battle with no end screen")
+        rank_after = read_int(LAST_RANK_FILE)
+        try:
+            from deck_confirm import ask_concede
+            ask_concede(battle_started, read_text(LAST_DECK_FILE) or None, rank_before, rank_after)
+            log(f"Asked whether the last battle was conceded (rank {rank_before} -> {rank_after}).")
+        except Exception as exc:
+            log(f"Concede question failed: {exc}")
+    threading.Thread(target=run, daemon=True, name="ConcedeAsk").start()
+
+
 def _save_rank_snapshot(detector, rank):
     """Keep the rank crop behind a suspect reading so misreads can be diagnosed."""
     try:
@@ -595,6 +611,7 @@ class Monitor:
                 alog, launch_blocker, close_blocker, wait_blocker=wait_blocker,
                 enabled_fn=lambda: bool(app_setting("auto_export_battle_log", True)),
                 prewarm_blocker=prewarm_blocker,
+                on_menu_without_end=ask_if_conceded,
             )
             atexit.register(stop_standby_blocker)
             self.automation.start()

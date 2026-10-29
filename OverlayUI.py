@@ -653,6 +653,7 @@ class MinimalOverlay(QWidget):
             if self.deck_popup is not None:
                 self.deck_popup.tick(menu_seen_at(), anchor, self.isVisible())
                 self._position_chat_window()
+            self._poll_concede(anchor)
         except Exception as exc:
             _dbg(f"_poll_deck_confirm error: {exc}")
         # The Reset? prompt is scheduled here, before the notice looks for it.
@@ -740,6 +741,46 @@ class MinimalOverlay(QWidget):
         """The league's pixel-art ball, centred on the stats text's capitals."""
         pix = create_pokeball_icon(getattr(self, "_ball_league", "poke"), self.ball_icon.devicePixelRatioF(), angle, self._hud_scale)
         self.ball_icon.set_ball(pix, self.stats_label)
+
+    def _poll_concede(self, anchor):
+        """A battle went straight to the main menu (deck_confirm.ask_concede):
+        ask whether it was a concede. Yes adds the loss, and the deck card
+        then asks for the opponent's deck like after any battle."""
+        card = getattr(self, "_concede_card", None)
+        try:
+            if card is not None and card.isVisible():
+                card.reposition(self._above_open_cards(anchor))
+                return
+        except RuntimeError:  # closed
+            self._concede_card = None
+        from deck_confirm import (CONCEDE_FILE, concede_text, mark_concede_handled,
+                                  read_concede)
+        try:
+            mtime = os.path.getmtime(CONCEDE_FILE)
+        except OSError:
+            return
+        if mtime == getattr(self, "_concede_mtime", None):
+            return
+        self._concede_mtime = mtime
+        question = read_concede()
+        if not question:
+            return
+        mark_concede_handled()  # asked once, even if the card is closed with X
+
+        def conceded():
+            from deck_confirm import record_concede, write_request
+            battle_id = record_concede(self.db, question)
+            _dbg(f"concede: added loss as battle {battle_id}")
+            if battle_id:
+                write_request(battle_id, "", source="none", needs_input=True,
+                              my_deck=question.get("my_deck"), result="Loss")
+
+        from deck_popup import NoticeCard
+        self._concede_card = NoticeCard("DID YOU CONCEDE?", concede_text(question),
+                                        primary=("Yes, add a loss", conceded),
+                                        secondary=("No", lambda: None), linger_ms=0)
+        self._concede_card.show_at(self._above_open_cards(anchor))
+        _dbg("concede question shown")
 
     def _poll_manual_mode_notice(self, anchor):
         """Once per launch, when the mini GUI is placed: no OpenAI key (or
