@@ -233,25 +233,37 @@ class RankDetector:
             Boolean - True if on main menu
         """
         validations = []
-        
+        # Kept for the monitor's timeout log: what each check read this poll.
+        # A check skipped after an earlier one failed is left out.
+        self.last_menu_checks = checks = {}
+        # Strict mode needs all three, so stop OCR-ing once one fails: the
+        # menu waits poll for minutes and each check is a Tesseract run.
+        short_circuit = validation_method in ("auto", "strict") and not debug
+
         # Method 1: Check for menu text (if menu_text region defined)
         menu_found = False
         if "menu_text" in self.regions:
             menu_found = self.validate_screen_by_text(
-                "menu_text", 
+                "menu_text",
                 ["PLAY", "SHOP", "CARDS", "BATTLE PASS", "DECK", "RANKED"]
             )
             validations.append(("menu_text", menu_found))
+            checks["menu_text"] = menu_found
             if debug:
                 print(f"  Menu text validation: {menu_found}")
-        
+        if short_circuit and not menu_found:
+            return False
+
         # Method 2: Check if rank is visible and valid
         rank = self.extract_rank(debug=debug)
         rank_valid = rank is not None and 0 < rank < 99999
         validations.append(("rank", rank_valid))
+        checks["rank"] = rank
         if debug:
             print(f"  Rank validation: {rank_valid} (rank={rank})")
-        
+        if short_circuit and not rank_valid:
+            return False
+
         # Method 3: Check if deck name is visible (NEW in v2.0)
         deck_found = False
         if "my_deck_name" in self.regions:
@@ -260,9 +272,10 @@ class RankDetector:
             # Deck name should have at least 3 characters
             deck_found = deck_text is not None and len(deck_text.strip()) >= 3
             validations.append(("deck_name", deck_found))
+            checks["deck_name"] = deck_text
             if debug:
                 print(f"  Deck name validation: {deck_found} (deck={deck_text})")
-        
+
         # Decide based on validation method
         if validation_method == "any":
             return any(result for _, result in validations)

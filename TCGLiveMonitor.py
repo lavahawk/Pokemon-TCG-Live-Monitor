@@ -466,9 +466,14 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
     deadline = time.time() + timeout_s
     deck = None
     suspect = None
+    misses = {}  # check name -> how many polls it failed
     while time.time() < deadline:
         try:
-            if detector.is_on_main_menu(validation_method="auto"):
+            on_menu = detector.is_on_main_menu(validation_method="auto")
+            checks = getattr(detector, "last_menu_checks", None)
+            if checks and not on_menu:
+                _count_menu_misses(checks, misses)
+            if on_menu:
                 try:
                     from deck_confirm import mark_menu_seen
                     mark_menu_seen()  # lets the overlay's deck card fade
@@ -476,7 +481,8 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
                     pass
                 db = BattleDatabase()
                 if not deck:
-                    raw_deck = detector.extract_text("my_deck_name", silent=True)
+                    # The menu check just read the deck name; don't OCR it twice
+                    raw_deck = (checks or {}).get("deck_name") or detector.extract_text("my_deck_name", silent=True)
                     deck = snap_deck_name(raw_deck, db.get_known_deck_names()) if raw_deck else None
                 rank = read_rank_confirmed(detector, last_accepted=read_int(LAST_RANK_FILE))
                 if rank is None and time.time() + 4 < deadline:
@@ -519,6 +525,40 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
         log(f"Menu OCR ({reason}): rank {suspect} not confirmed within {timeout_s}s - not stored.")
     else:
         log(f"Menu OCR ({reason}): main menu not seen within {timeout_s}s.")
+        checks = getattr(detector, "last_menu_checks", None)
+        if checks:
+            failed = ", ".join(f"{name} {n}x" for name, n in misses.items()) or "none"
+            last = " ".join(f"{name}={value!r}" for name, value in checks.items())
+            log(f"Menu OCR ({reason}): first failed check over the wait: {failed}. "
+                f"Last read: {last or 'nothing'}")
+            _save_menu_snapshot(detector, reason)
+
+
+def _count_menu_misses(checks, misses):
+    """Tally which of is_on_main_menu's checks failed on one poll (it stops
+    at the first failure, so later checks are absent from `checks`)."""
+    failed = []
+    if "menu_text" in checks and not checks["menu_text"]:
+        failed.append("menu_text")
+    if "rank" in checks and not (checks["rank"] is not None and 0 < checks["rank"] < 99999):
+        failed.append("rank")
+    if "deck_name" in checks and (checks["deck_name"] is None or len(checks["deck_name"].strip()) < 3):
+        failed.append("deck_name")
+    for name in failed:
+        misses[name] = misses.get(name, 0) + 1
+
+
+def _save_menu_snapshot(detector, reason):
+    """Keep the three menu crops from a timed-out wait so the failing region can be seen."""
+    stamp = time.strftime('%Y%m%d_%H%M%S')
+    tag = reason.replace(" ", "_")
+    for region in ("menu_text", "rank", "my_deck_name"):
+        try:
+            img = detector.capture_region(region)
+            if img is not None:
+                img.save(os.path.join(LOG_DIR, f"menu_miss_{tag}_{stamp}_{region}.png"))
+        except Exception as exc:
+            log(f"Menu snapshot ({region}) failed: {exc}")
 
 
 def ask_if_conceded(battle_started):
