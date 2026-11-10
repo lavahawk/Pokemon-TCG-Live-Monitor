@@ -86,6 +86,7 @@ adblock_hosts.txt
 button_templates\battle_log.png
 button_templates\battle_log_export.png
 button_templates\battle_hud_gear.png
+button_templates\battle_emotes.png
 button_templates\templates.json?
 pet_sprites\CREDITS.txt
 pet_sprites\eevee\Angry.png
