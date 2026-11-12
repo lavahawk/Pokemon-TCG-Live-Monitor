@@ -75,6 +75,22 @@ def test_summarize_lists_counts_lists_not_prints():
     assert out["Gengar"]["c"]["T|Ultra Ball"][:2] == [1, 4]
 
 
+def test_japan_long_name_joins_the_online_deck():
+    sig = M._pokemon_signature
+    by_pokemon = {sig("Mega Rayquaza"): "Mega Rayquaza", sig("Mega Kangaskhan"): "Mega Kangaskhan",
+                  sig("Dragapult"): "Dragapult"}
+    incl = {"Mega Rayquaza": {sig("Mega Rayquaza ex"): 1.0, sig("Mega Kangaskhan ex"): 0.98},
+            "Mega Kangaskhan": {sig("Mega Kangaskhan ex"): 1.0},
+            "Dragapult": {sig("Dragapult ex"): 1.0, sig("Meowth ex"): 0.2}}
+    find = lambda icons: M._absorbing_deck(icons, by_pokemon, lambda d: incl.get(d, {}))
+    # JP "Mega Rayquaza Mega Kangaskhan": the online Rayquaza lists run Kangaskhan
+    assert find(["rayquaza-mega", "kangaskhan-mega"]) == "Mega Rayquaza"
+    # the lead Pokemon decides: not merged into Mega Kangaskhan
+    assert find(["kangaskhan-mega", "rayquaza-mega"]) is None
+    # a partner the online lists rarely play stays its own deck
+    assert find(["dragapult", "meowth"]) is None
+
+
 def test_throttle_reads_rate_limit_header():
     class Resp:
         def __init__(self, status, headers):
