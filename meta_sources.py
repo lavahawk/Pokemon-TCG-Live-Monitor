@@ -741,6 +741,39 @@ def _name_from_icons(icons):
     return " ".join(parts)
 
 
+PARTNER_MIN_INCL = 0.5  # a partner Pokemon in at least half the lists is part of the deck
+
+
+def _absorbing_deck(icons, by_pokemon, pokemon_incl):
+    """The known archetype a Japanese deck belongs to when Limitless JP names
+    it with more Pokemon than the online name: JP "Mega Rayquaza Mega
+    Kangaskhan" is online "Mega Rayquaza", whose lists all run Mega
+    Kangaskhan. The known deck must contain the lead (first) icon's Pokemon,
+    and its decklists must play each extra JP Pokemon in at least
+    PARTNER_MIN_INCL of lists. Several equally good candidates: None.
+
+    by_pokemon: {signature: deck name}; pokemon_incl(deck): {card signature:
+    share of lists 0-1} for the deck's Pokemon cards."""
+    sig = _pokemon_signature(_name_from_icons(icons))
+    lead = _pokemon_signature(_name_from_icons(icons[:1])) if icons else frozenset()
+    if not sig or not lead:
+        return None
+    best, best_size, tied = None, 0, False
+    for known, deck in by_pokemon.items():
+        if not (lead <= known < sig):
+            continue
+        cards = pokemon_incl(deck) or {}
+        extras = [_pokemon_signature(_name_from_icons([i])) for i in icons]
+        extras = [e for e in extras if e and not e <= known]
+        if not all(any(e <= card and incl >= PARTNER_MIN_INCL for card, incl in cards.items()) for e in extras):
+            continue
+        if len(known) > best_size:
+            best, best_size, tied = deck, len(known), False
+        elif len(known) == best_size:
+            tied = True
+    return None if tied else best
+
+
 def _in_person_summary(ip, totals):
     """Day 2 / Top 32 / Top 8 / wins counts and weighted conversion.
 
@@ -930,6 +963,11 @@ def japan_view(since_iso=None, sheet_rows=None):
         if r.get("icons"):
             icon_names.setdefault(tuple(sorted(r["icons"])), r["deck"])
         by_pokemon[_pokemon_signature(r["deck"])] = r["deck"]
+    row_cards = {r["deck"]: r.get("cards") or [] for r in sheet_rows or []}
+
+    def pokemon_incl(deck):
+        return {_pokemon_signature(c["name"]): (c.get("incl") or 0) / 100.0
+                for c in row_cards.get(deck, []) if c.get("cat") == "P"}
     dates = sorted(d["event"]["date"] for d in data)
     mid = dates[len(dates) // 2] if dates else None  # trend: newer half vs older half of the events
     archetypes, totals = {}, {"placings": 0, "new": 0, "old": 0}
@@ -940,7 +978,12 @@ def japan_view(since_iso=None, sheet_rows=None):
             name = icon_names.get(sig)
             if not name:
                 readable = _name_from_icons(p["icons"])
-                name = by_pokemon.setdefault(_pokemon_signature(readable), readable)
+                sig_p = _pokemon_signature(readable)
+                if sig_p not in by_pokemon:
+                    known = _absorbing_deck(p["icons"], by_pokemon, pokemon_incl)
+                    if known:
+                        by_pokemon[sig_p] = known
+                name = by_pokemon.setdefault(sig_p, readable)
                 icon_names[sig] = name
             a = archetypes.setdefault(name, {"deck": name, "icons": list(p["icons"]), "top16": 0, "wins": 0,
                                              "top4": 0, "points": 0, "rank_sum": 0, "new": 0, "old": 0,
@@ -1231,6 +1274,13 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
     for a in sorted(archetypes.values(), key=lambda x: x["count"]):
         by_pokemon[_pokemon_signature(a["deck"])] = a["deck"]
 
+    def pokemon_incl(deck):
+        a = archetypes.get(_key(deck))
+        if not a or a["lists_w"] <= 0:
+            return {}
+        return {_pokemon_signature(key.split("|", 1)[1]): c[0] / a["lists_w"]
+                for key, c in a["cards"].items() if key.startswith("P|")}
+
     for data in japan_data:
         ev = data["event"]
         weight = event_weight("japan", ev, era_of(ev["date"], exp_jp))
@@ -1250,10 +1300,18 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
                 # Match by the Pokemon involved (ignoring Mega/ex) to an
                 # archetype already known from online / in-person data.
                 readable = _name_from_icons(p["icons"])
+                sig_p = _pokemon_signature(readable)
+                if sig_p not in by_pokemon:
+                    # A longer JP name for a known deck ("Mega Rayquaza Mega
+                    # Kangaskhan" = online "Mega Rayquaza").
+                    known = _absorbing_deck(p["icons"], by_pokemon, pokemon_incl)
+                    if known:
+                        by_pokemon[sig_p] = known
                 # setdefault: Japan-only decks keep ONE name whatever order
                 # their icons are listed in ("Ogerpon Mega Kangaskhan" ==
                 # "Mega Kangaskhan Ogerpon").
-                name = by_pokemon.setdefault(_pokemon_signature(readable), readable)
+                name = by_pokemon.setdefault(sig_p, readable)
+                icon_names[sig] = name
             a = arch(name, icons=p["icons"])
             a["share_num"] += weight / len(placings)
             a["top_num"] += weight * max(1, 17 - p["rank"]) / pts_total

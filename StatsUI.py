@@ -9932,7 +9932,7 @@ class StatsWindow(QWidget):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet("background: transparent; font-size: 13px; letter-spacing: 3px;")
             lbl.setToolTip("Your own games" if is_mine else
-                           f"{src.get('online', 0)} online · {src.get('in_person', 0)} in-person · "
+                           f"Seen in {src.get('online', 0)} online · {src.get('in_person', 0)} in-person · "
                            f"{src.get('japan', 0)} Japan events")
             table.setCellWidget(i, 9, lbl)
             self._set_meta_item(table, i, 9, "", sort_value=sum(1 for k in ("online", "in_person", "japan") if src.get(k)))
