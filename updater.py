@@ -165,7 +165,7 @@ def launch_installer(path, base_dir=BASE_DIR):
     the running app itself, installs into the same folder (UsePreviousAppDir)
     and starts the monitor again. The installer only replaces program files;
     battles, settings, keys and logs are left alone - and are copied to
-    Backups\pre-update-<time>\ first anyway."""
+    Backups\\pre-update-<time>\\ first anyway."""
     try:
         from datatransfer import backup_now
         backup_now("pre-update", base_dir)

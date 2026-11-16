@@ -169,7 +169,7 @@ def import_data(path, base_dir=BASE_DIR):
 
 def relink_logs(base_dir=BASE_DIR):
     """Battles store their log by full path; after a move to another PC (or
-    folder) point them at this copy's Logs\ when the file is there."""
+    folder) point them at this copy's Logs\\ when the file is there."""
     db = os.path.join(base_dir, DB_NAME)
     logs = os.path.join(base_dir, "Logs")
     if not os.path.isfile(db) or not os.path.isdir(logs):
