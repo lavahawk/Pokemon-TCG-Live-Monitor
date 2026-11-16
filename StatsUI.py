@@ -10776,13 +10776,13 @@ class StatsWindow(QWidget):
         m = self.meta_matrix
         if not m.rowCount():
             return
+        from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(self, "Export matchups",
                                               os.path.join(os.path.expanduser("~"), "Downloads", "matchups.csv"),
                                               "CSV (*.csv)")
         if not path:
             return
         import csv
-        from PySide6.QtWidgets import QFileDialog
         heads = [(m.horizontalHeaderItem(j).toolTip() if m.horizontalHeaderItem(j) else "") for j in range(m.columnCount())]
         with open(path, "w", newline="", encoding="utf-8-sig") as handle:
             out = csv.writer(handle)
