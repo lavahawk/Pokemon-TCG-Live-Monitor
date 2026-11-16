@@ -102,7 +102,6 @@ def _with_store(fn):
 
 
 def test_online_event_cached_early_is_downloaded_again():
-    import time as _time
     from datetime import datetime as _dt
 
     def run():
