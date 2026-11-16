@@ -74,7 +74,10 @@ def current_weights():
 WEIGHTS = current_weights()  # refreshed at the start of every build
 MIN_EXPANSION_CARDS = 90        # smaller products (starters, premium decks) aren't expansions
 ONLINE_MIN_PLAYERS = 32
-ONLINE_MAX_EVENTS = 1500     # every 32+ player event in the era window (~170 a month)
+# Current format: every event, as Limitless's own deck stats count them (a
+# new deck has little data, and ~half the format's events are under 32).
+ONLINE_MIN_PLAYERS_CURRENT = 4
+ONLINE_MAX_EVENTS = 2500     # the era window: 32+ player events (~170 a month) + the current format's small ones
 JP_MAX_EVENTS = 1000         # every City League in the era window
 CARD_MIN_INCL = 0.03         # cards in fewer lists than this are left out of `cards`
 RECENT_DAYS = 21             # `share_recent`: popularity in the latest online (PTCGL) events
@@ -549,7 +552,9 @@ def fetch_japan_event(session, event):
 
 
 # ── Online (play.limitlesstcg.com API) ─────────────────────────────────────
-def list_online(session, since_iso):
+def list_online(session, since_iso, current_since=None):
+    """Standard online events since `since_iso`: 32+ players, or
+    ONLINE_MIN_PLAYERS_CURRENT+ from `current_since` (the current format) on."""
     events = []
     for page in range(1, 16):
         batch = _api_get(session, "tournaments",
@@ -558,7 +563,8 @@ def list_online(session, since_iso):
             break
         for t in batch:
             day = (t.get("date") or "")[:10]
-            if day and day >= since_iso and int(t.get("players") or 0) >= ONLINE_MIN_PLAYERS:
+            minimum = ONLINE_MIN_PLAYERS_CURRENT if current_since and day >= current_since else ONLINE_MIN_PLAYERS
+            if day and day >= since_iso and int(t.get("players") or 0) >= minimum:
                 events.append({"id": t["id"], "date": day, "name": t.get("name", ""), "players": int(t.get("players") or 0)})
         if (batch[-1].get("date") or "")[:10] < since_iso or len(events) >= ONLINE_MAX_EVENTS:
             break
@@ -623,8 +629,21 @@ def fetch_online_event(session, event):
         return {"event": event, "decks": decks, "matchups": matchups,
                 "lists": len(lists), "cards": _summarize_lists(lists)}
     # v3: with decklists (card usage)
+    name = f"online_v3_{event['id']}"
+    if not event.get("cache_only") and _online_unsettled(event) and not isinstance(session, _NoNetwork):
+        # Deck labels may have changed since: download again, keep the old
+        # copy if that fails.
+        try:
+            data = build()
+            path = _store_path(name)
+            with open(path + ".tmp", "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False)
+            os.replace(path + ".tmp", path)
+            return data
+        except Exception:
+            pass
     try:
-        return _cached(f"online_v3_{event['id']}", build)
+        return _cached(name, build)
     except Exception:
         # Offline rebuilds still use an event cached before v3 (no card usage).
         old = _store_path(f"online_{event['id']}")
@@ -632,6 +651,30 @@ def fetch_online_event(session, event):
             with open(old, "r", encoding="utf-8") as handle:
                 return json.load(handle)
         raise
+
+
+# Limitless names a new set's decks in the days after the first events
+# ("Other" until then: on DLR's first weekend a 161-player event had 32
+# Others, 17 of them Mega Rayquaza a few days later). An online event cached
+# within ONLINE_SETTLE_DAYS of its date is downloaded again once a day until a
+# copy is that old, for events of the last ONLINE_RELABEL_DAYS.
+ONLINE_SETTLE_DAYS = 3
+ONLINE_RELABEL_DAYS = 30
+
+
+def _online_unsettled(event, now=None):
+    """True when the cached copy of an online event is due a re-download."""
+    try:
+        mtime = os.path.getmtime(_store_path(f"online_v3_{event['id']}"))
+        day = date.fromisoformat(event["date"][:10])
+    except (OSError, ValueError, KeyError):
+        return False
+    now = time.time() if now is None else now
+    if (date.fromtimestamp(now) - day).days > ONLINE_RELABEL_DAYS:
+        return False
+    if (date.fromtimestamp(mtime) - day).days >= ONLINE_SETTLE_DAYS:
+        return False
+    return now - mtime >= 24 * 3600
 
 
 FETCH_BUDGET_S = 150  # per source; unfinished events are retried on the next refresh
@@ -642,7 +685,8 @@ def _fetch_online(session, online, exp_en, progress):
     """Online events within the API rate limit: cached events first (free),
     then the current format's biggest events, then older formats."""
     def priority(ev):
-        cached = os.path.exists(_store_path(f"online_v3_{ev['id']}"))
+        cached = (os.path.exists(_store_path(f"online_v3_{ev['id']}"))
+                  and (ev.get("cache_only") or not _online_unsettled(ev)))
         return (not cached, era_of(ev["date"], exp_en), -int(ev.get("players") or 0))
     ordered = sorted(online, key=priority)
     missing = sum(1 for ev in ordered if priority(ev)[0])
@@ -851,15 +895,20 @@ def _uncached_count(in_person, japan, online):
     return sum(1 for name in names if not os.path.exists(_store_path(name)))
 
 
-def _newest_uncached(events, store_name, cap):
-    """Cached events plus at most `cap` uncached ones (newest first): the
-    rest wait for a later run. cap None = no limit."""
+def _newest_uncached(events, store_name, cap, unsettled=None):
+    """Cached events plus at most `cap` downloads (newest first): the rest
+    wait for a later run. cap None = no limit. unsettled(e): a cached event
+    due a re-download; it takes a download slot, or else is used from cache
+    this run (marked cache_only)."""
     if cap is None:
         return events, 0
-    cached = [e for e in events if os.path.exists(_store_path(store_name(e)))]
-    new = sorted((e for e in events if not os.path.exists(_store_path(store_name(e)))),
-                 key=lambda e: e["date"], reverse=True)
-    return cached + new[:cap], max(0, len(new) - cap)
+    exists = lambda e: os.path.exists(_store_path(store_name(e)))
+    due = (lambda e: exists(e) and unsettled(e)) if unsettled else (lambda e: False)
+    cached = [e for e in events if exists(e) and not due(e)]
+    work = sorted((e for e in events if not exists(e) or due(e)), key=lambda e: e["date"], reverse=True)
+    later = work[cap:]
+    kept = [dict(e, cache_only=True) for e in later if exists(e)]
+    return cached + work[:cap] + kept, sum(1 for e in later if not exists(e))
 
 
 def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, sources=ALL_SOURCES,
@@ -885,11 +934,12 @@ def build_meta_sheet(session=None, progress=lambda msg: None, use_weights=True, 
     progress("Listing tournaments…")
     in_person = [e for e in list_in_person(session) if e["date"] >= since_en]
     japan = list_japan(session, since_jp)
-    online = list_online(session, since_en)
+    online = list_online(session, since_en, exp_en[0]["date"] if exp_en else None)
 
     pending = 0
     if trickle:
-        online, left_o = _newest_uncached(online, lambda e: f"online_v3_{e['id']}", TRICKLE_NEW["online"])
+        online, left_o = _newest_uncached(online, lambda e: f"online_v3_{e['id']}", TRICKLE_NEW["online"],
+                                          _online_unsettled)
         in_person, left_i = _newest_uncached(in_person, lambda e: f"inperson_v2_{e['id']}", TRICKLE_NEW["in_person"])
         japan, left_j = _newest_uncached(japan, lambda e: f"japan_{e['id']}", TRICKLE_NEW["japan"])
         pending = left_o + left_i + left_j
@@ -1119,22 +1169,31 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
         share_den += weight
         share_en_den += weight
         seen = set()
+        # Records from the pairings: games actually played, as Limitless
+        # counts them. A standings record also holds byes, no-shows and missed
+        # rounds (~8% of a deck's "games", nearly all losses after a drop).
+        played = data.get("matchups") or {}
+
+        def add_record(a, w, l, t):
+            a["w"] += weight * w
+            a["l"] += weight * l
+            a["t"] += weight * t
+            a["rw"] += w
+            a["rl"] += l
+            a["rt"] += t
+            g = w + l + t
+            a["raw_games"] += g
+            a["sw"] += weight * g
+            a["sw2"] += weight * weight * g
         for d in data["decks"]:
             a = arch(d["deck"], d["deck_id"], d["icons"],
                      f"https://play.limitlesstcg.com/decks/{d['deck_id']}?game=PTCG")
             a["share_num"] += weight / total
             a["share_en_num"] += weight / total
             a["count"] += 1
-            a["w"] += weight * d["w"]
-            a["l"] += weight * d["l"]
-            a["t"] += weight * d["t"]
-            a["rw"] += d["w"]
-            a["rl"] += d["l"]
-            a["rt"] += d["t"]
+            if not played:
+                add_record(a, d["w"], d["l"], d["t"])
             g = d["w"] + d["l"] + d["t"]
-            a["raw_games"] += g
-            a["sw"] += weight * g
-            a["sw2"] += weight * weight * g
             if g:
                 a["pilots"].append((d["w"] + 0.5 * d["t"], g))
             if d["icons"]:
@@ -1142,6 +1201,8 @@ def _assemble(exp_en, exp_jp, since_en, since_jp, inperson_data, standings_data,
             if a["id"] not in seen:
                 a["sources"]["online"] += 1
                 seen.add(a["id"])
+        for me, opps in played.items():
+            add_record(arch(me), *(sum(rec[i] for rec in opps.values()) for i in range(3)))
         lw = list_weight("online", ev, era_of(ev["date"], exp_en))
         for deck, summary in (data.get("cards") or {}).items():
             add_cards(arch(deck), summary, lw)
