@@ -91,6 +91,68 @@ def test_japan_long_name_joins_the_online_deck():
     assert find(["dragapult", "meowth"]) is None
 
 
+def _with_store(fn):
+    import tempfile
+    old = M.STORE_DIR
+    M.STORE_DIR = tempfile.mkdtemp(prefix="meta_store_test_")
+    try:
+        fn()
+    finally:
+        M.STORE_DIR = old
+
+
+def test_online_event_cached_early_is_downloaded_again():
+    import time as _time
+    from datetime import datetime as _dt
+
+    def run():
+        ev = {"id": "e1", "date": "2026-11-08T02:00:00.000Z"}
+        path = M._store_path("online_v3_e1")
+        open(path, "w").write("{}")
+        ts = lambda day, hour=12: _dt.fromisoformat(f"{day}T{hour:02d}:00").timestamp()
+        M.os.utime(path, (ts("2026-11-08", 5), ts("2026-11-08", 5)))
+        assert not M._online_unsettled(ev, now=ts("2026-11-08", 20))  # once a day at most
+        assert M._online_unsettled(ev, now=ts("2026-11-09"))
+        M.os.utime(path, (ts("2026-11-11"), ts("2026-11-11")))  # copy taken 3 days after: final
+        assert not M._online_unsettled(ev, now=ts("2026-11-13"))
+        M.os.utime(path, (ts("2026-11-08", 5), ts("2026-11-08", 5)))
+        assert not M._online_unsettled(ev, now=ts("2026-12-20"))  # too old to bother
+        assert not M._online_unsettled({"id": "nope", "date": "2026-11-08"}, now=ts("2026-11-09"))
+    _with_store(run)
+
+
+def test_trickle_cap_covers_redownloads():
+    def run():
+        events = [{"id": f"e{i}", "date": f"2026-11-0{i}"} for i in range(1, 6)]
+        for e in events[:3]:
+            open(M._store_path(f"online_v3_{e['id']}"), "w").write("{}")
+        due = lambda e: e["id"] in ("e2", "e3")  # cached, labels not settled
+        out, left = M._newest_uncached(events, lambda e: f"online_v3_{e['id']}", 3, due)
+        ids = {e["id"]: e.get("cache_only", False) for e in out}
+        assert set(ids) == {"e1", "e2", "e3", "e4", "e5"}  # nothing cached drops out
+        assert ids["e2"] is True and not ids["e3"] and not ids["e4"] and not ids["e5"]
+        assert left == 0
+    _with_store(run)
+
+
+def test_online_record_counts_played_games_only():
+    ev = {"id": "x", "date": "2026-11-08", "name": "Cup", "players": 64}
+    exp = [{"name": "Delta Reign", "code": "DLR", "date": "2026-11-06"},
+           {"name": "Old", "code": "OLD", "date": "2026-09-16"}]
+    # A's standings say 3-2 (a no-show loss and a bye win), the pairings 2-1.
+    data = {"event": ev, "decks": [{"deck": "A", "deck_id": "a", "icons": [], "w": 3, "l": 2, "t": 0},
+                                   {"deck": "B", "deck_id": "b", "icons": [], "w": 1, "l": 2, "t": 0}],
+            "matchups": {"A": {"B": [2, 1, 0]}, "B": {"A": [1, 2, 0]}}, "cards": {}}
+    sheet = M._assemble(exp, exp, "2026-09-16", "2026-09-16", [], {}, [], [data], use_weights=False)
+    a = next(r for r in sheet["rows"] if r["deck"] == "A")
+    assert (a["raw_wins"], a["raw_losses"], a["raw_ties"]) == (2, 1, 0)
+    # An event without pairings still uses the standings.
+    sheet = M._assemble(exp, exp, "2026-09-16", "2026-09-16", [], {}, [], [dict(data, matchups={})],
+                        use_weights=False)
+    a = next(r for r in sheet["rows"] if r["deck"] == "A")
+    assert (a["raw_wins"], a["raw_losses"]) == (3, 2)
+
+
 def test_throttle_reads_rate_limit_header():
     class Resp:
         def __init__(self, status, headers):
