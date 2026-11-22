@@ -1,13 +1,15 @@
-# Pokemon TCG Live Monitor v2.14.0
+# Pokemon TCG Live Monitor v2.14.1
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.14.0-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.14.1-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
 
 ## What's new
-- **Meta records now match Limitless.** Win-loss records only count games that were actually played. Before, byes, no-shows and missed rounds were counted too, and those are nearly all losses, so new decks looked worse than they are (Mega Rayquaza showed 45% instead of 49%).
-- **Small online tournaments count in the current format.** Every event with 4 or more players is included, the same as Limitless's own deck stats. About half of a new format's events are under 32 players, so new decks get a lot more games behind them.
-- **New decks stop hiding under "Other".** In a new set's first days, Limitless hasn't named the new decks yet. Tournaments from that window are now downloaded again until their deck names settle, so a new deck's early results land on the right deck.
-- **Japan results join the matching deck.** Limitless Japan sometimes names a deck with an extra Pokémon (Mega Rayquaza Mega Kangaskhan is the same deck as Mega Rayquaza). Those placings now add to the main deck instead of sitting in a separate row, on the Meta tab and the Japan Data tab.
-- **Battles are tracked again after the November game update.** The in-battle buttons moved and shrank, so the end of a battle could be missed. The app now spots the end screen much faster, so Continue gets covered in time for the auto-export.
-- **Conceded games can be recorded.** Conceding skips the end screen, so there was no battle log and no record. When a battle goes straight back to the menu, the app asks "Did you concede?" and adds the loss.
-- **Lighter checks on the main menu**, and when the menu isn't recognised the log says why (handy for bug reports).
+Mostly for playing Limitless online tournaments.
+
+- **Match chat over the game.** The newest messages show as outlined text over the game and fade after about 20 seconds. Rest the mouse on them to open the whole conversation and type a reply; Enter sends it to Limitless and hands the keyboard back to the game.
+- **Friend requests to your opponent.** When a round starts, the app asks if you want to add your opponent as a friend. Once you're on the main menu it sends the request in Pokémon TCG Live by itself. It uses the opponent's in-game screen name from the match page, which is often different from their Limitless name. The game is dimmed while it works, and your mouse and keyboard are paused for those few seconds (Esc cancels).
+- **Auto Friend Request** on the Limitless tab skips the question and just sends the request each round.
+- **Your opponent's decklist in its own window.** When Limitless shows the opponent's list on the match page, it opens with the card scans and copy counts, in your theme. It has its own taskbar button, so you can minimize it separately. A small three-card icon above the chat opens it again, and clicking it again minimizes it.
+- **Check-in reloads the page**, so Limitless shows you as checked in right away. Auto check-in tries a few times at most and only plays its sound once.
+- **The HUD hides with the game.** Minimize Pokémon TCG Live and the mini HUD, chat and deck icon go with it, then come back when you restore the game.
+- **Limitless tab:** Reload Dashboard is now a small refresh button on the right.

@@ -204,7 +204,9 @@ def _toast_class():
         every click and key) and excluded from screen capture. Where that
         isn't available, ptcgl_import hides them for each capture instead."""
 
-        def __init__(self, deck_name=""):
+        def __init__(self, deck_name="", title="IMPORTING INTO POKÉMON TCG LIVE",
+                     hint="Please don't use the mouse or keyboard until it's done  ·  Esc stops",
+                     first_step="Saved to the monitor · opening Pokémon TCG Live…"):
             self.dim = Dim()
             prepare(self.dim)
             self.dim.setWindowOpacity(0.45)
@@ -223,11 +225,11 @@ def _toast_class():
             box = QVBoxLayout(self.card)
             box.setContentsMargins(24, 18, 24, 18)
             box.setSpacing(6)
-            title = QLabel("IMPORTING INTO POKÉMON TCG LIVE")
+            title = QLabel(title)
             title.setObjectName("shadeTitle")
             name = QLabel(deck_name or "Shared deck")
             name.setObjectName("shadeName")
-            self.step = QLabel("Saved to the monitor · opening Pokémon TCG Live…")
+            self.step = QLabel(first_step)
             self.step.setObjectName("shadeStep")
             self._step_fx = QGraphicsOpacityEffect(self.step)
             self._step_fx.setOpacity(1.0)
@@ -239,7 +241,7 @@ def _toast_class():
             self._next_step = None
             self.bar = Progress()
             self.bar.value = 0.04
-            hint = QLabel("Please don't use the mouse or keyboard until it's done  ·  Esc stops")
+            hint = QLabel(hint)
             hint.setObjectName("shadeHint")
             for widget in (title, name, self.step):
                 box.addWidget(widget)

@@ -114,6 +114,9 @@ Docs_Archive/
 
 # Captured match chat (contains other players' names/messages)
 .chat_capture.json
+.friend_requests.json
+.friend_ui.json
+.opponent_decks_shown.json
 
 # Screenshots of personal stats / local reference images
 DevVault/Attachments/

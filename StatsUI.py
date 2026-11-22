@@ -241,6 +241,17 @@ LIMITLESS_TOURNAMENT_FLAG_FILE = os.path.join(BASE_DIR, ".in_tournament")
 # AIParseBattleLog.py so the current match's chat (with round info) can be
 # attached to the battle record for later review.
 LIMITLESS_CHAT_CAPTURE_FILE = os.path.join(BASE_DIR, ".chat_capture.json")
+LIMITLESS_LOG_FILE = os.path.join(BASE_DIR, "Logs", "limitless.log")
+
+
+def _limitless_log(message):
+    """Status trail of the Limitless tools (check-ins, opponent, friend adds)."""
+    try:
+        os.makedirs(os.path.dirname(LIMITLESS_LOG_FILE), exist_ok=True)
+        with open(LIMITLESS_LOG_FILE, "a", encoding="utf-8") as handle:
+            handle.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}\n")
+    except Exception:
+        pass
 LIMITLESS_SOUND_FILE = os.path.join(BASE_DIR, "ding.mp3")
 BATTLE_MGMT_LIMIT = 50  # rows in Settings → Battle Database
 SETTINGS_TAB = "Settings"
@@ -704,6 +715,79 @@ class LimitlessCheckInAlert(QWidget):
             self.move(geometry.right() - self.width() - 20, geometry.top() + 20)
 
 
+class FriendRequestPrompt(LimitlessCheckInAlert):
+    """'Add <opponent> as a friend?' over the game, asked once the main menu
+    is up. answered(bool): Add friend / Not now (closing or no answer within
+    the timeout counts as Not now)."""
+
+    answered = Signal(bool)
+
+    def __init__(self, timeout_s=60):
+        super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFixedWidth(330)
+        self.body_label.setTextFormat(Qt.TextFormat.RichText)
+        self.findChild(QLabel, "limitlessCheckinTitle").setText("Add your opponent as a friend?")
+        self.action_btn.setText("Add friend")
+        for btn in self.findChildren(QPushButton):
+            if btn.objectName() == "limitlessCheckinSecondaryBtn":
+                btn.setText("Not now")
+        self.check_in_requested.connect(lambda: self._answer(True))
+        self.dismissed.connect(lambda: self._answer(False))
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(int(timeout_s * 1000))
+        self._timer.timeout.connect(lambda: (self.hide(), self._answer(False)))
+        self._open = False
+
+    def ask(self, name, overlay=None):
+        self._open = True
+        self.body_label.setText(
+            f"Send a friend request to <b>{html.escape(name)}</b> in Pokémon TCG Live?<br>"
+            f"<span style='color:rgba(233,240,250,0.6);'>It takes a few seconds; your mouse and "
+            f"keyboard pause while it clicks. Esc stops it.</span>")
+        self.adjustSize()
+        self._overlay = overlay
+        self._place(overlay)
+        self.show()
+        self.raise_()
+        self._restack(overlay)
+        self._timer.start()
+
+    def _place(self, overlay):
+        try:
+            if overlay is not None and overlay.isVisible():
+                geo = overlay.geometry()
+                top = geo.y()
+                others = getattr(overlay, "hud_notifications", lambda: [])()
+                for note in others:
+                    if note is not self:
+                        top = min(top, note.geometry().y())
+                self.move(max(0, geo.x() + geo.width() - self.width()),
+                          max(0, top - self.height() - 12))
+                return
+        except Exception:
+            pass
+        self.position_near_overlay(overlay)
+
+    def _restack(self, overlay):
+        """Move the HUD chat above (or back down after) this popup."""
+        try:
+            if overlay is not None and hasattr(overlay, "_position_chat_window"):
+                overlay._position_chat_window()
+        except Exception:
+            pass
+
+    def _answer(self, yes):
+        if not self._open:
+            return
+        self._open = False
+        self._timer.stop()
+        self.hide()
+        self._restack(getattr(self, "_overlay", None))
+        self.answered.emit(bool(yes))
+
+
 class WindowResizeHandle(QFrame):
     """Simple bottom-right resize handle that works reliably with frameless windows."""
 
@@ -787,15 +871,22 @@ class LimitlessDashboardManager(QObject):
     status_changed = Signal(str)
     checkin_state_changed = Signal(dict)
     chat_state_changed = Signal(dict)
+    friend_ask = Signal(str, object)   # worker thread -> popup on the UI thread
+    friend_shade = Signal(object)      # worker thread -> dim + progress card
 
     def __init__(self, app):
         super().__init__(app)
+        self.friend_ask.connect(self._show_friend_prompt)
+        self.friend_shade.connect(self._on_friend_shade)
+        self._friend_prompt = None
+        self._friend_shade = None
         self.app = app
         self.profile = None
         self.background_view = None
         self.background_page = None
         self.background_enabled = True
         self.auto_checkin_enabled = True
+        self.auto_friend_request = False  # True: no "Add as friend?" popup
         self.authenticated = False
         self.in_tournament = False
         self.last_status = "Limitless dashboard idle."
@@ -832,8 +923,16 @@ class LimitlessDashboardManager(QObject):
         self.chat_poll_timer.timeout.connect(self.poll_for_chat)
 
         self._load_state()
+        # Every status change goes to Logs/limitless.log (once per change).
+        self._logged_status = ""
+        self.status_changed.connect(self._log_status)
         if WEBENGINE_AVAILABLE:
             self._ensure_profile()
+
+    def _log_status(self, message):
+        if message and message != self._logged_status:
+            self._logged_status = message
+            _limitless_log(message)
 
     def _tournament_poll(self):
         """Fast poll while in a tournament: reload the dashboard so fresh
@@ -855,6 +954,7 @@ class LimitlessDashboardManager(QObject):
                     state = json.load(handle)
                 legacy_enabled = bool(state.get("background_enabled", True))
                 self.auto_checkin_enabled = bool(state.get("auto_checkin_enabled", legacy_enabled))
+                self.auto_friend_request = bool(state.get("auto_friend_request", False))
         except Exception:
             self.auto_checkin_enabled = True
         self.background_enabled = True
@@ -866,6 +966,7 @@ class LimitlessDashboardManager(QObject):
                     {
                         "background_enabled": True,
                         "auto_checkin_enabled": self.auto_checkin_enabled,
+                        "auto_friend_request": bool(getattr(self, "auto_friend_request", False)),
                     },
                     handle,
                 )
@@ -1108,8 +1209,12 @@ class LimitlessDashboardManager(QObject):
                 const activeLink = matchLinks.find(el => /active match/i.test(cleanText(el.innerText || '')))
                     || matchLinks.find(el => /^R\\d+\\s+vs/i.test(cleanText(el.innerText || '')))
                     || matchLinks[0];
+                let activeMatchText = '';
                 if (activeLink && activeLink.href) {
                     activeMatchUrl = activeLink.href;
+                    // Raw (line-broken) text: "R1 vs Name" - the opponent's
+                    // name when the match page header doesn't give it.
+                    activeMatchText = (activeLink.innerText || '').slice(0, 200);
                 }
 
                 return JSON.stringify({
@@ -1118,6 +1223,7 @@ class LimitlessDashboardManager(QObject):
                     loggedIn: !/\\/login(?:[?#]|$)/i.test(window.location.pathname + window.location.search) && !loginForm && !/\\blog\\s*in\\b|\\bsign\\s*in\\b/i.test(authText),
                     inTournament,
                     activeMatchUrl,
+                    activeMatchText,
                     candidates
                 });
             })();
@@ -1150,6 +1256,14 @@ class LimitlessDashboardManager(QObject):
         active_match_url = result.get("activeMatchUrl") or ""
         if active_match_url and not _is_limitless_url(active_match_url):
             active_match_url = ""
+        if active_match_url:
+            try:
+                from ptcgl_friend import opponent_from_match_link
+                name = opponent_from_match_link(result.get("activeMatchText") or "")
+            except Exception:
+                name = ""
+            if name:
+                self._dashboard_opponent = (active_match_url, name)
         if active_match_url and self.chat_page is not None:
             try:
                 current = self.chat_page.url().toString()
@@ -1237,8 +1351,12 @@ class LimitlessDashboardManager(QObject):
         except Exception:
             own_name = ""
         own_js = json.dumps(own_name)
+        # Keep the match page's layout once per match (Logs, local only), so
+        # the decklist reading can be checked against what Limitless shows.
+        want_dump = "true" if self.chat_target_url and self.chat_target_url not in getattr(self, "_dumped_matches", set()) else "false"
         return r"""
             (() => {
+                const WANT_DUMP = """ + want_dump + r""";
                 const ownName = """ + own_js + r""";
                 const clean = (text) => (text || '').replace(/\s+/g, ' ').trim();
                 const visible = (el) => {
@@ -1342,6 +1460,11 @@ class LimitlessDashboardManager(QObject):
                     if (vsMatch && vsMatch[1]) {
                         opponent = clean(vsMatch[1]);
                     }
+                    if (!opponent) {
+                        // Current layout: "You are playing against" then the name.
+                        const against = headerRaw.match(/playing against[ \t]*(?:\r?\n[ \t]*)*([^\n\r]{1,40})/i);
+                        if (against && against[1]) opponent = clean(against[1]);
+                    }
                     const roundMatch = headerText.match(/\bround\s+(\d+)\b/i);
                     if (roundMatch && roundMatch[1]) {
                         subtitle = 'Round ' + roundMatch[1];
@@ -1351,42 +1474,60 @@ class LimitlessDashboardManager(QObject):
                     // containing a timestamp like "08:31:35 PM". We extract
                     // each message element individually so messages stay
                     // separate instead of being concatenated into one blob.
-                    const timeRe = /\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)/i;
+                    // No \b in front: a name can run into the time ("Bob09:21 PM").
+                    // ...and the text can run into "PM" ("09:36:43 PMKeller H has checked in").
+                    const timeRe = /\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)/i;
+                    const timeReG = /\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)/gi;
                     const rawMessages = [];
-                    // Collect ALL descendant elements that contain a timestamp
-                    // (message rows). We then keep only the deepest ones so a
-                    // wrapper containing the whole chat doesn't swallow the
-                    // individual messages.
-                    const timed = [];
+                    const rowLines = [];
+                    // A message row is the LARGEST element holding exactly one
+                    // timestamp: it climbs past a lone "08:31 PM" span to the
+                    // whole row (name + time + text) but stops below the list.
+                    const timeCount = (t) => (t.match(timeReG) || []).length;
                     const walk = (el, depth) => {
-                        if (depth > 6) return;
+                        if (depth > 12) return;
                         for (const child of el.children) {
-                            const t = clean(child.innerText || '');
-                            if (!t) continue;
-                            const hasTime = timeRe.test(t);
-                            const hasInput = child.querySelector('textarea, input[type="text"]');
-                            if (hasTime && !hasInput) {
-                                timed.push({ el: child, text: t });
+                            const raw = child.innerText || '';
+                            const n = timeCount(raw);
+                            if (!n) continue;
+                            const hasInput = child.querySelector('textarea, input, [contenteditable="true"]');
+                            if (n === 1 && !hasInput) {
+                                rawMessages.push(clean(raw));
+                                rowLines.push(raw.split(/\r?\n+/).map(clean).filter(Boolean));
+                            } else {
+                                walk(child, depth + 1);
                             }
-                            walk(child, depth + 1);
                         }
                     };
-                    walk(best.node, 0);
-                    // Keep only elements that are not ancestors of another
-                    // timestamped element (i.e. the deepest message rows).
-                    for (const item of timed) {
-                        const isAncestor = timed.some(other => other.el !== item.el && item.el.contains(other.el));
-                        if (!isAncestor) {
-                            rawMessages.push(item.text);
+                    // Limitless markup (Nov 2026): .messages holds
+                    // .message[.self] {.sender, .text} and .update {.text}
+                    // (check-ins, reports). Read it directly when present.
+                    const list = best.node.querySelector('.messages');
+                    const items = list ? Array.from(list.children).filter(el =>
+                        el.classList.contains('message') || el.classList.contains('update')) : [];
+                    if (items.length) {
+                        for (const el of items) {
+                            const textEl = el.querySelector('.text');
+                            const text = clean(textEl ? textEl.innerText : '');
+                            if (!text) continue;
+                            if (el.classList.contains('update')) {
+                                messages.push({ text, type: 'action', sender: '' });
+                            } else {
+                                const senderEl = el.querySelector('.sender');
+                                messages.push({ text, type: 'chat', sender: clean(senderEl ? senderEl.innerText : ''),
+                                                own: el.classList.contains('self') });
+                            }
                         }
+                    } else {
+                        walk(best.node, 0);
                     }
 
                     // If the walk found zero or only ONE timestamped element
                     // (meaning the whole chat is one blob, not per-message
                     // elements), split the container text on timestamp
                     // boundaries so each message stays separate.
-                    if (rawMessages.length <= 1) {
-                        rawMessages.length = 0;
+                    if (rawMessages.length === 0 && !items.length) {
+                        rowLines.length = 0;
                         const blob = clean(best.node.innerText || '');
                         const parts = blob.split(/(?<=\s)(?=\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM))/i);
                         for (const part of parts) {
@@ -1404,10 +1545,31 @@ class LimitlessDashboardManager(QObject):
                     const actionRe = /(?:has checked in|has reported game|the match has finished|has joined|has left|is now|won the|lost the|has been|check in|checked in)/i;
                     const knownNames = [ownName, opponent].filter(Boolean);
                     let pendingSender = '';
-                    for (const raw of rawMessages) {
+                    for (let i = 0; i < rawMessages.length; i++) {
+                        const raw = rawMessages[i];
                         let sender = '';
                         let text = '';
                         let trailingSender = '';
+                        // Shape 0: a row laid out on lines (name / time / text).
+                        const lines = rowLines[i] || [];
+                        const ti = lines.findIndex(l => timeRe.test(l));
+                        if (lines.length >= 2 && ti >= 0) {
+                            const tl = lines[ti];
+                            const m = tl.match(timeRe);
+                            const beforeT = clean(tl.slice(0, m.index));
+                            const afterT = clean(tl.slice(m.index + m[0].length));
+                            let who = clean([...lines.slice(0, ti), beforeT].join(' '));
+                            let body = clean([afterT, ...lines.slice(ti + 1)].join(' '));
+                            if (who.length > 30) { body = clean(who + ' ' + body); who = ''; }
+                            if (!body && who) { body = who; who = ''; }
+                            body = body.replace(/\s*\bsend$/i, '').trim();
+                            if (body && body.length >= 1 && !drop.has(body.toLowerCase())) {
+                                const type = (!who && actionRe.test(body)) ? 'action' : 'chat';
+                                messages.push({ text: body, type: type, sender: who });
+                            }
+                            pendingSender = '';
+                            continue;
+                        }
                         // Shape 1: leading sender before the timestamp.
                         const lead = raw.match(/^([A-Za-z0-9_\- ]{1,30}?)\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)\s+(.+)$/i);
                         if (lead) {
@@ -1439,16 +1601,18 @@ class LimitlessDashboardManager(QObject):
                         const type = actionRe.test(text) ? 'action' : 'chat';
                         messages.push({ text: text, type: type, sender: effSender });
                     }
-                    // Dedupe by text, keep the latest.
-                    const seen = new Set();
-                    const deduped = [];
-                    for (const m of messages) {
-                        const key = clean(m.text).toLowerCase();
-                        if (!key || seen.has(key)) continue;
-                        seen.add(key);
-                        deduped.push(m);
+                    // Rows are separate elements, so a repeated "gg" is two
+                    // messages; only the text-split fallback can double up.
+                    if (!rowLines.length && !items.length) {
+                        const seen = new Set();
+                        messages = messages.filter(m => {
+                            const key = (m.sender + '|' + clean(m.text)).toLowerCase();
+                            if (seen.has(key)) return false;
+                            seen.add(key);
+                            return true;
+                        });
                     }
-                    messages = deduped.slice(-8);
+                    messages = messages.slice(-30);
                 }
 
                 return JSON.stringify({
@@ -1460,6 +1624,94 @@ class LimitlessDashboardManager(QObject):
                     opponent,
                     messages,
                     pageTextSnippet: pageText.slice(0, 400),
+                    // The opponent's Pokémon TCG Live name ("Screen name",
+                    // click to copy) — often not their Limitless name.
+                    screenName: (() => {
+                        const box = document.querySelector('.opponent .ingame .content, .ingame .content');
+                        if (box) return clean(box.textContent || '');
+                        const label = Array.from(document.querySelectorAll('.label'))
+                            .find(el => /^screen name$/i.test(clean(el.textContent || '')));
+                        const content = label && label.parentElement && label.parentElement.querySelector('.content');
+                        return content ? clean(content.textContent || '') : '';
+                    })(),
+                    opponentDeck: (() => {
+                        // A decklist block as PTCGL export text, or ''. When
+                        // the page shows both players' lists, the one near
+                        // the opponent's name wins.
+                        // Limitless's match page: <h2 id="decklist">Opponent's
+                        // decklist</h2><div class="decklist"> with .cards blocks
+                        // (.heading "Pokémon (23)", <a href=".../cards/SET/NUM">
+                        // "3 Deino (SSP-117)" — trainers have no set in the text).
+                        const head = document.getElementById('decklist');
+                        let block = head && /opponent/i.test(head.textContent || '') ? head.nextElementSibling : null;
+                        while (block && !(block.classList && block.classList.contains('decklist'))) block = block.nextElementSibling;
+                        if (block) {
+                            const out = [];
+                            let cards = 0;
+                            for (const group of block.querySelectorAll('.cards')) {
+                                const h = clean((group.querySelector('.heading') || {}).textContent || '');
+                                const sec = h.match(/^(Pok[eé]mon|Trainer|Energy)/i);
+                                if (sec) out.push((/^pok/i.test(sec[1]) ? 'Pokémon' : sec[1][0].toUpperCase() + sec[1].slice(1).toLowerCase()) + ':');
+                                for (const a of group.querySelectorAll('a')) {
+                                    const t = clean(a.textContent || '');
+                                    const m = t.match(/^(\d{1,2})\s+(.+?)(?:\s+\(([A-Z0-9]{2,5})-(\d{1,3}[a-z]?)\))?$/);
+                                    if (!m) continue;
+                                    const href = (a.getAttribute('href') || '').match(/\/cards\/([A-Za-z0-9]{2,5})\/(\d{1,3}[a-z]?)/);
+                                    const set = m[3] || (href ? href[1].toUpperCase() : '');
+                                    const num = m[4] || (href ? href[2] : '');
+                                    out.push(`${m[1]} ${m[2]}${set && num ? ` ${set} ${num}` : ''}`);
+                                    cards += 1;
+                                }
+                            }
+                            if (cards >= 3) return out.join('\n');
+                        }
+                        const lineRe = /^(\d{1,2})\s+(.+?)\s+([A-Z][A-Z0-9]{1,4}(?:-[A-Z0-9]{1,3})?)\s+(\d{1,3}[a-z]?)$/;
+                        const roots = Array.from(document.querySelectorAll(
+                            '[class*="decklist"], [id*="decklist"], [class*="deck-list"], [class*="Decklist"]'));
+                        const lists = [];
+                        for (const root of roots) {
+                            if (roots.some(o => o !== root && root.contains(o))) continue;  // innermost
+                            const out = [];
+                            let cards = 0;
+                            for (const raw of (root.innerText || '').split(/\r?\n+/)) {
+                                const l = clean(raw);
+                                const sec = l.match(/^(Pok[eé]mon|Trainer|Energy)\b/i);
+                                if (sec && !/^\d/.test(l)) {
+                                    out.push((/^pok/i.test(sec[1]) ? 'Pokémon' : sec[1][0].toUpperCase() + sec[1].slice(1).toLowerCase()) + ':');
+                                    continue;
+                                }
+                                const m = l.match(lineRe);
+                                if (m) { out.push(`${m[1]} ${m[2]} ${m[3]} ${m[4]}`); cards += 1; }
+                            }
+                            if (cards >= 5) {
+                                // Owner: climb until the first block that names a
+                                // player; naming both there means "can't tell".
+                                const opp = (opponent || '').toLowerCase();
+                                const mine = (ownName || '').toLowerCase();
+                                let near = root, owner = '';
+                                for (let i = 0; i < 6 && near; i++, near = near.parentElement) {
+                                    // Stop where the block holds another list too
+                                    // (that's the page around both players).
+                                    if (roots.filter(o => near.contains(o)).length > 1) break;
+                                    const t = (near.innerText || '').toLowerCase();
+                                    const hasOpp = opp && t.includes(opp), hasMine = mine && t.includes(mine);
+                                    if (hasOpp || hasMine) { owner = hasOpp && hasMine ? 'both' : (hasOpp ? 'opp' : 'mine'); break; }
+                                }
+                                lists.push({ text: out.join('\n'), owner });
+                            }
+                        }
+                        if (!lists.length) return '';
+                        const byOpp = lists.find(l => l.owner === 'opp');
+                        if (byOpp) return byOpp.text;
+                        // A single list that isn't ours (only the opponent's is shown).
+                        return lists.length === 1 && lists[0].owner !== 'mine' ? lists[0].text : '';
+                    })(),
+                    matchHtml: WANT_DUMP ? (() => {
+                        const copy = document.body.cloneNode(true);
+                        copy.querySelectorAll('script, style, svg, noscript').forEach(e => e.remove());
+                        return copy.outerHTML.slice(0, 400000);
+                    })() : '',
+                    chatHtml: best ? best.node.outerHTML.slice(0, 40000) : '',
                     checkin,
                     openAsImageUrl,
                     openAsImagePresent
@@ -1478,6 +1730,31 @@ class LimitlessDashboardManager(QObject):
 
         url_text = result.get("url") or ""
         has_chat = bool(result.get("hasChat"))
+        # Keep the real chat markup on disk (local only) so the message
+        # parser can be checked against what Limitless actually renders.
+        match_html = result.pop("matchHtml", "") or ""
+        if match_html and "/match/" in url_text:
+            dumped = getattr(self, "_dumped_matches", None)
+            if dumped is None:
+                dumped = self._dumped_matches = set()
+            dumped.add(url_text)
+            try:
+                with open(os.path.join(BASE_DIR, "Logs", "limitless_match_dom.html"), "w", encoding="utf-8") as handle:
+                    handle.write(match_html)
+            except Exception:
+                pass
+        deck_text = (result.get("opponentDeck") or "").strip()
+        deck_text = deck_section_totals(deck_text)
+        if deck_text and "/match/" in url_text:
+            self._offer_opponent_deck(url_text, result, text=deck_text)
+        chat_html = result.pop("chatHtml", "") or ""
+        if chat_html and chat_html != getattr(self, "_last_chat_html", ""):
+            self._last_chat_html = chat_html
+            try:
+                with open(os.path.join(BASE_DIR, "Logs", "limitless_chat_dom.html"), "w", encoding="utf-8") as handle:
+                    handle.write(chat_html)
+            except Exception:
+                pass
 
         # Auto-check-in: if the match page shows a "Check in" button and
         # auto-check-in is enabled, click it so the player doesn't get an
@@ -1556,8 +1833,112 @@ class LimitlessDashboardManager(QObject):
         except Exception:
             pass
 
+    def _active_chat_page(self):
+        """The page showing the current match (the visible view when it is on
+        that match, else the hidden chat page), or None."""
+        if not self.chat_target_url:
+            return None
+        try:
+            if self.visible_view is not None:
+                visible_page = self.visible_view.page()
+                if visible_page is not None and visible_page.url().toString() == self.chat_target_url:
+                    return visible_page
+            if self.chat_page is not None and self.chat_page.url().toString() == self.chat_target_url:
+                return self.chat_page
+        except Exception:
+            pass
+        return None
+
+    SEND_CHAT_JS = r"""
+        ((message) => {
+            const clean = (t) => (t || '').replace(/\s+/g, ' ').trim();
+            const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+            };
+            const fields = Array.from(document.querySelectorAll(
+                'textarea, input[type="text"], input:not([type]), [contenteditable="true"]'
+            )).filter(el => visible(el) && !el.disabled && !el.readOnly);
+            const sendNear = (el) => {
+                let box = el;
+                for (let i = 0; i < 6 && box; i++, box = box.parentElement) {
+                    const hit = Array.from(box.querySelectorAll('button, [role="button"], input[type="submit"], a, span, div'))
+                        .find(b => b !== el && b.children.length <= 2 && visible(b)
+                              && /^send$/i.test(clean(b.innerText || b.value || b.getAttribute('aria-label') || '')));
+                    if (hit) return hit;
+                }
+                return null;
+            };
+            let field = fields.find(f => /message|chat/i.test((f.placeholder || '') + ' ' + (f.name || '') + ' ' + (f.id || '')));
+            if (!field) field = fields.find(f => sendNear(f));
+            if (!field) field = fields[fields.length - 1];
+            if (!field) return JSON.stringify({ ok: false, error: 'no chat box on the match page' });
+            field.focus();
+            if (field.isContentEditable) {
+                field.innerText = message;
+            } else {
+                const proto = field.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                Object.getOwnPropertyDescriptor(proto, 'value').set.call(field, message);
+            }
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+            const button = sendNear(field);
+            if (button && !button.disabled) {
+                button.click();
+                return JSON.stringify({ ok: true, how: 'button' });
+            }
+            if (field.form) {
+                if (field.form.requestSubmit) field.form.requestSubmit(); else field.form.submit();
+                return JSON.stringify({ ok: true, how: 'form' });
+            }
+            const key = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+            field.dispatchEvent(new KeyboardEvent('keydown', key));
+            field.dispatchEvent(new KeyboardEvent('keypress', key));
+            field.dispatchEvent(new KeyboardEvent('keyup', key));
+            return JSON.stringify({ ok: true, how: 'enter' });
+        })(%s)
+    """
+
+    def send_chat(self, text, callback=None):
+        """Type `text` into the open match's chat on Limitless and send it.
+        callback(ok, message) runs on the GUI thread."""
+        text = (text or "").strip()
+        done = callback or (lambda ok, message: None)
+        if not text:
+            done(False, "Nothing to send.")
+            return
+        page = self._active_chat_page()
+        if page is None:
+            done(False, "No Limitless match chat is open.")
+            return
+
+        def finished(result):
+            try:
+                data = json.loads(result) if isinstance(result, str) else (result or {})
+            except Exception:
+                data = {}
+            ok = bool(data.get("ok"))
+            _limitless_log(f"Send chat ({data.get('how') or data.get('error') or 'no reply'}): {text}")
+            if ok:
+                # Pick the sent line up from the page quickly.
+                for delay in (700, 1800, 4000):
+                    QTimer.singleShot(delay, self.poll_for_chat)
+            done(ok, "" if ok else f"Couldn't send: {data.get('error') or 'the page did not answer'}.")
+
+        try:
+            page.runJavaScript(self.SEND_CHAT_JS % json.dumps(text), finished)
+        except Exception as exc:
+            done(False, f"Couldn't send: {exc}")
+
     def _publish_chat_state(self, payload):
-        state = payload if isinstance(payload, dict) else {}
+        state = dict(payload) if isinstance(payload, dict) else {}
+        # The match page header doesn't always say "vs Name": fall back to the
+        # dashboard's link to this same match ("R1 vs Name").
+        if state and not str(state.get("opponent") or "").strip():
+            known = getattr(self, "_dashboard_opponent", None)
+            if known and known[0] == (state.get("url") or self.chat_target_url):
+                state["opponent"] = known[1]
         # Each message is either a plain string (legacy) or a dict with
         # {text, type}. Normalize to dicts and attach a received timestamp so
         # the overlay can fade messages out over time.
@@ -1580,18 +1961,32 @@ class LimitlessDashboardManager(QObject):
             if not text:
                 continue
             ts = seen.setdefault(f"{sender}|{text}", now_iso)
-            normalized_messages.append({"text": text, "type": mtype, "sender": sender, "ts": ts})
+            normalized_messages.append({"text": text, "type": mtype, "sender": sender, "ts": ts,
+                                        "own": bool(isinstance(msg, dict) and msg.get("own"))})
         normalized = {
             "url": state.get("url") or "",
             "title": state.get("title") or "",
             "header": state.get("header") or "Limitless Match",
             "subtitle": state.get("subtitle") or "",
             "opponent": str(state.get("opponent") or "").strip(),
-            "messages": normalized_messages[-8:],
+            "screen_name": str(state.get("screenName") or state.get("screen_name") or "").strip(),
+            "messages": normalized_messages[-30:],
             "visible": bool(normalized_messages),
+            # A match page is open: the overlay shows the chat (and its
+            # message box) even before anyone has written anything.
+            "active": bool(state.get("url") or ""),
         }
         if normalized == self.last_chat_state:
             return
+        prev = self.last_chat_state or {}
+        if normalized.get("opponent") and (normalized.get("opponent"), normalized.get("screen_name")) != (prev.get("opponent"), prev.get("screen_name")):
+            in_game = normalized.get("screen_name")
+            in_game = f", in game {in_game}" if in_game and in_game.lower() != normalized["opponent"].lower() else ""
+            _limitless_log(f"Match: {normalized.get('subtitle') or 'round ?'} vs {normalized['opponent']}{in_game} ({normalized.get('url')})")
+        old = {(m["sender"], m["text"]) for m in prev.get("messages") or []}
+        for m in normalized_messages[-30:]:
+            if (m["sender"], m["text"]) not in old:
+                _limitless_log(f"Chat [{m['type']}] {m['sender'] or '-'}: {m['text']}")
         self.last_chat_state = normalized
         self.chat_state_changed.emit(normalized)
         # Persist the current match's chat (with round info) to a shared
@@ -1603,6 +1998,25 @@ class LimitlessDashboardManager(QObject):
         # If the match chat is gone (no opponent), clear the tournament flag.
         if normalized.get("opponent"):
             self._update_tournament_flag(True, opponent=normalized["opponent"])
+            # Pokémon TCG Live knows them by their screen name, not their
+            # Limitless name.
+            url = normalized.get("url") or self.chat_target_url
+            if normalized.get("screen_name"):
+                self._on_opponent_known(normalized["screen_name"], url)
+            elif url and getattr(self, "_screen_name_wait", None) != url:
+                # Not on the page yet: give it a moment, then fall back to
+                # the Limitless name.
+                self._screen_name_wait = url
+                fallback = normalized["opponent"]
+
+                def later(url=url, fallback=fallback):
+                    state = self.last_chat_state or {}
+                    if state.get("url") == url and state.get("screen_name"):
+                        name = state["screen_name"]
+                    else:
+                        name = fallback
+                    self._on_opponent_known(name, url)
+                QTimer.singleShot(20000, later)
         elif self.in_tournament:
             self._update_tournament_flag(False)
 
@@ -1688,14 +2102,23 @@ class LimitlessDashboardManager(QObject):
         """
         if self.auto_checkin_enabled is False:
             return
-        # Dedupe: don't spam clicks every poll while the button is present.
+        # At most 3 tries per match, 15 s apart, and one sound: something on
+        # the page can keep reading "Check in" after a successful click.
         now = time.time()
-        if getattr(self, "_last_match_checkin_time", 0) and now - self._last_match_checkin_time < 10:
+        if getattr(self, "_last_match_checkin_time", 0) and now - self._last_match_checkin_time < 15:
             return
+        tries = getattr(self, "_match_checkin_tries", None)
+        if tries is None:
+            tries = self._match_checkin_tries = {}
+        count = tries.get(url_text, 0)
+        if count >= 3:
+            return
+        tries[url_text] = count + 1
         self._last_match_checkin_time = now
         self.last_status = "Auto Check-In is checking you into the round."
         self.status_changed.emit(self.last_status)
-        _play_limitless_notification_sound()
+        if count == 0:
+            _play_limitless_notification_sound()
         click_js = """
             (() => {
                 const clean = (t) => (t || '').replace(/\\s+/g, ' ').trim();
@@ -1742,7 +2165,20 @@ class LimitlessDashboardManager(QObject):
             page = None
         if page is not None:
             try:
-                page.runJavaScript(click_js)
+                page.runJavaScript(click_js, lambda clicked: clicked and QTimer.singleShot(
+                    2000, self._reload_after_checkin))
+            except Exception:
+                pass
+
+    def _reload_after_checkin(self):
+        """After an auto check-in click: reload the match page and the
+        dashboard so they (and the next scan) show the new state."""
+        _limitless_log("Reloading the Limitless pages after check-in")
+        for page in (self.chat_page, getattr(self.visible_view, "page", lambda: None)() if self.visible_view else None,
+                     self.background_page):
+            try:
+                if page is not None and "limitlesstcg.com" in page.url().toString():
+                    page.triggerAction(QWebEnginePage.WebAction.Reload)
             except Exception:
                 pass
 
@@ -1753,11 +2189,168 @@ class LimitlessDashboardManager(QObject):
         the match chat still exists (once the result is reported the match
         ends and the chat/flag clears).
         """
-        if not self.in_tournament:
+        # A known opponent on the followed match page is the active match;
+        # once the round completes the flag is cleared by _publish_chat_state.
+        # (It used to also need a chat message, so the decklist image waited
+        # for someone to type.)
+        return bool(self.in_tournament and self.chat_target_url)
+
+    def _on_opponent_known(self, opponent, match_url):
+        """Once per match: put the opponent's name on the clipboard and add
+        them as a friend in Pokemon TCG Live (Profile > Friends > Add friend)."""
+        key = f"{match_url}|{opponent}".lower()
+        if key == getattr(self, "_friend_key", "") or (match_url and match_url == getattr(self, "_friend_match", None)):
+            return
+        self._friend_key = key
+        self._friend_match = match_url
+        try:
+            import ptcgl_friend
+            self._load_state()  # the toggle may have been flipped in another window
+            ptcgl_friend.handle_new_opponent(opponent, match_url, status=self._friend_status,
+                                             ask=None if self.auto_friend_request else self._ask_add_friend,
+                                             shade=lambda *args: self.friend_shade.emit(args))
+        except Exception as exc:
+            print(f"[Limitless] Add-friend failed: {exc}")
+
+    def _ask_add_friend(self, name):
+        """Worker thread: show the popup on the UI thread, wait for the answer."""
+        reply = {"event": threading.Event(), "yes": False}
+        self.friend_ask.emit(name, reply)
+        reply["event"].wait(75)
+        return bool(reply["yes"])
+
+    def _offer_opponent_deck(self, match_url, result, text="", image_url=""):
+        """Open the opponent-decklist window once per match (and update it if
+        the list arrives after its picture)."""
+        path = os.path.join(BASE_DIR, ".opponent_decks_shown.json")
+        shown = getattr(self, "_opp_deck_shown", None)
+        if shown is None:
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    shown = json.load(handle)
+            except Exception:
+                shown = {}
+            self._opp_deck_shown = shown
+        kind = "text" if text else "image"
+        quiet = False
+        if shown.get(match_url) == "text" or shown.get(match_url) == kind:
+            # Already opened for this match (before a HUD restart, say): load
+            # it quietly so the chat's deck icon still has it.
+            last = getattr(self, "_last_opp_deck", None)
+            if last and last.get("url") == match_url:
+                return
+            quiet = True
+        shown[match_url] = kind
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(dict(list(shown.items())[-50:]), handle)
+        except OSError:
+            pass
+        # Only a name known for THIS match (the last round's would mislabel it).
+        state = self.last_chat_state or {}
+        known = getattr(self, "_dashboard_opponent", None) or ("", "")
+        info = {"url": match_url, "text": text, "image_url": image_url,
+                "opponent": (result.get("opponent")
+                             or (known[1] if known[0] == match_url else "")
+                             or (state.get("opponent") if state.get("url") == match_url else "")
+                             or "Opponent"),
+                "round": self._extract_round_number(result.get("subtitle") or state.get("subtitle") or "")}
+        if quiet:
+            self.show_opponent_deck(info, show=False)
+            return
+        _limitless_log(f"Opponent decklist ({kind}) for {info['opponent']}")
+        self.show_opponent_deck(info)
+
+    def show_opponent_deck(self, info=None, activate=False, show=True):
+        info = info or getattr(self, "_last_opp_deck", None)
+        if not info:
             return False
-        # The chat state's opponent presence signals an active match; once
-        # the round completes the flag is cleared by _publish_chat_state.
-        return bool(self.last_chat_state.get("visible"))
+        self._last_opp_deck = info
+        try:
+            window = getattr(self, "_opp_deck_window", None)
+            if window is None:
+                owner = getattr(self.get_overlay(), "stats_window", None)
+                window = self._opp_deck_window = OpponentDeckWindow(owner)
+            window.show_deck(info, activate=activate, show=show)
+            return True
+        except Exception as exc:
+            print(f"[Limitless] opponent decklist window failed: {exc}")
+            return False
+
+    def opponent_deck_preview(self, count=3):
+        """(opponent, [QPixmap]) of this match's opponent's main Pokémon (the
+        ex / most-played ones), for the chat's quick-look strip; None when
+        there's no list for the current match yet."""
+        info = getattr(self, "_last_opp_deck", None)
+        window = getattr(self, "_opp_deck_window", None)
+        if not info or window is None or not window.cards:
+            return None
+        if self.chat_target_url and info.get("url") != self.chat_target_url:
+            return None
+        pokemon = [c for c in window.cards if c.get("section") == "Pokémon"] or list(window.cards)
+        ranked = sorted(pokemon, key=lambda c: (" ex" not in f" {c['name'].lower()}", -c["qty"]))
+        pixes = []
+        for card in ranked:
+            pix = window.images.get(f"{card['set']}_{card['number']}")
+            if pix is not None and not pix.isNull():
+                pixes.append(pix)
+            if len(pixes) >= count:
+                break
+        return (info.get("opponent") or "Opponent", pixes)
+
+    def hud_notifications(self):
+        """Our popups that stack over the HUD (the chat moves above them)."""
+        return [self._friend_prompt] if self._friend_prompt is not None else []
+
+    def _on_friend_shade(self, args):
+        """The deck import's dim + card while the friend request is sent."""
+        try:
+            op = args[0]
+            if op == "show":
+                import deck_link
+                _, hwnd, name = args
+                if self._friend_shade is not None:
+                    self._friend_shade.hide()
+                self._friend_shade = deck_link._toast_class()(
+                    name, title="ADDING A FRIEND IN POKÉMON TCG LIVE",
+                    hint="Your mouse and keyboard are paused for a moment  ·  Esc stops",
+                    first_step="Opening Profile")
+                self._friend_shade.show_over(hwnd)
+            elif self._friend_shade is None:
+                return
+            elif op == "say":
+                self._friend_shade.say(args[1], args[2], 260)
+            elif op == "finish":
+                shade = self._friend_shade
+                ok, message = bool(args[1]), str(args[2] or "")
+                shade.finish(ok, "Sent" if ok else message[:80], lambda: None)
+        except Exception as exc:
+            print(f"[Limitless] friend shade failed: {exc}")
+
+    def _show_friend_prompt(self, name, reply):
+        try:
+            if self._friend_prompt is None:
+                self._friend_prompt = FriendRequestPrompt()
+            prompt = self._friend_prompt
+            try:
+                prompt.answered.disconnect()
+            except Exception:
+                pass
+
+            def answered(yes, reply=reply):
+                reply["yes"] = bool(yes)
+                reply["event"].set()
+                _limitless_log(f"Add friend {name}: {'yes' if yes else 'not now'}")
+            prompt.answered.connect(answered)
+            prompt.ask(name, self.get_overlay())
+        except Exception as exc:
+            print(f"[Limitless] friend prompt failed: {exc}")
+            reply["event"].set()
+
+    def _friend_status(self, message):
+        # Called from the worker thread; the signal is queued to the UI thread.
+        self.last_status = message
+        self.status_changed.emit(message)
 
     def _open_decklist_image_tab(self, image_url):
         """Open the opponent's decklist image in a new front tab.
@@ -1774,11 +2367,7 @@ class LimitlessDashboardManager(QObject):
         self._last_open_image_match = self.chat_target_url
         self.last_status = "Opening opponent decklist image for the tournament round."
         self.status_changed.emit(self.last_status)
-        try:
-            import webbrowser
-            webbrowser.open(image_url, new=2, autoraise=True)
-        except Exception as exc:
-            print(f"[Limitless] Could not open decklist image: {exc}")
+        self._offer_opponent_deck(self.chat_target_url, {}, image_url=image_url)
 
     def _click_open_as_image(self):
         """Click the 'Open as image' button on the match page.
@@ -1857,6 +2446,7 @@ class LimitlessDashboardManager(QObject):
             self.last_status = "Auto Check-In clicked the Limitless dashboard."
             self.status_changed.emit(self.last_status)
             self.delayed_poll_timer.start(3500)
+            QTimer.singleShot(2000, self._reload_after_checkin)
             return
         self.last_status = "Auto Check-In found a tournament but needs you to confirm manually."
         self.status_changed.emit(self.last_status)
@@ -3660,9 +4250,9 @@ class GlassPanel(QWidget):
 
     PILL_H = 34
 
-    def __init__(self, owner, title, size=(460, 440), pill_text=""):
-        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
-                         | Qt.WindowType.Tool)
+    def __init__(self, owner, title, size=(460, 440), pill_text="", flags=None):
+        super().__init__(None, flags or (Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                                         | Qt.WindowType.Tool))
         self.owner = owner
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -3901,6 +4491,198 @@ class GlassPanel(QWidget):
             panels.remove(self)
         self.chrome.stop()
         super().closeEvent(event)
+
+
+def deck_section_totals(text):
+    """Bare "Pokémon:" section headers made into PTCGL's "Pokémon: 23"."""
+    blocks, current = [], None
+    for line in (text or "").splitlines():
+        if re.fullmatch(r"(Pokémon|Trainer|Energy):", line.strip()):
+            current = [line.strip(), 0]
+            blocks.append(current)
+        else:
+            m = re.match(r"(\d+)\s", line)
+            if current is not None and m:
+                current[1] += int(m.group(1))
+            blocks.append(line)
+    return "\n".join(f"{b[0]} {b[1]}" if isinstance(b, list) else b for b in blocks)
+
+
+class OpponentDeckWindow(GlassPanel):
+    """The current round's opponent decklist: card scans with copy counts,
+    hover a card to enlarge it. A normal window of its own (its own taskbar
+    button, minimizes separately from the dashboard), in the app's theme.
+    Shows either a parsed list or, failing that, Limitless's image of it."""
+
+    def __init__(self, owner=None):
+        # A normal window (not a tool window): its own taskbar button.
+        super().__init__(owner, "Opponent decklist", size=(1000, 720), pill_text="Opponent decklist",
+                         flags=Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        try:
+            from PySide6.QtGui import QIcon
+            icon = os.path.join(BASE_DIR, "icon.ico")
+            if os.path.exists(icon):
+                self.setWindowIcon(QIcon(icon))
+        except Exception:
+            pass
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)  # reused round to round
+        # The dashboard's own title-button and scrollbar look, so the window
+        # matches the theme even while the dashboard isn't open.
+        # (By class: the #minBtn id selector doesn't take here and the
+        # buttons fall back to the light native face.)
+        self.add_style("TitleBarButton { background-color: rgba(255,255,255,0.05);"
+                       " border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: rgba(255,255,255,0.7); }"
+                       "TitleBarButton:hover { background-color: rgba(255,255,255,0.12); }"
+                       "QScrollBar:vertical { background-color: transparent; width: 8px; margin: 0px; }"
+                       "QScrollBar::handle:vertical { background-color: rgba(255,255,255,0.1); border-radius: 4px; min-height: 20px; }"
+                       "QScrollBar::handle:vertical:hover { background-color: rgba(255,255,255,0.15); }"
+                       "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+                       "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
+                       "QScrollArea { background: transparent; border: none; }")
+        self.add_style("QLabel#deckPicture { background: transparent; }"
+                       "QLabel#oppDeckHead { color: rgba(240,244,250,0.95); font-size: 15px; font-weight: 700; "
+                       "background: transparent; }"
+                       "QLabel#oppDeckSub { color: rgba(168,182,204,0.85); font-size: 11px; background: transparent; }")
+        col = QVBoxLayout(self.content)
+        col.setContentsMargins(14, 10, 14, 12)
+        col.setSpacing(6)
+        self.head = QLabel("")
+        self.head.setObjectName("oppDeckHead")
+        self.sub = QLabel("")
+        self.sub.setObjectName("oppDeckSub")
+        self.picture_tip = ""
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+            "QScrollBar:vertical { background: transparent; width: 8px; margin: 0px; }"
+            "QScrollBar::handle:vertical { background-color: rgba(255,255,255,0.14); border-radius: 4px; min-height: 24px; }"
+            "QScrollBar::handle:vertical:hover { background-color: rgba(255,255,255,0.22); }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }")
+        self.scroll.viewport().setAutoFillBackground(False)
+        self.picture = QLabel()
+        self.picture.setObjectName("deckPicture")
+        self.picture.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        self.scroll.setWidget(self.picture)
+        col.addWidget(self.scroll, 1)
+        from PySide6.QtNetwork import QNetworkAccessManager
+        self.net = QNetworkAccessManager(self)
+        self.cache_dir = os.path.join(BASE_DIR, ".card_image_cache")
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self.state = {"pixmap": None, "mode": "prints", "rects": []}
+        self.cards, self.images, self.entry = [], {}, {}
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(120)
+        self._debounce.timeout.connect(self._render)
+        self.resized = self._debounce.start
+        StatsWindow._attach_card_zoom(StatsWindow, self, self.picture, self.state, self.net, self.cache_dir)
+        self.key = None
+        # Set once more now that every child exists: the first pass leaves
+        # the title buttons on the light native face.
+        self.setStyleSheet(self.styleSheet() + " ")
+
+    # The title bar's minimize: a real minimize (taskbar), not the pill.
+    def collapse(self):
+        self.showMinimized()
+
+    def show_deck(self, info, activate=False, show=True):
+        """info: {url, opponent, round, text?, image_url?}. show=False loads
+        it without opening the window (the chat's deck icon opens it)."""
+        from decklists import list_lines
+        opponent = info.get("opponent") or "Opponent"
+        rnd = info.get("round")
+        self.setWindowTitle(f"{opponent}'s deck")
+        self.title_label.setText((f"ROUND {rnd} · " if rnd else "") + "OPPONENT DECKLIST")
+        self.key = info.get("url")
+        self.cards = list_lines(info.get("text") or "")
+        self.entry = {"name": f"{opponent}'s deck"}
+        self.images = {}
+        if self.cards:
+            total = sum(c["qty"] for c in self.cards)
+            self.picture.setToolTip("")
+            self._fetch_images()
+        elif info.get("image_url"):
+            self.picture.setToolTip("Limitless's picture of the list")
+            self._fetch_list_image(info["image_url"])
+        self._render()
+        if not show:
+            return
+        if self.isMinimized():
+            self.showNormal()
+        if not self.isVisible():
+            self.open_panel_geometry()
+            if not activate:
+                self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+            self.show()
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+        self.raise_()
+        if activate:
+            self.activateWindow()
+
+    def _fetch_images(self):
+        from PySide6.QtNetwork import QNetworkRequest
+        from decklists import card_image_url
+        for card in self.cards:
+            k = f"{card['set']}_{card['number']}"
+            path = os.path.join(self.cache_dir, f"{k}.png")
+            if os.path.exists(path):
+                pix = QPixmap(path)
+                if not pix.isNull():
+                    self.images[k] = pix
+                    continue
+            reply = self.net.get(QNetworkRequest(QUrl(card_image_url(card["set"], card["number"]))))
+
+            def done(reply=reply, k=k, path=path):
+                data = bytes(reply.readAll())
+                reply.deleteLater()
+                pix = QPixmap()
+                if data and pix.loadFromData(data):
+                    self.images[k] = pix
+                    try:
+                        with open(path, "wb") as handle:
+                            handle.write(data)
+                    except OSError:
+                        pass
+                else:
+                    self.images[k] = None
+                self._debounce.start()
+            reply.finished.connect(done)
+
+    def _fetch_list_image(self, url):
+        from PySide6.QtNetwork import QNetworkRequest
+        reply = self.net.get(QNetworkRequest(QUrl(url)))
+
+        def done():
+            data = bytes(reply.readAll())
+            reply.deleteLater()
+            pix = QPixmap()
+            if data and pix.loadFromData(data):
+                self.state["image"] = pix
+                self._render()
+        reply.finished.connect(done)
+
+    def _render(self):
+        if self.cards:
+            rects = []
+            pixmap = StatsWindow._render_deck_picture(StatsWindow, self.entry, self.cards, self.images, rects)
+            self.state["rects"] = rects
+            self.state["mode"] = "prints"
+        else:
+            pixmap = self.state.get("image")
+            self.state["rects"] = []
+            self.state["mode"] = "image"
+        self.state["pixmap"] = pixmap
+        if pixmap is None or pixmap.isNull():
+            self.picture.setText("Loading the decklist…")
+            return
+        dpr = max(1.0, self.picture.devicePixelRatioF())
+        width = int(max(200, self.scroll.viewport().width() - 4) * dpr)
+        shown = pixmap.scaledToWidth(min(width, pixmap.width()), Qt.TransformationMode.SmoothTransformation)
+        shown.setDevicePixelRatio(dpr)
+        self.picture.setPixmap(shown)
 
 
 class StatsWindow(QWidget):
@@ -10805,12 +11587,6 @@ class StatsWindow(QWidget):
         action_row.setSpacing(8)
         action_row.setContentsMargins(0, 0, 0, 0)
 
-        refresh_btn = QPushButton("Reload Dashboard")
-        refresh_btn.setObjectName("settingsBtn")
-        refresh_btn.setFixedHeight(34)
-        refresh_btn.clicked.connect(lambda: self.limitless_dashboard_view.load(QUrl(LIMITLESS_DASHBOARD_URL)) if WEBENGINE_AVAILABLE else webbrowser.open(LIMITLESS_DASHBOARD_URL))
-        action_row.addWidget(refresh_btn)
-
         self.limitless_dashboard_autocheck_btn = QPushButton()
         self.limitless_dashboard_autocheck_btn.setObjectName("settingsBtn")
         self.limitless_dashboard_autocheck_btn.setFixedHeight(34)
@@ -10818,7 +11594,33 @@ class StatsWindow(QWidget):
         self.limitless_dashboard_autocheck_btn.clicked.connect(self.toggle_limitless_auto_checkin)
         action_row.addWidget(self.limitless_dashboard_autocheck_btn)
 
+        self.limitless_auto_friend_btn = QPushButton()
+        self.limitless_auto_friend_btn.setObjectName("settingsBtn")
+        self.limitless_auto_friend_btn.setFixedHeight(34)
+        self.limitless_auto_friend_btn.setCheckable(True)
+        self.limitless_auto_friend_btn.setToolTip(
+            "ON: each round's opponent gets a friend request in Pokémon TCG Live as soon as you're on "
+            "the main menu, without asking.\nOFF: a popup asks first.")
+        self.limitless_auto_friend_btn.clicked.connect(self.toggle_limitless_auto_friend)
+        action_row.addWidget(self.limitless_auto_friend_btn)
+
+        opp_deck_btn = QPushButton("Opponent Decklist")
+        opp_deck_btn.setObjectName("settingsBtn")
+        opp_deck_btn.setFixedHeight(34)
+        opp_deck_btn.setToolTip("Show this round's opponent decklist again (it opens by itself when Limitless shows it).")
+        opp_deck_btn.clicked.connect(self._show_opponent_decklist)
+        action_row.addWidget(opp_deck_btn)
+
         action_row.addStretch()
+
+        # Same look as its neighbours (settingsBtn), square and unpadded.
+        refresh_btn = QPushButton("⟳")
+        refresh_btn.setObjectName("iconBtn")
+        refresh_btn.setToolTip("Reload the dashboard")
+        refresh_btn.setFixedSize(34, 34)
+        refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        refresh_btn.clicked.connect(lambda: self.limitless_dashboard_view.load(QUrl(LIMITLESS_DASHBOARD_URL)) if WEBENGINE_AVAILABLE else webbrowser.open(LIMITLESS_DASHBOARD_URL))
+        action_row.addWidget(refresh_btn)
         vlayout.addLayout(action_row)
 
         if WEBENGINE_AVAILABLE:
@@ -10850,6 +11652,11 @@ class StatsWindow(QWidget):
             self.limitless_dashboard_autocheck_btn.setText(
                 "Auto Check-In: ON" if enabled else "Auto Check-In: OFF"
             )
+        if hasattr(self, "limitless_auto_friend_btn"):
+            on = bool(self.limitless_manager and getattr(self.limitless_manager, "auto_friend_request", False))
+            self.limitless_auto_friend_btn.setChecked(on)
+            self.limitless_auto_friend_btn.setText(
+                "Auto Friend Request: ON" if on else "Auto Friend Request: OFF")
 
     def toggle_limitless_auto_checkin(self):
         if not self.limitless_manager:
@@ -10857,6 +11664,20 @@ class StatsWindow(QWidget):
         self.limitless_manager.auto_checkin_enabled = not self.limitless_manager.auto_checkin_enabled
         self.limitless_manager._save_state()
         self.limitless_manager.ensure_background_loaded()
+        self._sync_limitless_autocheck_button()
+
+    def _show_opponent_decklist(self):
+        manager = self.limitless_manager
+        if not manager or not manager.show_opponent_deck(activate=True):
+            QMessageBox.information(self, "Opponent decklist",
+                                    "No opponent decklist yet. It opens by itself once Limitless shows it on the match page.")
+
+    def toggle_limitless_auto_friend(self):
+        if not self.limitless_manager:
+            return
+        manager = self.limitless_manager
+        manager.auto_friend_request = not getattr(manager, "auto_friend_request", False)
+        manager._save_state()
         self._sync_limitless_autocheck_button()
 
     def open_limitless_dashboard_tab(self):
@@ -14111,6 +14932,23 @@ class StatsWindow(QWidget):
                     stop:1 rgba(74, 159, 216, 0.14));
                 border-color: rgba(74, 159, 216, 0.55);
             }
+            QPushButton#iconBtn {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 255, 255, 0.06),
+                    stop:1 rgba(255, 255, 255, 0.02));
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 6px;
+                color: rgba(255, 255, 255, 0.9);
+                font-family: 'Segoe UI Symbol', 'Segoe UI', Arial;
+                font-size: 21px;
+                padding: 0 0 2px 0;
+            }
+            QPushButton#iconBtn:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(74, 159, 216, 0.3),
+                    stop:1 rgba(74, 159, 216, 0.1));
+                border-color: rgba(74, 159, 216, 0.4);
+            }
             
             QLabel#settingsDesc {
                 color: rgba(255, 255, 255, 0.5);
@@ -14384,6 +15222,13 @@ def main():
     
     window = StatsWindow()
     window.show()
+    # The background monitor only auto-starts at Windows sign-in; if it was
+    # closed or killed since, opening the dashboard brings it back. A second
+    # copy exits at once (single-instance lock), so this is safe to repeat.
+    try:
+        startup_utils.launch_monitor(BASE_DIR, headless=True)
+    except Exception as exc:
+        print(f"Could not start the background monitor: {exc}")
     import ui_restart
     note = ui_restart.take()  # relaunched by Restart app: back on the same tab
     if note and note.get("tab") and window._main_tab_index(note["tab"]) >= 0:
