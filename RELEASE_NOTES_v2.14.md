@@ -6,6 +6,7 @@ Run **`PokemonTCGLiveMonitor-2.14.3-Free-Setup.exe`**. Install over any 2.x vers
 ## What's new in 2.14.3
 - **Tournament games are tagged again when the opponent's game name differs from their Limitless name.** The battle log uses their Pokémon TCG Live screen name, and only the Limitless name was compared, so those games were saved as regular games. Either name now counts.
 - **Friend requests** wait up to a minute for the screen name to show up on the match page. If it never does, a Limitless name with a space in it isn't typed into the game (it can't be anyone's game name); it's put on your clipboard instead.
+- **The HUD starts again after a few restarts.** The monitor stopped opening the HUD once it had been started five times in total, so after enough restarts or game sessions it never came up. Only a HUD that closes right after starting counts now, and opening the game resets the count.
 
 ## What's new in 2.14.2
 - **Opponent decklist window:** the window sizes itself to the list, and the cards are a little bigger. Every card zooms to the same size on hover, even past the window's edge. An Opacity slider lets you see the game through the window, and it remembers where you left it. **Copy image** puts Limitless's normalized picture of the list on your clipboard, the same as Copy image on the Decks tab.
