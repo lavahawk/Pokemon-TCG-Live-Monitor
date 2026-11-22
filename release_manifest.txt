@@ -41,6 +41,7 @@ deck_confirm.py
 sounds.py
 pet.py
 theme.py
+app_icon.py
 ui_restart.py
 infotip.py
 deck_share.py

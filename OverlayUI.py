@@ -527,6 +527,7 @@ class LimitlessChatWindow(QWidget):
         self._shown_key = None
         self.on_send = None        # callback(text), set by the overlay
         self.suppressed = False    # True while the game is minimized
+        self.retired = False       # True a few minutes after the round ended
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -730,7 +731,7 @@ class LimitlessChatWindow(QWidget):
                 if seen_text == mine or seen_text.endswith(" " + mine):
                     self.pending.remove(item)
                     break
-        opening = not self.isVisible() and not self.suppressed
+        opening = not self.isVisible() and not self.suppressed and not self.retired
         self.messages = parsed
         if arrived or opening or self._newest is None:
             self._newest = datetime.now()
@@ -1585,8 +1586,11 @@ class MinimalOverlay(QWidget):
         if not self.isVisible():
             self.show()
         for w in hidden:
-            if w is not getattr(self, "deck_icon", None):  # the icon follows the chat by itself
-                w.show()
+            if w is getattr(self, "deck_icon", None):  # the icon follows the chat by itself
+                continue
+            if w is chat and chat.retired:
+                continue
+            w.show()
         _dbg("game restored: HUD shown")
 
     def find_game_window(self):
@@ -2035,11 +2039,48 @@ class MinimalOverlay(QWidget):
             is_new = self.chat_window.set_messages(messages, own_name=own_name,
                                                    title=title or "Limitless chat",
                                                    opponent=opponent)
+            self._retire_chat_later(state, messages, is_new)
             self._position_chat_window()
             if is_new and messages and not self.chat_window.suppressed and not self.chat_window._is_own(messages[-1]):
                 self._ping_new_chat()
         except Exception as exc:
             _dbg(f"update_limitless_chat error: {exc}")
+
+    CHAT_RETIRE_MS = 3 * 60 * 1000
+
+    def _retire_chat_later(self, state, messages, is_new):
+        """Once the round is reported (or the match page says it finished),
+        the chat and its deck icon go away after CHAT_RETIRE_MS. A new message
+        or the next round's page brings them back."""
+        chat = self.chat_window
+        url = state.get("url") or ""
+        if not state.get("match_done") or is_new or url != getattr(self, "_retire_url", url):
+            if chat.retired:
+                chat.retired = False
+                _dbg("chat back: new message or new match")
+                if not chat.suppressed and not chat.isVisible():
+                    chat.show()
+            self._retire_token = getattr(self, "_retire_token", 0) + 1
+            self._retire_url = url
+            if not state.get("match_done"):
+                return
+        if chat.retired or getattr(self, "_retire_pending", None) == (url, self._retire_token):
+            return
+        self._retire_url = url
+        token = self._retire_token
+        self._retire_pending = (url, token)
+
+        def retire():
+            self._retire_pending = None
+            if token != getattr(self, "_retire_token", 0) or self.chat_window is not chat:
+                return
+            chat.retired = True
+            chat.hide()
+            icon = getattr(self, "deck_icon", None)
+            if icon is not None:
+                icon.hide()
+            _dbg("round over: chat and deck icon hidden")
+        QTimer.singleShot(self.CHAT_RETIRE_MS, retire)
 
     def _send_limitless_chat(self, text):
         """Chat card -> the match chat on Limitless (through the hidden page)."""
@@ -2249,6 +2290,8 @@ def main():
     app = QApplication(sys.argv)
     import theme
     theme.install(app)  # before any widget: legacy does nothing
+    import app_icon
+    app_icon.install(app)  # our icon on the taskbar, not Python's
     import infotip
     infotip.install(app)  # two-stage hover tips
     

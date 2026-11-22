@@ -1624,6 +1624,17 @@ class LimitlessDashboardManager(QObject):
                     opponent,
                     messages,
                     pageTextSnippet: pageText.slice(0, 400),
+                    // The round is over: Limitless says the match finished,
+                    // or every game under "Report games" has its Win/Loss
+                    // picked (the picked one gets a class besides
+                    // "report win"/"report loss").
+                    matchDone: (() => {
+                        if (messages.some(m => /the match has (?:finished|ended)|match is over/i.test(m.text || ''))) return true;
+                        const games = Array.from(document.querySelectorAll('.reporting .game'));
+                        if (!games.length) return false;
+                        return games.every(g => Array.from(g.querySelectorAll('.report')).some(r =>
+                            Array.from(r.classList).some(c => !['report', 'win', 'loss'].includes(c))));
+                    })(),
                     // The opponent's Pokémon TCG Live name ("Screen name",
                     // click to copy) — often not their Limitless name.
                     screenName: (() => {
@@ -1975,6 +1986,7 @@ class LimitlessDashboardManager(QObject):
             # A match page is open: the overlay shows the chat (and its
             # message box) even before anyone has written anything.
             "active": bool(state.get("url") or ""),
+            "match_done": bool(state.get("matchDone")),
         }
         if normalized == self.last_chat_state:
             return
@@ -1983,6 +1995,8 @@ class LimitlessDashboardManager(QObject):
             in_game = normalized.get("screen_name")
             in_game = f", in game {in_game}" if in_game and in_game.lower() != normalized["opponent"].lower() else ""
             _limitless_log(f"Match: {normalized.get('subtitle') or 'round ?'} vs {normalized['opponent']}{in_game} ({normalized.get('url')})")
+        if normalized["match_done"] and not prev.get("match_done"):
+            _limitless_log(f"Match over: {normalized.get('subtitle') or 'round ?'} ({normalized.get('url')})")
         old = {(m["sender"], m["text"]) for m in prev.get("messages") or []}
         for m in normalized_messages[-30:]:
             if (m["sender"], m["text"]) not in old:
@@ -4542,14 +4556,61 @@ class OpponentDeckWindow(GlassPanel):
         self.add_style("QLabel#deckPicture { background: transparent; }"
                        "QLabel#oppDeckHead { color: rgba(240,244,250,0.95); font-size: 15px; font-weight: 700; "
                        "background: transparent; }"
-                       "QLabel#oppDeckSub { color: rgba(168,182,204,0.85); font-size: 11px; background: transparent; }")
+                       "QLabel#oppDeckSub { color: rgba(168,182,204,0.85); font-size: 11px; background: transparent; }"
+                       "QLabel#oppDeckFade { color: rgba(168,182,204,0.75); font-size: 10px; background: transparent; }"
+                       "QPushButton#oppDeckCopy { background: rgba(74,159,216,0.16); border: 1px solid rgba(74,159,216,0.40);"
+                       " border-radius: 6px; color: #DCEBFA; font-size: 11px; padding: 3px 10px; }"
+                       "QPushButton#oppDeckCopy:hover { background: rgba(74,159,216,0.28); }"
+                       "QPushButton#oppDeckCopy:disabled { color: rgba(220,235,250,0.55); }"
+                       "QSlider#oppDeckOpacity { background: transparent; }"
+                       "QSlider#oppDeckOpacity::groove:horizontal { height: 4px; background: rgba(255,255,255,0.14); border-radius: 2px; }"
+                       "QSlider#oppDeckOpacity::sub-page:horizontal { background: rgba(74,159,216,0.75); border-radius: 2px; }"
+                       "QSlider#oppDeckOpacity::handle:horizontal { width: 10px; margin: -4px 0; border-radius: 5px;"
+                       " background: rgba(235,243,252,0.92); border: 1px solid rgba(255,255,255,0.35); }"
+                       "QSlider#oppDeckOpacity::handle:horizontal:hover { background: #FFFFFF; border-color: rgba(74,159,216,0.9); }")
         col = QVBoxLayout(self.content)
-        col.setContentsMargins(14, 10, 14, 12)
+        col.setContentsMargins(14, 8, 14, 12)
         col.setSpacing(6)
-        self.head = QLabel("")
-        self.head.setObjectName("oppDeckHead")
+        # Toolbar: card count, see-through slider, copy as a Limitless image.
+        bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(8)
         self.sub = QLabel("")
         self.sub.setObjectName("oppDeckSub")
+        bar.addWidget(self.sub, 1)
+        fade = QLabel("Opacity")
+        fade.setObjectName("oppDeckFade")
+        bar.addWidget(fade)
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setObjectName("oppDeckOpacity")
+        self.opacity_slider.setRange(30, 100)
+        self.opacity_slider.setFixedWidth(110)
+        self.opacity_slider.setFixedHeight(16)
+        self.opacity_slider.setToolTip("See the game through this window")
+        try:
+            opacity = int(load_app_settings().get("opponent_deck_opacity", 100))
+        except (TypeError, ValueError):
+            opacity = 100
+        self.opacity_slider.setValue(max(30, min(100, opacity)))
+        self.setWindowOpacity(self.opacity_slider.value() / 100)
+        self.opacity_slider.valueChanged.connect(self._set_opacity)
+        bar.addWidget(self.opacity_slider)
+        self._save_opacity = QTimer(self)
+        self._save_opacity.setSingleShot(True)
+        self._save_opacity.setInterval(600)
+        self._save_opacity.timeout.connect(self._store_opacity)
+        bar.addSpacing(4)
+        self.copy_btn = QPushButton("Copy image")
+        self.copy_btn.setObjectName("oppDeckCopy")
+        self.copy_btn.setFixedHeight(26)
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.setToolTip("Copy the list as Limitless's picture, every card in its regular printing "
+                                 "(Limitless ImgGen)")
+        self.copy_btn.clicked.connect(self._copy_image)
+        bar.addWidget(self.copy_btn)
+        col.addLayout(bar)
+        self.deck_text = ""
+        self._copy = {"busy": False, "data": None, "error": None, "text": None}
         self.picture_tip = ""
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -4562,6 +4623,7 @@ class OpponentDeckWindow(GlassPanel):
             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }")
         self.scroll.viewport().setAutoFillBackground(False)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.picture = QLabel()
         self.picture.setObjectName("deckPicture")
         self.picture.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
@@ -4578,15 +4640,126 @@ class OpponentDeckWindow(GlassPanel):
         self._debounce.setInterval(120)
         self._debounce.timeout.connect(self._render)
         self.resized = self._debounce.start
-        StatsWindow._attach_card_zoom(StatsWindow, self, self.picture, self.state, self.net, self.cache_dir)
+        StatsWindow._attach_card_zoom(StatsWindow, self, self.picture, self.state, self.net, self.cache_dir,
+                                      fixed_height=self.ZOOM_H)
         self.key = None
         # Set once more now that every child exists: the first pass leaves
         # the title buttons on the light native face.
         self.setStyleSheet(self.styleSheet() + " ")
 
+    # Cards show at this share of the picture's own size (a bit bigger than
+    # the old fixed 1000 px window gave), the picture is drawn RES times over
+    # so that stays sharp at 150 % display scaling, and every hovered card
+    # zooms to ZOOM_H px tall.
+    PREVIEW_SCALE = 0.76
+    RES = 2.0
+    ZOOM_H = 440
+
     # The title bar's minimize: a real minimize (taskbar), not the pill.
     def collapse(self):
         self.showMinimized()
+
+    def _set_opacity(self, value):
+        self.setWindowOpacity(max(0.3, min(1.0, value / 100)))
+        self._save_opacity.start()
+
+    def _store_opacity(self):
+        try:
+            from app_settings import save_app_settings
+            settings = load_app_settings()
+            settings["opponent_deck_opacity"] = int(self.opacity_slider.value())
+            save_app_settings(settings)
+        except Exception:
+            pass
+
+    def _cols(self):
+        """Cards per row: 10, or fewer when no section has that many."""
+        from collections import Counter
+        widest = max(Counter(c["section"] for c in self.cards).values(), default=StatsWindow.CARD_COLS)
+        return max(4, min(StatsWindow.CARD_COLS, widest))
+
+    def _fit_to_deck(self, recenter):
+        """Size the window to the picture at PREVIEW_SCALE (taller lists get
+        a taller window, up to 90 % of the screen, then it scrolls)."""
+        pixmap = self.state.get("pixmap")
+        if pixmap is None or pixmap.isNull() or self.isMinimized():
+            return
+        res = self.RES if self.cards else 1.0
+        want_w = pixmap.width() / res * self.PREVIEW_SCALE
+        want_h = pixmap.height() / res * self.PREVIEW_SCALE
+        if not self.cards:  # Limitless's own picture: 1000 px wide
+            want_h = want_h * 1000 / max(1.0, want_w)
+            want_w = 1000
+        self.layout().activate()
+        self.content.layout().activate()
+        view = self.scroll.viewport().size()
+        extra_w = self.width() - view.width() + 4
+        extra_h = self.height() - view.height() + 2
+        area = self._screen_area()
+        height = int(want_h + extra_h)
+        width = int(want_w + extra_w)
+        if height > area.height() * 0.9:
+            height = int(area.height() * 0.9)
+            width += 10  # room for the scrollbar
+        width = min(width, area.width() - 40)
+        old = self.geometry()
+        self.resize(width, height)
+        if recenter:
+            self.open_panel_geometry()
+        else:
+            geo = self.geometry()
+            geo.moveTopLeft(old.topLeft())
+            geo.moveRight(min(geo.right(), area.right()))
+            geo.moveBottom(min(geo.bottom(), area.bottom()))
+            geo.moveLeft(max(geo.left(), area.left()))
+            geo.moveTop(max(geo.top(), area.top()))
+            self.move(geo.topLeft())
+
+    def _copy_image(self):
+        """Limitless ImgGen's normalized picture of the list (as the Decks
+        tab's Copy image does), fetched once per list, then on the clipboard."""
+        if self._copy["busy"] or not self.deck_text:
+            return
+        if self._copy["data"] and self._copy["text"] == self.deck_text:
+            self._copy_done()
+            return
+        text = self.deck_text
+        self._copy.update(busy=True, data=None, error=None, text=text)
+        self.copy_btn.setEnabled(False)
+        self.copy_btn.setText("Copying…")
+
+        def work():
+            from decklists import limitless_picture
+            try:
+                self._copy["data"] = limitless_picture(text, normalized=True)
+            except Exception as exc:
+                self._copy["error"] = str(exc) or type(exc).__name__
+            self._copy["busy"] = False
+
+        threading.Thread(target=work, daemon=True).start()
+        waiter = QTimer(self)
+        waiter.setInterval(200)
+
+        def check():
+            if self._copy["busy"]:
+                return
+            waiter.stop()
+            waiter.deleteLater()
+            self._copy_done()
+        waiter.timeout.connect(check)
+        waiter.start()
+
+    def _copy_done(self):
+        self.copy_btn.setEnabled(True)
+        pix = QPixmap()
+        if self._copy["data"] and pix.loadFromData(self._copy["data"]):
+            QApplication.clipboard().setPixmap(pix)
+            self.copy_btn.setText("Copied")
+        else:
+            self._copy["data"] = None
+            self.copy_btn.setText("Copy failed")
+            self.copy_btn.setToolTip(f"Limitless ImgGen: {self._copy.get('error') or 'no picture came back'}")
+        QTimer.singleShot(1800, lambda: self.copy_btn.setText("Copy image"))
 
     def show_deck(self, info, activate=False, show=True):
         """info: {url, opponent, round, text?, image_url?}. show=False loads
@@ -4596,18 +4769,25 @@ class OpponentDeckWindow(GlassPanel):
         rnd = info.get("round")
         self.setWindowTitle(f"{opponent}'s deck")
         self.title_label.setText((f"ROUND {rnd} · " if rnd else "") + "OPPONENT DECKLIST")
+        new_deck = info.get("url") != self.key or (info.get("text") or "") != self.deck_text
         self.key = info.get("url")
-        self.cards = list_lines(info.get("text") or "")
+        self.deck_text = info.get("text") or ""
+        self.cards = list_lines(self.deck_text)
         self.entry = {"name": f"{opponent}'s deck"}
         self.images = {}
+        self.copy_btn.setVisible(bool(self.cards))
         if self.cards:
             total = sum(c["qty"] for c in self.cards)
+            self.sub.setText(f"{total} cards · {len(self.cards)} different")
             self.picture.setToolTip("")
             self._fetch_images()
         elif info.get("image_url"):
+            self.sub.setText("Limitless's picture of the list")
             self.picture.setToolTip("Limitless's picture of the list")
             self._fetch_list_image(info["image_url"])
         self._render()
+        if new_deck and self.isVisible():
+            self._fit_to_deck(recenter=False)
         if not show:
             return
         if self.isMinimized():
@@ -4618,6 +4798,9 @@ class OpponentDeckWindow(GlassPanel):
                 self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
             self.show()
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+            # Measured once shown: a hidden window's layout has no real sizes.
+            self._fit_to_deck(recenter=True)
+            self._render()
         self.raise_()
         if activate:
             self.activateWindow()
@@ -4662,12 +4845,15 @@ class OpponentDeckWindow(GlassPanel):
             if data and pix.loadFromData(data):
                 self.state["image"] = pix
                 self._render()
+                if self.isVisible():
+                    self._fit_to_deck(recenter=False)
         reply.finished.connect(done)
 
     def _render(self):
         if self.cards:
             rects = []
-            pixmap = StatsWindow._render_deck_picture(StatsWindow, self.entry, self.cards, self.images, rects)
+            pixmap = StatsWindow._render_deck_picture(StatsWindow, self.entry, self.cards, self.images, rects,
+                                                      cols=self._cols(), res=self.RES)
             self.state["rects"] = rects
             self.state["mode"] = "prints"
         else:
@@ -7268,24 +7454,37 @@ class StatsWindow(QWidget):
         panel.open_panel()
         QTimer.singleShot(0, render)
 
-    def _attach_card_zoom(self, panel, label, state, net, cache_dir):
+    def _attach_card_zoom(self, panel, label, state, net, cache_dir, fixed_height=None):
         """Hover a card in the picture: it pops out bigger, in high resolution
-        (Limitless _LG scan, cached), growing smoothly from where it sits."""
+        (Limitless _LG scan, cached), growing smoothly from where it sits.
+        fixed_height: every card zooms to this height whatever the window's
+        size, in a window of its own over the panel (so it can stick out of
+        a small panel and stays opaque when the panel is see-through)."""
         from PySide6.QtCore import QVariantAnimation, QEasingCurve
         from PySide6.QtNetwork import QNetworkRequest
         from PySide6.QtGui import QPainterPath
         from PySide6.QtWidgets import QGraphicsDropShadowEffect
         from decklists import card_image_url
 
-        pop = QLabel(panel)
+        floating = bool(fixed_height)
+        if floating:
+            pop = QLabel(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                         | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput)
+            pop.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            pop.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+            pop.setStyleSheet("background: transparent;")
+            panel.destroyed.connect(pop.deleteLater)
+        else:
+            pop = QLabel(panel)
         pop.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         pop.setScaledContents(True)
         pop.hide()
-        shadow = QGraphicsDropShadowEffect(pop)
-        shadow.setBlurRadius(28)
-        shadow.setOffset(0, 8)
-        shadow.setColor(QColor(0, 0, 0, 170))
-        pop.setGraphicsEffect(shadow)
+        if not floating:  # a shadow would be cut off at a window's edge
+            shadow = QGraphicsDropShadowEffect(pop)
+            shadow.setBlurRadius(28)
+            shadow.setOffset(0, 8)
+            shadow.setColor(QColor(0, 0, 0, 170))
+            pop.setGraphicsEffect(shadow)
         large = {}
         zoom = {"card": None, "start": None, "end": None}
         anim = QVariantAnimation(panel)
@@ -7374,13 +7573,19 @@ class StatsWindow(QWidget):
                 return
             zoom["card"] = card
             set_image(card)
-            top_left = label.mapTo(panel, QPoint(int(rect.x()), int(rect.y())))
+            if floating:
+                top_left = label.mapToGlobal(QPoint(int(rect.x()), int(rect.y())))
+                screen = QGuiApplication.screenAt(top_left) or QGuiApplication.primaryScreen()
+                area = screen.availableGeometry()
+                height = min(int(fixed_height), area.height() - 24)
+            else:
+                top_left = label.mapTo(panel, QPoint(int(rect.x()), int(rect.y())))
+                height = min(int(panel.height() * 0.78), 470)
             start = QRect(top_left, QSize(int(rect.width()), int(rect.height())))
-            height = min(int(panel.height() * 0.78), 470)
             width = int(height * 63 / 88)
             end = QRect(0, 0, width, height)
             end.moveCenter(start.center())
-            bounds = panel.rect().adjusted(12, 44, -12, -12)
+            bounds = area.adjusted(12, 12, -12, -12) if floating else panel.rect().adjusted(12, 44, -12, -12)
             end.moveLeft(max(bounds.left(), min(end.left(), bounds.right() - width)))
             end.moveTop(max(bounds.top(), min(end.top(), bounds.bottom() - height)))
             zoom["start"], zoom["end"] = start, end
@@ -7406,7 +7611,7 @@ class StatsWindow(QWidget):
                         hide_zoom()
                     else:
                         show_zoom(rect, card)
-                elif et == QEvent.Type.Leave:
+                elif et in (QEvent.Type.Leave, QEvent.Type.Hide, QEvent.Type.Wheel):
                     hide_zoom()
                 return False
 
@@ -7417,11 +7622,14 @@ class StatsWindow(QWidget):
         label.setCursor(Qt.CursorShape.PointingHandCursor)
         panel._hide_card_zoom = hide_zoom
 
-    def _render_deck_picture(self, entry, cards, images, rects_out=None):
+    def _render_deck_picture(self, entry, cards, images, rects_out=None, cols=None, res=1.0):
         """Paint the list: title, then a grid per section, copy counts as badges.
-        rects_out (a list) receives (QRectF in picture pixels, card) per card."""
+        rects_out (a list) receives (QRectF in picture pixels, card) per card.
+        cols: cards per row (default CARD_COLS); res: the picture is drawn
+        that many times bigger, for a sharp preview on scaled displays."""
         from PySide6.QtGui import QFont, QLinearGradient, QPainterPath
-        w, h, gap, cols = self.CARD_W, self.CARD_H, self.CARD_GAP, self.CARD_COLS
+        w, h, gap = self.CARD_W, self.CARD_H, self.CARD_GAP
+        cols = max(1, int(cols or self.CARD_COLS))
         margin, head_h, section_h = 22, 54, 30
         sections = []
         for card in cards:
@@ -7434,11 +7642,12 @@ class StatsWindow(QWidget):
             height += section_h + rows * (h + gap)
         height += margin - gap
         width = margin * 2 + cols * w + (cols - 1) * gap
-        pixmap = QPixmap(width, height)
+        pixmap = QPixmap(int(round(width * res)), int(round(height * res)))
         pixmap.fill(Qt.GlobalColor.transparent)
         p = QPainter(pixmap)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        p.scale(res, res)
         bg = QLinearGradient(0, 0, 0, height)
         bg.setColorAt(0, theme.qcolor(18, 23, 33))
         bg.setColorAt(1, theme.qcolor(11, 14, 20))
@@ -7478,16 +7687,20 @@ class StatsWindow(QWidget):
                 cy = y + (i // cols) * (h + gap)
                 rect = QRectF(x, cy, w, h)
                 if rects_out is not None:
-                    rects_out.append((QRectF(rect), card))
+                    rects_out.append((QRectF(x * res, cy * res, w * res, h * res), card))
                 pix = images.get(f"{card['set']}_{card['number']}")
                 path = QPainterPath()
                 path.addRoundedRect(rect, 6, 6)
                 if pix:
                     p.save()
                     p.setClipPath(path)
-                    scaled = pix.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    # Scaled in real pixels (w*res), drawn back at w x h.
+                    sw, sh = int(round(w * res)), int(round(h * res))
+                    scaled = pix.scaled(sw, sh, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                         Qt.TransformationMode.SmoothTransformation)
-                    p.drawPixmap(int(x - (scaled.width() - w) / 2), int(cy - (scaled.height() - h) / 2), scaled)
+                    p.drawPixmap(QRectF(x - (scaled.width() / res - w) / 2, cy - (scaled.height() / res - h) / 2,
+                                        scaled.width() / res, scaled.height() / res), scaled,
+                                 QRectF(0, 0, scaled.width(), scaled.height()))
                     p.restore()
                 else:
                     p.setPen(QPen(QColor(255, 255, 255, 40), 1))
@@ -15219,6 +15432,8 @@ def main():
     """Run the stats window standalone"""
     app = QApplication(sys.argv)
     theme.install(app)  # before any widget: legacy does nothing
+    import app_icon
+    app_icon.install(app)  # our icon on the taskbar, not Python's
     
     window = StatsWindow()
     window.show()

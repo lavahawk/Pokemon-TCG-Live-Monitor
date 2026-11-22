@@ -1,9 +1,14 @@
-# Pokemon TCG Live Monitor v2.14.1
+# Pokemon TCG Live Monitor v2.14.2
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.14.1-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.14.2-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
 
-## What's new
+## What's new in 2.14.2
+- **Opponent decklist window:** the window sizes itself to the list, and the cards are a little bigger. Every card zooms to the same size on hover, even past the window's edge. An Opacity slider lets you see the game through the window, and it remembers where you left it. **Copy image** puts Limitless's normalized picture of the list on your clipboard, the same as Copy image on the Decks tab.
+- **Taskbar icon:** the decklist window and the dashboard show the app's icon on the taskbar, not Python's.
+- **The chat goes away after the round.** Three minutes after the round is reported (or Limitless says the match has finished), the chat and the decklist icon hide. A new message or the next round's match brings them back.
+
+## What's new in 2.14
 Mostly for playing Limitless online tournaments.
 
 - **Match chat over the game.** The newest messages show as outlined text over the game and fade after about 20 seconds. Rest the mouse on them to open the whole conversation and type a reply; Enter sends it to Limitless and hands the keyboard back to the game.
