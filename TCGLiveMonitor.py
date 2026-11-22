@@ -51,6 +51,7 @@ BLOCKER_SHOW_FILE = os.path.join(LOG_DIR, ".blocker_show")
 MONITOR_LOG = os.path.join(LOG_DIR, "monitor.log")
 CLICKER_LOG = os.path.join(LOG_DIR, "autoclicker.log")
 
+OVERLAY_CRASH_WINDOW_S = 120  # an overlay that exits sooner than this counts as a crash
 IDLE_POLL_S = 5            # game-process check while the game is closed
 RUNNING_PROC_CHECK_S = 10  # game-process check while it is running
 CLIPBOARD_POLL_S = 0.5
@@ -595,6 +596,8 @@ class Monitor:
         self.jobs = queue.Queue()
         self.overlay_proc = None
         self.overlay_starts = 0
+        self.overlay_started_at = 0.0
+        self._overlay_gave_up = False
         self.automation = None
         self.debug_overlay_proc = None
         self.recent_hashes = {}  # hash -> time (fast path; DB is the source of truth)
@@ -608,16 +611,23 @@ class Monitor:
         if self.overlay_proc is not None and self.overlay_proc.poll() is None:
             return
         import ui_restart
+        if self.overlay_proc is not None and time.time() - self.overlay_started_at > OVERLAY_CRASH_WINDOW_S:
+            self.overlay_starts = 0  # it ran a while: closed or killed, not a crash loop
         if ui_restart.pending():
             pass  # Settings -> Restart app / a theme change: not a crash
         elif self.overlay_starts >= 5:
-            return  # crashing repeatedly; see Logs/overlay_error.log
+            if not self._overlay_gave_up:
+                self._overlay_gave_up = True
+                log("Overlay keeps exiting right after it starts; not starting it again "
+                    "until the game is reopened. See Logs/overlay_error.log.")
+            return
         else:
             self.overlay_starts += 1
         try:
             err = open(os.path.join(LOG_DIR, "overlay_error.log"), "a", encoding="utf-8")
             self.overlay_proc = subprocess.Popen([gui_python(), OVERLAY_SCRIPT], cwd=BASE_DIR,
                                                  stderr=err, creationflags=_no_window_flags())
+            self.overlay_started_at = time.time()
             log("Overlay started.")
         except Exception as exc:
             log(f"Could not start overlay: {exc}")
@@ -798,6 +808,8 @@ class Monitor:
                     write_text(os.path.join(LOG_DIR, ".game_session"), f"{time.time():.3f}")
                     ensure_username()  # no-op once saved; first run asks now, not at sign-in
                     set_low_priority(False)
+                    self.overlay_starts = 0  # a new game session gets a fresh try
+                    self._overlay_gave_up = False
                     self.ensure_overlay()
                     self.ensure_automation()
                     last_seq = clipboard_sequence()
