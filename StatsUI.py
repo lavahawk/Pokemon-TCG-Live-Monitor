@@ -984,7 +984,7 @@ class LimitlessDashboardManager(QObject):
         except Exception:
             pass
 
-    def _update_tournament_flag(self, in_tournament, opponent=None):
+    def _update_tournament_flag(self, in_tournament, opponent=None, screen_name=None):
         """Persist the current tournament-MATCH state for AIParseBattleLog.
 
         The flag is only written when an active match with a known opponent
@@ -997,7 +997,11 @@ class LimitlessDashboardManager(QObject):
         self.in_tournament = bool(in_tournament and opponent)
         try:
             if self.in_tournament:
+                # The battle log names them by their PTCGL screen name, which
+                # is often not their Limitless name (rounds 7 and 8 on
+                # 2026-11-22 went untagged for that).
                 payload = {"in_tournament": True, "opponent": opponent,
+                           "screen_name": (screen_name or "").strip(),
                            "updated_at": datetime.now().isoformat(timespec="seconds")}
                 with open(LIMITLESS_TOURNAMENT_FLAG_FILE, "w", encoding="utf-8") as handle:
                     json.dump(payload, handle)
@@ -2011,7 +2015,8 @@ class LimitlessDashboardManager(QObject):
         # AIParseBattleLog can match the battle-log opponent against it.
         # If the match chat is gone (no opponent), clear the tournament flag.
         if normalized.get("opponent"):
-            self._update_tournament_flag(True, opponent=normalized["opponent"])
+            self._update_tournament_flag(True, opponent=normalized["opponent"],
+                                         screen_name=normalized.get("screen_name"))
             # Pokémon TCG Live knows them by their screen name, not their
             # Limitless name.
             url = normalized.get("url") or self.chat_target_url
@@ -2023,13 +2028,27 @@ class LimitlessDashboardManager(QObject):
                 self._screen_name_wait = url
                 fallback = normalized["opponent"]
 
-                def later(url=url, fallback=fallback):
+                def later(url=url, fallback=fallback, tries=[0]):
                     state = self.last_chat_state or {}
-                    if state.get("url") == url and state.get("screen_name"):
-                        name = state["screen_name"]
-                    else:
-                        name = fallback
-                    self._on_opponent_known(name, url)
+                    if state.get("url") != url:
+                        return  # another match by now
+                    if state.get("screen_name"):
+                        self._on_opponent_known(state["screen_name"], url)
+                        return
+                    tries[0] += 1
+                    if tries[0] < 4:  # up to a minute for the screen name
+                        QTimer.singleShot(20000, later)
+                        return
+                    if re.search(r"\s", fallback):
+                        # PTCGL names have no spaces, so this Limitless name
+                        # can't be theirs in the game (round 8 on 2026-11-22
+                        # typed "Zack Guerrero-Welch"; the game knew them as
+                        # zackywelchy).
+                        QApplication.clipboard().setText(fallback)
+                        _limitless_log(f"No screen name on the match page for {fallback}; "
+                                       "not adding them as a friend (their Limitless name is on your clipboard).")
+                        return
+                    self._on_opponent_known(fallback, url)
                 QTimer.singleShot(20000, later)
         elif self.in_tournament:
             self._update_tournament_flag(False)
@@ -2346,15 +2365,20 @@ class LimitlessDashboardManager(QObject):
             if self._friend_prompt is None:
                 self._friend_prompt = FriendRequestPrompt()
             prompt = self._friend_prompt
-            try:
-                prompt.answered.disconnect()
-            except Exception:
-                pass
+            # Only the last question's handler. (A bare disconnect() with
+            # nothing connected printed a RuntimeWarning every round.)
+            old = getattr(prompt, "_answer_handler", None)
+            if old is not None:
+                try:
+                    prompt.answered.disconnect(old)
+                except (RuntimeError, TypeError):
+                    pass
 
             def answered(yes, reply=reply):
                 reply["yes"] = bool(yes)
                 reply["event"].set()
                 _limitless_log(f"Add friend {name}: {'yes' if yes else 'not now'}")
+            prompt._answer_handler = answered
             prompt.answered.connect(answered)
             prompt.ask(name, self.get_overlay())
         except Exception as exc:

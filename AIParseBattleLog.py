@@ -65,6 +65,7 @@ def load_tournament_state():
             return {
                 "in_tournament": True,
                 "opponent": str(payload.get("opponent") or "").strip(),
+                "screen_name": str(payload.get("screen_name") or "").strip(),
             }
     except Exception:
         pass
@@ -155,7 +156,10 @@ def is_tournament_battle(battlelog, username):
     log_opponent = parse_opponent_from_log(battlelog, username)
     if not log_opponent:
         return False
-    return normalize_name(log_opponent) == normalize_name(tournament_opponent)
+    # The log has their Pokémon TCG Live screen name; Limitless shows it on
+    # the match page next to their Limitless name, and either may match.
+    names = {normalize_name(n) for n in (tournament_opponent, state.get("screen_name")) if n}
+    return normalize_name(log_opponent) in names
 
 
 def prompt_string(title, prompt, *, secret=False):

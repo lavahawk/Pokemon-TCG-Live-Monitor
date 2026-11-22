@@ -258,6 +258,20 @@ def test_tournament_flag_needs_matching_opponent():
         os.remove(P.TOURNAMENT_FLAG_FILE)
 
 
+def test_regression_tournament_flag_matches_screen_name():
+    # Limitless name JackDaniel789, in the game Ptjd711: the log only has
+    # the screen name (rounds 7 and 8 on 2026-11-22 went untagged).
+    log = _log("me's Turn", "Ptjd711's Turn")
+    with open(P.TOURNAMENT_FLAG_FILE, "w", encoding="utf-8") as handle:
+        json.dump({"in_tournament": True, "opponent": "JackDaniel789", "screen_name": "Ptjd711"}, handle)
+    try:
+        assert P.is_tournament_battle(log, "me") is True
+        assert P.is_tournament_battle(_log("me's Turn", "JackDaniel789's Turn"), "me") is True
+        assert P.is_tournament_battle(_log("me's Turn", "Someone's Turn"), "me") is False
+    finally:
+        os.remove(P.TOURNAMENT_FLAG_FILE)
+
+
 # ── candidates / confidence helpers ────────────────────────────────────────
 def test_merge_candidates_dedupes_and_fills_probabilities():
     ranked = [("Dragapult ex", 0.7), ("Gengar ex", 0.2), ("Blaziken ex", 0.1)]
