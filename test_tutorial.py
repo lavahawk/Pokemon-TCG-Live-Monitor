@@ -37,6 +37,19 @@ def test_same_data_every_time():
     assert a.get_recent_battles_with_ids(limit=1000) == b.get_recent_battles_with_ids(limit=1000)
 
 
+def test_today_just_after_midnight():
+    now = datetime(2026, 11, 23, 0, 5, 0)
+    db = tutorial.build_demo_db(os.path.join(TMP, "m.db"), now=now)
+    conn = db._connect()
+    try:
+        wins, losses = conn.execute(
+            "SELECT SUM(result='Win'), SUM(result='Loss') FROM battles WHERE timestamp >= ?",
+            ("2026-11-23",)).fetchone()
+    finally:
+        conn.close()
+    assert (wins, losses) == (7, 3), (wins, losses)
+
+
 def test_steps_are_complete():
     for tab, _target, title, body in tutorial._steps():
         assert title and body and len(body) < 420, title

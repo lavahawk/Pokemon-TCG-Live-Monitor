@@ -118,10 +118,14 @@ def build_demo_db(path=DEMO_DB, now=None):
             when += timedelta(minutes=rng.randint(16, 26))
     # Today: 7-3, the last game a few minutes ago.
     today = list("WWLWWLWWLW")
-    when = now - timedelta(minutes=14 * len(today) + 6)
+    # Just after midnight there isn't room for 14-minute gaps, so the games
+    # are squeezed in after 00:00 to keep them on today's date.
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    gap = min(timedelta(minutes=14), (now - midnight) / (len(today) + 1))
+    when = now - gap * len(today)
     for mark in today:
         play(when, DEMO_DECK, "Win" if mark == "W" else "Loss")
-        when += timedelta(minutes=14)
+        when += gap
 
     conn = db._connect()
     try:
@@ -526,65 +530,58 @@ def _steps():
     settings_tab = StatsUI.SETTINGS_TAB
     return [
         (None, None, "How it works",
-         "Leave the app running while you play. When a battle ends, it saves the battle log from the "
-         "game, works out which deck each of you played, and adds the game to your stats. You don't "
-         "have to copy or paste anything.\n\nThe games in this tour are an example deck with made-up "
-         "results. They go away when the tour ends."),
+         "Keep the app open while you play. After each battle, it saves the game, works out both decks "
+         "and adds it to your stats. You don't need to copy or paste anything.\n\nThe games in this "
+         "tour are made up. They go away when the tour ends."),
         ("Stats", lambda w: w.stats_summary, "The summary",
-         "Your Elo now, your best Elo, your win rate, today's session and how your last games went."),
+         "Your Elo, your best Elo, your win rate, today's games and your last few results."),
         ("Stats", lambda w: _graph_card(w.elo_chart), "Elo over time",
-         "Every Elo change, green when it went up and red when it went down. Drag to zoom in on a "
-         "stretch and use the range buttons to change how far back it goes."),
+         "Green means your Elo went up. Red means it went down.\n\nDrag to zoom in. The buttons change "
+         "how far back it goes."),
         ("Stats", lambda w: _graph_card(w.winrate_chart), "Win rate",
-         "Your win rate over the last few games, as a running line. The menu picks which deck it "
-         "follows."),
+         "Your win rate over your recent games. Use the menu to pick a deck."),
         ("Stats", lambda w: w.deck_usage_widget, "Your decks",
-         "Each deck you've played, with its record. Click one to open its page on the Decks tab."),
+         "Every deck you've played and its record. Click one to see its page."),
         ("Stats", lambda w: w.recent_battles_widget, "Recent battles",
-         "Your latest games: your deck, theirs and the result. If a deck was read wrong, fix it in "
-         "Settings under Battle Database."),
+         "Your latest games and who won.\n\nIf a deck name is wrong, fix it in Settings under Battle "
+         "Database."),
         ("Decks", lambda w: w.deck_tabs, "A page per deck",
-         "How the deck does against each archetype, your last 10 games, and how sure the win rate "
-         "is for the number of games played. Pin a deck to keep it first. Ignore one to leave it "
-         "out of the HUD's daily record."),
+         "See how each deck does against every other deck, and your last 10 games with it.\n\nPin a "
+         "deck to keep it first. Ignore a deck to leave it out of the HUD's daily record."),
         ("Meta", lambda w: _tab_button(w, "Meta"), "Meta",
-         "What people are playing online, at in-person events and in Japan, with win rates and a "
-         "matchup table. Your own games can be mixed in."),
+         "What people are playing online, in person and in Japan, with win rates and matchups. You can "
+         "add your own games too."),
         ("In Person", lambda w: _tab_button(w, "In Person"), "In Person",
-         "Find events near you, follow your friends' results, and print a tournament decklist sheet "
-         "filled in from a deck you exported from the game."),
+         "Find events near you and see how your friends did. You can also print a tournament decklist "
+         "sheet from a deck you exported."),
         ("Limitless Dashboard", lambda w: w.limitless_dashboard_view
          if hasattr(w, "limitless_dashboard_view") else _tab_button(w, "Limitless Dashboard"),
          "Limitless online tournaments",
-         "Sign in to Limitless here once and it stays signed in. While you're in an online "
-         "tournament, the app follows your match page for you."),
+         "Sign in to Limitless here once and it stays signed in.\n\nDuring an online tournament, the "
+         "app watches your match page for you."),
         ("Limitless Dashboard", lambda w: w.limitless_dashboard_autocheck_btn, "Auto check-in",
-         "When it's on, the app checks you in when the tournament opens check-in, and plays a sound "
-         "so you know."),
+         "Turn this on and the app checks you in when check-in opens. It plays a sound when it does."),
         ("Limitless Dashboard", lambda w: w.limitless_auto_friend_btn, "Friend requests",
-         "At the start of each round the app can add your opponent as a friend in Pokémon TCG Live, "
-         "so you can invite them to the match. Off, it asks you each round. On, it just sends it."),
+         "Each round, the app can add your opponent as a friend in the game, so you can invite "
+         "them.\n\nOff: it asks you first. On: it just sends it."),
         ("Limitless Dashboard", lambda w: getattr(w, "limitless_opp_deck_btn", None), "Chat and decklists",
-         "Match chat shows over the game, just above the HUD. Rest the mouse on it to reply. When "
-         "Limitless shows your opponent's list, it opens in its own window, and this button brings it "
-         "back."),
+         "Match chat shows over the game, above the HUD. Point at it to reply.\n\nWhen Limitless shows "
+         "your opponent's deck, it opens in its own window. This button opens it again."),
         ("TrainerHill", lambda w: _tab_button(w, "TrainerHill"), "TrainerHill",
-         "TrainerHill's meta and matchup tools, inside the app."),
+         "TrainerHill's meta and matchup tools, right in the app."),
         ("Japan Data", lambda w: _tab_button(w, "Japan Data"), "Japan Data",
-         "Top results from Japan's City Leagues. Japan gets new sets first, so these show what the "
-         "format may look like after the next release."),
+         "Top decks from Japan. Japan gets new cards first, so this shows what may be coming next."),
         ("PokeData", lambda w: _tab_button(w, "PokeData"), "PokeData",
-         "Event results, standings, Championship Points, a hand simulator and a decklist compare "
-         "tool."),
+         "Event results, standings, Championship Points, a hand simulator and a decklist compare tool."),
         (settings_tab, lambda w: getattr(w, "export_card", None), "Auto-export",
-         "This is what saves each battle for you. At the end of a battle it clicks BATTLE LOG and "
-         "export in the game. Leave it on unless you'd rather export by hand."),
+         "This is what saves your battles. When a battle ends, it exports the battle log from the game "
+         "for you.\n\nLeave it on unless you want to do it yourself."),
         (settings_tab, lambda w: getattr(w, "parser_card", None), "Deck detection",
-         "How the app tells which decks were played. Automatic uses AI when it can. You can add "
-         "your own OpenAI key or use a local model. With the AI off, the app guesses from the cards "
-         "it saw and asks you to confirm the opponent's deck after each battle."),
+         "How the app knows which decks were played. Automatic uses AI when it can. You can also use "
+         "your own OpenAI key or a local model.\n\nWith AI off, the app guesses from the cards and "
+         "asks you to check the opponent's deck after each battle."),
         (None, None, "You're set",
-         "The example deck is gone. Your stats start with your next battle.\n\nTo see this tour "
+         "The example games are gone. Your stats start with your next battle.\n\nTo see this tour "
          "again, go to Settings, then Startup."),
     ]
 
@@ -691,9 +688,9 @@ class Tour(QObject):
         total = len(self.steps) + 1
         self.hud_card.card.set_step(
             1, total, "Your HUD",
-            "This bar stays on the corner of the game while you play. Elo is your ladder "
-            "rating, Max is the best you've reached, and the last number is today's wins and "
-            "losses.\n\nClick the ▲ arrow to open the app.",
+            "This bar sits on the corner of the game."
+            "\n\nElo is your rating, Max is your best, and the last number is today's wins and losses."
+            "\n\nClick the ▲ arrow to open the app.",
             back=False, next_text="Open it for me")
         self._place_hud_step()
         self.ring.show()
