@@ -5576,6 +5576,12 @@ class StatsWindow(QWidget):
                 pass
         QTimer.singleShot(120, focus)
 
+    def start_tutorial(self):
+        """Settings -> Startup -> Show the tutorial again (and the first run
+        of the dashboard on its own)."""
+        import tutorial
+        tutorial.start(overlay=self.parent_overlay, window=self, start_at_hud=False)
+
     def minimize_to_overlay(self):
         """Minimize stats window back to mini overlay"""
         self.is_minimized = True
@@ -8877,6 +8883,7 @@ class StatsWindow(QWidget):
         transfer_card = self._create_data_transfer_card()
 
         export_card, capture_layout = self._settings_card("Auto-export")
+        self.export_card = export_card  # the tutorial points at it
         ocr_card, ocr_layout = self._settings_card("OCR Bounding Box Debug")
 
         # Tools (troubleshooting)
@@ -9161,6 +9168,13 @@ class StatsWindow(QWidget):
         startup_row.addWidget(add_autorun_btn)
         startup_row.addWidget(remove_autorun_btn)
         autorun_layout.addLayout(startup_row)
+
+        tutorial_btn = QPushButton("Show the tutorial again")
+        tutorial_btn.setObjectName("settingsBtn")
+        tutorial_btn.setFixedHeight(34)
+        tutorial_btn.setToolTip("A short tour of the app, with an example deck that's removed afterwards")
+        tutorial_btn.clicked.connect(self.start_tutorial)
+        autorun_layout.addWidget(tutorial_btn)
         
         autorun_card.layout().addLayout(autorun_layout)
         
@@ -11847,6 +11861,7 @@ class StatsWindow(QWidget):
         opp_deck_btn.setToolTip("Show this round's opponent decklist again (it opens by itself when Limitless shows it).")
         opp_deck_btn.clicked.connect(self._show_opponent_decklist)
         action_row.addWidget(opp_deck_btn)
+        self.limitless_opp_deck_btn = opp_deck_btn  # the tutorial points at it
 
         action_row.addStretch()
 
@@ -15472,6 +15487,13 @@ def main():
     note = ui_restart.take()  # relaunched by Restart app: back on the same tab
     if note and note.get("tab") and window._main_tab_index(note["tab"]) >= 0:
         window.tab_widget.setCurrentIndex(window._main_tab_index(note["tab"]))
+    try:
+        import tutorial
+        tutorial.cleanup_stale()
+        if not note and tutorial.should_offer(window.db):
+            QTimer.singleShot(1200, window.start_tutorial)  # first run, opened from the Start menu
+    except Exception as exc:
+        print(f"Tutorial: {exc}")
 
     sys.exit(app.exec())
 

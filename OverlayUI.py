@@ -1673,6 +1673,10 @@ class MinimalOverlay(QWidget):
                 )
                 # Popups anchored to the mini GUI may only be placed from now on.
                 self._overlay_placed = True
+                if not getattr(self, "_tutorial_checked", False):
+                    self._tutorial_checked = True  # once per run; not after a restart
+                    if not getattr(self, "_restart_note", None):
+                        QTimer.singleShot(2500, self._maybe_start_tutorial)
                 if getattr(self, "_restart_note", None):
                     note, self._restart_note = self._restart_note, None
                     QTimer.singleShot(300, lambda: self._reopen_dashboard(note.get("tab")))
@@ -2186,6 +2190,16 @@ class MinimalOverlay(QWidget):
             window.showMinimized()
         else:
             manager.show_opponent_deck(activate=True)
+
+    def _maybe_start_tutorial(self):
+        """First run: the tour, starting at this HUD's arrow (tutorial.py)."""
+        try:
+            import tutorial
+            tutorial.cleanup_stale()
+            if self.isVisible() and tutorial.should_offer(self.db):
+                tutorial.start(overlay=self)
+        except Exception as e:
+            _dbg(f"tutorial error: {e}")
 
     def toggle_stats_dashboard(self):
         """Toggle stats dashboard open/close with smooth arrow animation"""
