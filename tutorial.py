@@ -483,6 +483,26 @@ class HudCardWindow(QWidget):
         self.move(x, y)
 
 
+def _to_front(*windows):
+    """Topmost and above the HUD, which re-asserts HWND_TOPMOST every second."""
+    try:
+        import win32con
+        import win32gui
+    except ImportError:
+        for w in windows:
+            if w is not None:
+                w.raise_()
+        return
+    for w in windows:
+        if w is None or not w.isVisible():
+            continue
+        try:
+            win32gui.SetWindowPos(int(w.winId()), win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+        except Exception:
+            w.raise_()
+
+
 # ───────────────────────────── the steps ─────────────────────────────
 def _graph_card(widget):
     w = widget
@@ -587,6 +607,7 @@ class Tour(QObject):
         self._real_overlay_db = None
         self._real_window_db = None
         self._start_tab = None
+        self._added_icons = {}
         self._timer = QTimer(self)
         self._timer.setInterval(250)
         self._timer.timeout.connect(self._watch)
@@ -631,6 +652,9 @@ class Tour(QObject):
         if win is not None and self._real_window_db is not None:
             try:
                 win.db = self._real_window_db
+                for deck, icons in self._added_icons.items():
+                    if win.deck_icon_overrides.get(deck) == icons:
+                        win.deck_icon_overrides.pop(deck, None)
                 win.load_stats()
                 win._refresh_deck_dashboards(win.deck_analyses)
                 index = win._main_tab_index("Stats")
@@ -691,6 +715,7 @@ class Tour(QObject):
             self.hud_card.place_above(hud)
             if not self.hud_card.isVisible():
                 self.hud_card.show()
+        _to_front(self.hud_card, self.ring)  # the ring last: over the HUD and its buddy
 
     def _leave_hud_step(self):
         for w in (self.ring, self.hud_card):
@@ -698,6 +723,21 @@ class Tour(QObject):
                 w.hide()
 
     # ── dashboard ──
+    DEMO_ICONS = {DEMO_DECK: ["gardevoir"], DEMO_DECK_2: ["dragapult"]}
+
+    def _use_demo(self, win):
+        """The dashboard on the example data. The example decks get their
+        Pokémon icons in memory only (Gardevoir may not be in today's meta);
+        the user's own icon choices file isn't touched."""
+        self._real_window_db = win.db
+        win.db = self.demo
+        for deck, icons in self.DEMO_ICONS.items():
+            if not win.deck_icon_overrides.get(deck):
+                win.deck_icon_overrides[deck] = list(icons)
+                self._added_icons[deck] = list(icons)
+        win.load_stats()
+        win._refresh_deck_dashboards(win.deck_analyses)
+
     def _open_window(self):
         ov = self.overlay
         if self.window is None and ov is not None:
@@ -706,10 +746,7 @@ class Tour(QObject):
         if win is None:
             return None
         if self.demo is not None and self._real_window_db is None:
-            self._real_window_db = win.db
-            win.db = self.demo
-            win.load_stats()
-            win._refresh_deck_dashboards(win.deck_analyses)
+            self._use_demo(win)
         if not win.isVisible():
             if ov is not None:
                 ov.animate_arrow("▼")
@@ -812,10 +849,7 @@ class Tour(QObject):
             win = self.window or (self.overlay.stats_window if self.overlay is not None else None)
             if win is not None and self.demo is not None and self._real_window_db is None:
                 self.window = win  # example data in before the arrow opens it
-                self._real_window_db = win.db
-                win.db = self.demo
-                win.load_stats()
-                win._refresh_deck_dashboards(win.deck_analyses)
+                self._use_demo(win)
             if win is not None and win.isVisible():
                 self.window = win
                 self.go(0)  # they clicked the arrow

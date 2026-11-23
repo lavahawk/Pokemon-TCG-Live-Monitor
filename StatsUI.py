@@ -5580,7 +5580,13 @@ class StatsWindow(QWidget):
         """Settings -> Startup -> Show the tutorial again (and the first run
         of the dashboard on its own)."""
         import tutorial
-        tutorial.start(overlay=self.parent_overlay, window=self, start_at_hud=False)
+        overlay = self.parent_overlay
+        if overlay is not None and overlay.isVisible():
+            # Over the game: fold the dashboard away and start at the HUD's arrow.
+            self.minimize_to_overlay()
+            tutorial.start(overlay=overlay, window=self, start_at_hud=True)
+        else:
+            tutorial.start(overlay=overlay, window=self, start_at_hud=False)
 
     def minimize_to_overlay(self):
         """Minimize stats window back to mini overlay"""
