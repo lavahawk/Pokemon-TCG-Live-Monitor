@@ -519,7 +519,15 @@ def _dash_find_all(node, *, type_name=None, class_contains=None):
     return matches
 
 
+_last_limitless_sound = [0.0]
+LIMITLESS_SOUND_GAP_S = 20   # a new round and its check-in share one ding
+
+
 def _play_limitless_notification_sound():
+    now = time.time()
+    if now - _last_limitless_sound[0] < LIMITLESS_SOUND_GAP_S:
+        return
+    _last_limitless_sound[0] = now
     try:
         if PYGAME_AVAILABLE and os.path.exists(LIMITLESS_SOUND_FILE):
             if not pygame.mixer.get_init():
@@ -570,6 +578,162 @@ def _is_limitless_url(url):
     except Exception:
         return False
     return _is_safe_web_url(url) and (host == "limitlesstcg.com" or host.endswith(".limitlesstcg.com"))
+
+
+class MatchReadyToast(QWidget):
+    """A small notice at the top of the game: the next round is up, and
+    whether Auto Check-In checked you in. Never takes the focus from the
+    game, fades out by itself, click to dismiss."""
+
+    HOLD_MS = 9000
+
+    def __init__(self):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+                         | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(54)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(36, 8, 18, 8)   # the status dot is painted at x 16-26
+        row.setSpacing(12)
+        text = QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(1)
+        self.title = QLabel("")
+        self.title.setTextFormat(Qt.TextFormat.PlainText)
+        self.title.setStyleSheet("color: rgba(240,244,250,0.97); font-size: 13px; font-weight: 700; background: transparent;")
+        self.sub = QLabel("")
+        self.sub.setTextFormat(Qt.TextFormat.PlainText)
+        self.sub.setStyleSheet("color: rgba(168,182,204,0.92); font-size: 11px; background: transparent;")
+        text.addWidget(self.title)
+        text.addWidget(self.sub)
+        row.addLayout(text)
+        self.accent = QColor(74, 159, 216)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self.fade_out)
+        self._front_timer = QTimer(self)
+        self._front_timer.setInterval(500)   # the HUD re-asserts topmost every second
+        self._front_timer.timeout.connect(self._to_front)
+        self._anim = None
+        # Check-in: the card flashes yellow a few times, then stays yellow-edged.
+        self._flash_left = 0
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setInterval(40)
+        self._flash_timer.timeout.connect(self._flash_tick)
+
+    FLASH_STEPS = 36   # 3 pulses of ~0.5 s
+
+    def _flash_tick(self):
+        self._flash_left -= 1
+        if self._flash_left <= 0:
+            self._flash_left = 0
+            self._flash_timer.stop()
+        self.update()
+
+    def _flash_level(self):
+        import math
+        if not self._flash_left:
+            return 0.0
+        done = self.FLASH_STEPS - self._flash_left
+        return abs(math.sin(done / 12.0 * math.pi))   # 0 -> 1 -> 0, three times
+
+    def notify(self, title, sub, done=False):
+        """done: checked in (flashes yellow); otherwise a round waiting (blue)."""
+        self.title.setText(title)
+        self.sub.setText(sub)
+        self.accent = QColor(249, 168, 37) if done else QColor(74, 159, 216)
+        if done:
+            self._flash_left = self.FLASH_STEPS
+            self._flash_timer.start()
+        self.adjustSize()
+        self.setFixedWidth(max(260, min(420, self.sizeHint().width())))
+        self._place()
+        if not self.isVisible():
+            self.setWindowOpacity(0.0)
+            self.show()
+            self._fade(0.0, 1.0, 220)
+        elif self.windowOpacity() < 1.0:
+            self._fade(self.windowOpacity(), 1.0, 150)
+        self.update()
+        self._to_front()
+        self._front_timer.start()
+        self._hide_timer.start(self.HOLD_MS)
+
+    def _place(self):
+        try:
+            import game_window
+            rect = game_window.game_rect()
+        except Exception:
+            rect = None
+        if rect:
+            # Physical pixels from win32; Qt positions in logical ones.
+            screen = QApplication.screenAt(QPoint(rect["left"] + rect["width"] // 2, rect["top"] + 40)) \
+                or QApplication.primaryScreen()
+            ratio = screen.devicePixelRatio() if screen else 1.0
+            cx = int((rect["left"] + rect["width"] / 2) / ratio)
+            top = int((rect["top"] + rect["height"] * 0.06) / ratio)
+            self.move(cx - self.width() // 2, top)
+            return
+        screen = QApplication.primaryScreen()
+        if screen:
+            area = screen.availableGeometry()
+            self.move(area.center().x() - self.width() // 2, area.top() + 40)
+
+    def _to_front(self):
+        try:
+            import win32con
+            import win32gui
+            win32gui.SetWindowPos(int(self.winId()), win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+        except Exception:
+            pass
+
+    def _fade(self, start, end, ms, then=None):
+        from PySide6.QtCore import QPropertyAnimation
+        if self._anim is not None:
+            self._anim.stop()
+        self._anim = QPropertyAnimation(self, b"windowOpacity", self)
+        self._anim.setDuration(ms)
+        self._anim.setStartValue(float(start))
+        self._anim.setEndValue(float(end))
+        if then:
+            self._anim.finished.connect(then)
+        self._anim.start()
+
+    def fade_out(self):
+        self._hide_timer.stop()
+        self._fade(self.windowOpacity(), 0.0, 400, self._gone)
+
+    def _gone(self):
+        if self.windowOpacity() <= 0.01:
+            self._front_timer.stop()
+            self.hide()
+
+    def mousePressEvent(self, event):
+        self.fade_out()
+
+    def paintEvent(self, event):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QPainterPath
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
+        p.fillPath(path, theme.qcolor(13, 20, 31, 245))
+        flash = self._flash_level()
+        if flash:
+            glow = QColor(249, 168, 37, int(150 * flash))
+            p.fillPath(path, glow)
+        border = QColor(self.accent)
+        border.setAlpha(150 + int(105 * flash))
+        p.setPen(QPen(border, 1.5 if flash else 1))
+        p.drawPath(path)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(self.accent)
+        p.drawEllipse(QPointF(16 + 5, self.height() / 2), 5, 5)
+        p.end()
 
 
 class LimitlessCheckInAlert(QWidget):
@@ -900,6 +1064,14 @@ class LimitlessDashboardManager(QObject):
         self.chat_target_url = ""
         self.overlay_ref = None
         self.alert = LimitlessCheckInAlert()
+        self.match_toast = MatchReadyToast()
+        self._toast_match = None     # (url, title) the toast is showing
+        self._enrolled_seen = 0.0    # last scan with a match or check-in
+        try:  # a restart between rounds keeps the fast poll (last match notice)
+            self._enrolled_seen = os.path.getmtime(os.path.join(BASE_DIR, ".last_match_notice"))
+        except OSError:
+            pass
+        self._background_loaded_at = 0.0
         self.alert.check_in_requested.connect(self.handle_checkin_requested)
         self.alert.dismissed.connect(self._handle_alert_dismissed)
 
@@ -973,16 +1145,58 @@ class LimitlessDashboardManager(QObject):
         except Exception:
             pass
 
+    # Keep the fast poll this long after the last match or check-in: between
+    # rounds the dashboard can show neither, and the next pairing has to be
+    # seen within seconds (a missed match check-in is a loss).
+    TOURNAMENT_GRACE_S = 75 * 60
+
     def _set_enrolled(self, enrolled):
-        """Fast-poll the dashboard while a tournament match/check-in is live."""
+        """Fast-poll the dashboard while a tournament is on (a match or
+        check-in now, or one in the last TOURNAMENT_GRACE_S)."""
         try:
+            now = time.time()
             if enrolled:
+                self._enrolled_seen = now
+            if enrolled or now - self._enrolled_seen < self.TOURNAMENT_GRACE_S:
                 if not self.tournament_poll_timer.isActive():
                     self.tournament_poll_timer.start()
             else:
                 self.tournament_poll_timer.stop()
         except Exception:
             pass
+
+    # ── the next-round notice ──
+    def _notify_match(self, url, title, sub, checked_in=False):
+        """One notice per round (updated, not repeated, when the check-in
+        lands) and one ding, whether or not the Limitless page is open."""
+        try:
+            if checked_in:
+                _play_limitless_notification_sound()
+                self.match_toast.notify(title, sub, done=True)
+                self._toast_match = (url, "checked")
+                return
+            if self._toast_match and self._toast_match[0] == url:
+                return
+            # Remembered across restarts: reopening the HUD mid-match reads
+            # the same match page again and must not announce it twice.
+            notice_file = os.path.join(BASE_DIR, ".last_match_notice")
+            try:
+                with open(notice_file, "r", encoding="utf-8") as handle:
+                    if handle.read().strip() == url:
+                        self._toast_match = (url, "up")
+                        return
+            except OSError:
+                pass
+            try:
+                with open(notice_file, "w", encoding="utf-8") as handle:
+                    handle.write(url or "")
+            except OSError:
+                pass
+            self._toast_match = (url, "up")
+            _play_limitless_notification_sound()
+            self.match_toast.notify(title, sub)
+        except Exception as exc:
+            _limitless_log(f"Match notice failed: {exc}")
 
     def _update_tournament_flag(self, in_tournament, opponent=None, screen_name=None):
         """Persist the current tournament-MATCH state for AIParseBattleLog.
@@ -1116,6 +1330,7 @@ class LimitlessDashboardManager(QObject):
         self._update_view_status(url_text)
 
     def _on_background_load_finished(self, ok):
+        self._background_loaded_at = time.time()
         current_url = self.background_page.url().toString() if self.background_page else ""
         if not ok and not current_url:
             self.last_status = "Limitless dashboard failed to load."
@@ -1239,6 +1454,13 @@ class LimitlessDashboardManager(QObject):
         url_text = self.background_page.url().toString()
         if not url_text:
             self.ensure_background_loaded()
+            return
+        if (self._background_loaded_at and time.time() - self._background_loaded_at > 180
+                and not self.tournament_poll_timer.isActive()):
+            # The hidden dashboard isn't on screen to refresh itself: reload
+            # it now and then so a new pairing or check-in shows up even when
+            # the Limitless tab was never opened.
+            self.background_page.load(QUrl(LIMITLESS_DASHBOARD_URL))
             return
         self.background_page.runJavaScript(self._checkin_scan_js(), self._handle_checkin_scan_result)
 
@@ -1999,6 +2221,9 @@ class LimitlessDashboardManager(QObject):
             in_game = normalized.get("screen_name")
             in_game = f", in game {in_game}" if in_game and in_game.lower() != normalized["opponent"].lower() else ""
             _limitless_log(f"Match: {normalized.get('subtitle') or 'round ?'} vs {normalized['opponent']}{in_game} ({normalized.get('url')})")
+            if not normalized["match_done"]:
+                self._notify_match(normalized.get("url"), f"{normalized.get('subtitle') or 'Next round'} is up",
+                                   f"vs {normalized['opponent']}")
         if normalized["match_done"] and not prev.get("match_done"):
             _limitless_log(f"Match over: {normalized.get('subtitle') or 'round ?'} ({normalized.get('url')})")
         old = {(m["sender"], m["text"]) for m in prev.get("messages") or []}
@@ -2198,10 +2423,20 @@ class LimitlessDashboardManager(QObject):
             page = None
         if page is not None:
             try:
-                page.runJavaScript(click_js, lambda clicked: clicked and QTimer.singleShot(
-                    2000, self._reload_after_checkin))
+                page.runJavaScript(click_js, lambda clicked, url=url_text: self._match_checkin_clicked(url, clicked))
             except Exception:
                 pass
+
+    def _match_checkin_clicked(self, url, clicked):
+        if not clicked:
+            return
+        _limitless_log("Auto Check-In clicked Check in on the match page.")
+        state = self.last_chat_state or {}
+        same = state.get("url") == url
+        rnd = (state.get("subtitle") if same else "") or "the round"
+        opp = state.get("opponent") if same else ""
+        self._notify_match(url, f"Checked in for {rnd}", f"vs {opp}" if opp else "Auto Check-In", checked_in=True)
+        QTimer.singleShot(2000, self._reload_after_checkin)
 
     def _reload_after_checkin(self):
         """After an auto check-in click: reload the match page and the
@@ -2483,6 +2718,10 @@ class LimitlessDashboardManager(QObject):
         if clicked:
             self.last_status = "Auto Check-In clicked the Limitless dashboard."
             self.status_changed.emit(self.last_status)
+            self._set_enrolled(True)
+            name = (context or "").split(" Check")[0].strip()[:60] or "Limitless"
+            self._notify_match("tournament:" + (context or ""), "Checked in to the tournament", name,
+                               checked_in=True)
             self.delayed_poll_timer.start(3500)
             QTimer.singleShot(2000, self._reload_after_checkin)
             return
@@ -4835,7 +5074,7 @@ class OpponentDeckWindow(GlassPanel):
         opponent = info.get("opponent") or "Opponent"
         rnd = info.get("round")
         self.setWindowTitle(f"{opponent}'s deck")
-        self.title_label.setText((f"ROUND {rnd} · " if rnd else "") + "OPPONENT DECKLIST")
+        self.title_label.setText(f"ROUND {rnd}" if rnd else "OPPONENT DECKLIST")
         new_deck = info.get("url") != self.key or (info.get("text") or "") != self.deck_text
         self.key = info.get("url")
         self.deck_text = info.get("text") or ""
@@ -4844,8 +5083,7 @@ class OpponentDeckWindow(GlassPanel):
         self.images = {}
         self.copy_btn.setVisible(bool(self.cards))
         if self.cards:
-            total = sum(c["qty"] for c in self.cards)
-            self.sub.setText(f"{total} cards · {len(self.cards)} different")
+            self.sub.setText("")  # the cards speak for themselves; no count line
             self.picture.setToolTip("")
             self._fetch_images()
         elif info.get("image_url"):
@@ -4921,7 +5159,8 @@ class OpponentDeckWindow(GlassPanel):
             rects = []
             pixmap = StatsWindow._render_deck_picture(StatsWindow, self.entry, self.cards, self.images, rects,
                                                       cols=self._cols(), res=self.RES,
-                                                      surface=getattr(self, "_surface", 100) / 100)
+                                                      surface=getattr(self, "_surface", 100) / 100,
+                                                      count_line=False, panel=False)
             self.state["rects"] = rects
             self.state["mode"] = "prints"
         else:
@@ -7702,17 +7941,23 @@ class StatsWindow(QWidget):
         label.setCursor(Qt.CursorShape.PointingHandCursor)
         panel._hide_card_zoom = hide_zoom
 
-    def _render_deck_picture(self, entry, cards, images, rects_out=None, cols=None, res=1.0, surface=1.0):
+    def _render_deck_picture(self, entry, cards, images, rects_out=None, cols=None, res=1.0, surface=1.0,
+                             count_line=True, panel=True):
         """Paint the list: title, then a grid per section, copy counts as badges.
         rects_out (a list) receives (QRectF in picture pixels, card) per card.
         cols: cards per row (default CARD_COLS); res: the picture is drawn
         that many times bigger, for a sharp preview on scaled displays.
         surface: how solid the panel behind the cards is (the see-through
-        slider; the cards themselves are always solid)."""
+        slider; the cards themselves are always solid). count_line=False
+        leaves out the "60 cards" line under the title. panel=False: only
+        the cards on a transparent picture (no panel, no title), for a window
+        that already has its own surface."""
         from PySide6.QtGui import QFont, QLinearGradient, QPainterPath
         w, h, gap = self.CARD_W, self.CARD_H, self.CARD_GAP
         cols = max(1, int(cols or self.CARD_COLS))
-        margin, head_h, section_h = 22, 54, 30
+        margin, head_h, section_h = 22, (54 if count_line else 36), 30
+        if not panel:
+            margin, head_h = 4, 0
         sections = []
         for card in cards:
             if not sections or sections[-1][0] != card["section"]:
@@ -7730,27 +7975,29 @@ class StatsWindow(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         p.scale(res, res)
-        bg = QLinearGradient(0, 0, 0, height)
-        panel_alpha = int(255 * max(0.0, min(1.0, surface)))
-        bg.setColorAt(0, theme.qcolor(18, 23, 33, panel_alpha))
-        bg.setColorAt(1, theme.qcolor(11, 14, 20, panel_alpha))
-        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
-        p.setBrush(bg)
-        p.drawRoundedRect(QRectF(0.5, 0.5, width - 1, height - 1), 14, 14)
+        if panel:
+            bg = QLinearGradient(0, 0, 0, height)
+            panel_alpha = int(255 * max(0.0, min(1.0, surface)))
+            bg.setColorAt(0, theme.qcolor(18, 23, 33, panel_alpha))
+            bg.setColorAt(1, theme.qcolor(11, 14, 20, panel_alpha))
+            p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+            p.setBrush(bg)
+            p.drawRoundedRect(QRectF(0.5, 0.5, width - 1, height - 1), 14, 14)
 
-        title = QFont(theme.family("ui"), 18)
-        title.setBold(True)
-        p.setFont(title)
-        p.setPen(QColor(240, 244, 250))
-        p.drawText(QRectF(margin, margin - 4, width - 2 * margin, 30), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   entry.get("name") or "Decklist")
-        small = QFont(theme.family("ui"), 9)
-        p.setFont(small)
-        p.setPen(QColor(150, 162, 180))
-        total = sum(c["qty"] for c in cards)
-        stamp = (entry.get("captured_at") or "")[:10]
-        p.drawText(QRectF(margin, margin + 24, width - 2 * margin, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   f"{total} cards" + (f"  ·  exported {stamp}" if stamp else ""))
+            title = QFont(theme.family("ui"), 18)
+            title.setBold(True)
+            p.setFont(title)
+            p.setPen(QColor(240, 244, 250))
+            p.drawText(QRectF(margin, margin - 4, width - 2 * margin, 30), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       entry.get("name") or "Decklist")
+            if count_line:
+                small = QFont(theme.family("ui"), 9)
+                p.setFont(small)
+                p.setPen(QColor(150, 162, 180))
+                total = sum(c["qty"] for c in cards)
+                stamp = (entry.get("captured_at") or "")[:10]
+                p.drawText(QRectF(margin, margin + 24, width - 2 * margin, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                           f"{total} cards" + (f"  ·  exported {stamp}" if stamp else ""))
 
         y = margin + head_h
         section_font = QFont(theme.family("ui"), 9)

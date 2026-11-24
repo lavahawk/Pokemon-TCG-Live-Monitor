@@ -169,3 +169,4 @@ DevVault/
 
 # Shared-deck import asking the overlay to hide the dashboard (ptcgl_import.py)
 .minimize_dashboard
+.last_match_notice
