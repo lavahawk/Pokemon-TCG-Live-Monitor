@@ -14,7 +14,8 @@ import updater as U
 
 TMP = tempfile.mkdtemp(prefix="updater_test_")
 atexit.register(shutil.rmtree, TMP, ignore_errors=True)
-U.tempfile.tempdir = TMP  # downloads land here
+U.tempfile.tempdir = TMP
+U.UPDATE_BASE = TMP  # downloads land here
 
 PAYLOAD = b"MZ fake installer " * 1000
 SHA = hashlib.sha256(PAYLOAD).hexdigest()

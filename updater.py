@@ -5,11 +5,12 @@ Update check: is there a newer release on GitHub, and installing it.
                      the Setup.exe (+ .sha256) assets
   update_available() latest_release() when it's newer than this copy and not
                      skipped by the user, else None
-  download()         the installer to %TEMP%, SHA-256 checked against the
-                     release's .sha256 file
-  launch_installer() runs it silently over this install (/VERYSILENT); the
-                     installer stops the running app, keeps battles and
-                     settings, and starts the monitor again (/RELAUNCH=1)
+  download()         the installer to update_dir() (%LOCALAPPDATA%), SHA-256
+                     checked against the release's .sha256 file
+  launch_installer() runs it over this install without questions (/SILENT:
+                     its progress window shows); the installer stops the
+                     running app, keeps battles and settings, and starts the
+                     monitor again (/RELAUNCH=1)
 
 Only an installed copy (runtime\\pythonw.exe next to the app, no .git folder)
 installs itself; a dev checkout is pointed at the release page instead.
@@ -32,6 +33,15 @@ LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 INSTALLER_NAME = re.compile(r"Setup\.exe$", re.IGNORECASE)
 FREE_NAME = re.compile(r"-Free-Setup\.exe$", re.IGNORECASE)
+UPDATE_BASE = None   # tests point this elsewhere
+
+
+def update_dir():
+    """Where updates are downloaded: the user's own app-data folder, not
+    %TEMP% (an EXE run from Temp by a script is a common antivirus trigger).
+    %TEMP% only when LOCALAPPDATA isn't set."""
+    base = UPDATE_BASE or os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+    return os.path.join(base, "PTCGLMonitorUpdate")
 
 
 def parse_version(text):
@@ -123,13 +133,13 @@ def _expected_sha256(url, opener=None):
 
 
 def download(release, progress=None, cancelled=None, opener=None):
-    """Download the installer to %TEMP%\\PTCGLMonitorUpdate\\; progress(done, total).
+    """Download the installer to update_dir(); progress(done, total).
     Returns the file path. Raises on failure, a checksum mismatch or cancel."""
     from urllib.request import Request, urlopen
     installer = (release or {}).get("installer")
     if not installer or not installer.get("url"):
         raise RuntimeError("This release has no installer to download.")
-    folder = os.path.join(tempfile.gettempdir(), "PTCGLMonitorUpdate")
+    folder = update_dir()
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, os.path.basename(installer["name"]))
     if not release.get("sha256_url"):
@@ -161,7 +171,9 @@ def download(release, progress=None, cancelled=None, opener=None):
 
 
 def launch_installer(path, base_dir=BASE_DIR):
-    """Start the installer silently, detached from this process. It stops
+    """Start the installer, detached from this process, with its progress
+    window showing (/SILENT, not /VERYSILENT: an invisible installer started
+    by a script looks like malware to antivirus heuristics). It stops
     the running app itself, installs into the same folder (UsePreviousAppDir)
     and starts the monitor again. The installer only replaces program files;
     battles, settings, keys and logs are left alone - and are copied to
@@ -173,8 +185,8 @@ def launch_installer(path, base_dir=BASE_DIR):
         pass  # a failed safety copy must not block the update
     # Log outside the app folder: the installer stops processes whose command
     # line mentions the app folder.
-    log = os.path.join(tempfile.gettempdir(), "PTCGLMonitorUpdate", "install.log")
-    args = [path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1", f"/LOG={log}"]
+    log = os.path.join(update_dir(), "install.log")
+    args = [path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1", f"/LOG={log}"]
     flags = 0
     if sys.platform == "win32":
         flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)

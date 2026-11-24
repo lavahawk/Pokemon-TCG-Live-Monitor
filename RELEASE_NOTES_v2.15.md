@@ -1,7 +1,10 @@
-# Pokemon TCG Live Monitor v2.15.9
+# Pokemon TCG Live Monitor v2.15.10
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.9-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.10-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.10
+- **Fewer antivirus false alarms.** Updates no longer run the installer invisibly from the Temp folder: the download goes to the app's own folder in AppData and the installer shows its progress window while it updates. The installer stops the running app without starting PowerShell, and 39 unused helper programs that came with Python's packages (pip.exe and the like) are no longer installed. Everything works as before.
 
 ## What's new in 2.15.9
 - **Auto Screenshot of end screens.** After each Limitless tournament game, the app saves a picture of the end screen (the one with the Battle Log button) before it exports the log, as proof of the result. The pictures go to **Pictures \ TCG Live Monitor \ End screens**, named by date and opponent. It's on by default; turn it off with **Auto Screenshot** on the Limitless tab, and the folder button next to it opens the pictures. It needs the battle log auto-export on.

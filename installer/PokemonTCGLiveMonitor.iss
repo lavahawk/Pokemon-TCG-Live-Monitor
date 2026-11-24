@@ -126,7 +126,7 @@ Root: HKCU; Subkey: "Software\Classes\ptcglmonitor\shell\open\command"; ValueTyp
 [Run]
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\TCGLiveMonitor.py"" --headless"; WorkingDir: "{app}"; Description: "Start the monitor now"; Flags: postinstall nowait skipifsilent
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\StatsUI.py"""; WorkingDir: "{app}"; Description: "Open the Stats Dashboard"; Flags: postinstall nowait skipifsilent unchecked
-; In-app update (updater.py runs this installer with /VERYSILENT /RELAUNCH=1): start the monitor again.
+; In-app update (updater.py runs this installer with /SILENT /RELAUNCH=1): start the monitor again.
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\TCGLiveMonitor.py"" --headless"; WorkingDir: "{app}"; Flags: nowait; Check: RelaunchAfterUpdate
 
 [UninstallDelete]
@@ -156,7 +156,7 @@ var
 // Only Python / Qt processes: this Setup's own command line can contain the
 // folder (/DIR=, /LOG=) and "TCGLiveMonitor" (its file name) - matching it
 // made Setup kill itself (exit -1, found 2026-10-16).
-procedure StopRunningCopies(Dir: String);
+procedure StopRunningCopiesWithPowerShell(Dir: String);
 var
   ResultCode: Integer;
   Cmd: String;
@@ -172,6 +172,55 @@ begin
     'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
   Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(800);
+end;
+
+// The usual way: in-process through WMI (COM), no helper process. A hidden
+// "powershell -ExecutionPolicy Bypass" started by an installer is a common
+// antivirus trigger, so PowerShell is now only the fallback when WMI fails.
+function VarText(V: Variant): String;
+begin
+  if VarIsNull(V) or VarIsEmpty(V) then
+    Result := ''
+  else
+    Result := V;
+end;
+
+procedure StopRunningCopies(Dir: String);
+var
+  Locator, Service, Procs, Proc: Variant;
+  I, Count: Integer;
+  Prefix, LowerDir, Path, Cmd: String;
+begin
+  LowerDir := Lowercase(RemoveBackslashUnlessRoot(Dir));
+  Prefix := AddBackslash(LowerDir);
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\CIMV2');
+    Procs := Service.ExecQuery('SELECT ProcessId, ExecutablePath, CommandLine FROM Win32_Process WHERE ' +
+      'Name = ''python.exe'' OR Name = ''pythonw.exe'' OR Name = ''QtWebEngineProcess.exe'' OR Name = ''tesseract.exe''');
+    Count := Procs.Count;
+    for I := 0 to Count - 1 do
+    begin
+      Proc := Procs.ItemIndex(I);
+      Path := Lowercase(VarText(Proc.ExecutablePath));
+      Cmd := Lowercase(VarText(Proc.CommandLine));
+      if (Pos(Prefix, Path) = 1) or
+         ((Pos(LowerDir, Cmd) > 0) and
+          ((Pos('tcglivemonitor', Cmd) > 0) or (Pos('overlayui', Cmd) > 0) or
+           (Pos('continueblocker', Cmd) > 0) or (Pos('statsui', Cmd) > 0))) then
+      begin
+        try
+          Proc.Terminate(0);
+        except
+          Log('Could not stop process ' + VarText(Proc.ProcessId) + ': ' + GetExceptionMessage);
+        end;
+      end;
+    end;
+    Sleep(800);
+  except
+    Log('WMI process stop failed (' + GetExceptionMessage + '); using PowerShell.');
+    StopRunningCopiesWithPowerShell(Dir);
+  end;
 end;
 
 // The auto-start value is shared by every copy (a dev checkout, another

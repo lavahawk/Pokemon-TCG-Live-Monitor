@@ -146,6 +146,16 @@ if (Test-Path (Join-Path $RtCache ".complete")) {
 }
 Copy-Item $RtCache (Join-Path $Stage "runtime") -Recurse
 Remove-Item (Join-Path $Stage "runtime\.complete") -Force
+# Unsigned helper EXEs the app never runs: pip's console-script launchers
+# (pip.exe, f2py.exe, pyside6-*.exe ...) and pywin32's Pythonwin/service
+# hosts. Launcher stubs like these are a common antivirus false positive
+# on fresh, unsigned installers. The app only runs runtime\python(w).exe.
+$StageRt = Join-Path $Stage "runtime"
+$dropped = @(Get-ChildItem (Join-Path $StageRt "Scripts") -Filter *.exe -ErrorAction SilentlyContinue) +
+           @(Get-ChildItem (Join-Path $StageRt "Lib\site-packages\pythonwin\Pythonwin.exe"),
+                           (Join-Path $StageRt "Lib\site-packages\win32\pythonservice.exe") -ErrorAction SilentlyContinue)
+$dropped | Remove-Item -Force
+Info ("Removed {0} unused helper EXEs" -f $dropped.Count)
 
 # ── 2. Tesseract OCR ─────────────────────────────────────────────────────
 Step "Tesseract OCR"
