@@ -1,7 +1,10 @@
-# Pokemon TCG Live Monitor v2.15.7
+# Pokemon TCG Live Monitor v2.15.8
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.7-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.8-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.8
+- **Auto Report works when your opponent reports first.** If they reported before you, the app used to think the match was over and skip your report. It now checks the match chat to see whether *you* have reported, and reports the game you haven't. If Limitless has already closed the match (a loss report settles it), the app leaves it alone instead of showing a "couldn't report" notice.
 
 ## What's new in 2.15.7
 - **Auto Report.** After a Limitless tournament game, the app reports your win or loss on your match page by itself, using the result from the battle log, and the in-game notice flashes yellow to say what it reported. It's on by default; turn it off with **Auto Report** on the Limitless tab, and the app asks first instead ("You won game 1 against … Report it?"), with a button for the other result in case the log got it wrong. You don't need the Limitless tab open. In a best of three, each game is reported in turn. If the report doesn't show up on Limitless, the notice tells you to report it on the match page.
