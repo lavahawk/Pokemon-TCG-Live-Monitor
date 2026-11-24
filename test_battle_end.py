@@ -105,7 +105,8 @@ class EndScreen:
         B.SEQUENCE_MAX_S, B.REOPEN_EVERY_S, B.CAPTURE_CONFIRM_S, B.GONE_S = 3, 0.05, 0.05, 0.3
         B.is_foreground = lambda hwnd: self.focus
         B.can_cover_continue = lambda hwnd, rect=None: self.focus
-        self.auto._wait_for_still_mouse = lambda: None
+        import contextlib
+        self.auto._hold_input = lambda: contextlib.nullcontext()
         self.auto._find = lambda sct, name, rect, region=None, verify=None: (
             (900, 100, 1.0) if (name == B.EXPORT and self.popup and self.end) else None)
         self.auto._button_still_there = lambda sct, rect: (

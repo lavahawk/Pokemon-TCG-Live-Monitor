@@ -1,7 +1,11 @@
-# Pokemon TCG Live Monitor v2.15.1
+# Pokemon TCG Live Monitor v2.15.2
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.1-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.2-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.2
+- **Battle log export clicks are quicker and don't fight your mouse.** The app used to wait for your mouse to stop moving before each click (up to 1.5 seconds), then pin the cursor to the button. Now it clicks right away and pauses your mouse and keyboard only for the moment of the click, with the cursor hidden. That's about half a second per click, the same way friend requests work. Esc stops the export.
+- The Continue cover never takes the focus from the game.
 
 ## What's new in 2.15.1
 - **The Continue button is covered sooner after a battle.** On some PCs you could click Continue before the battle log was saved. The app now checks for the end of a battle about twice as often, and covers Continue even when another window has the focus. Before, clicking the game to bring it back pressed Continue too.

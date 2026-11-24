@@ -104,8 +104,11 @@ SEQUENCE_MAX_S = 25        # under the blocker's 30 s failsafe
 REOPEN_EVERY_S = 1.5       # popup closed: click BATTLE LOG again after this
 CAPTURE_CONFIRM_S = 2.5    # after an export click, wait this long for the log
 GONE_S = 2.0               # neither button for this long: the end screen is gone
-MOUSE_STILL_S = 0.25       # the user's mouse must rest this long before a click
-MOUSE_WAIT_MAX_S = 1.5     # ...but never wait longer than this
+# Each click holds the player's mouse and keyboard (and hides the cursor)
+# for its ~0.4 s, the way the friend-request clicks do, instead of waiting
+# for a moving mouse to rest (up to 1.5 s per click). Esc lets go.
+HOLD_MAX_S = 3             # the hold always lets go after this long
+BUTTON_HELD_WAIT_S = 1.5   # a held left button is let go first (mid-drag)
 # Conceding goes from the battle straight to the main menu (no end screen).
 MENU_WATCH_AFTER_S = 4     # HUD gone this long without an end screen: look for the menu
 MENU_WATCH_S = 90
@@ -129,6 +132,21 @@ REJECT_SIG_MAX_DIFF = 1.5   # mean abs gray difference, 0-255
 REJECT_MEMORY_S = 600
 REJECT_MEMORY_MAX = 8
 LOOKALIKE_SAVE_MAX = 20     # crops kept in Logs/battle_log_lookalikes
+
+
+def _foreground_name():
+    """Title and process of the window in front, for the log."""
+    try:
+        import psutil
+        import win32gui
+        import win32process
+        fg = win32gui.GetForegroundWindow()
+        _, pid = win32process.GetWindowThreadProcessId(fg)
+        proc = psutil.Process(pid)
+        script = next((os_path for os_path in proc.cmdline() if os_path.endswith('.py')), '')
+        return f"'{win32gui.GetWindowText(fg)}' {proc.name()} {script.split(chr(92))[-1]}".strip()
+    except Exception:
+        return "unknown"
 
 
 def crop_signature(gray_crop):
@@ -161,6 +179,7 @@ class BattleEndAutomation(threading.Thread):
         self._capture_lock = threading.Lock()
         self._last_capture = 0.0
         self._capture_event = threading.Event()
+        self._escaped = threading.Event()   # Esc during a click: stop exporting
         self._last_rejected_logged = None
         self._cover = None   # blocker shown early, before the OCR check
         self._can_cover = False
@@ -495,6 +514,8 @@ class BattleEndAutomation(threading.Thread):
         if self._cover is None and can_cover_continue(hwnd, rect):
             self._cover = self.launch_blocker(wait_s=0)
         deadline = time.time() + FOREGROUND_WAIT_S
+        if not is_foreground(hwnd):
+            self.log(f"Waiting for the game to be in front (in front: {_foreground_name()}).")
         while not is_foreground(hwnd):
             if time.time() > deadline or self._stop.is_set():
                 self.log("Game not in foreground - skipped auto-export (export manually).")
@@ -534,30 +555,32 @@ class BattleEndAutomation(threading.Thread):
         return self._find(sct, BATTLE_LOG, rect, self._bottom_half(rect))
 
     @staticmethod
-    def _wait_for_still_mouse():
-        """Let a moving mouse settle before clicking, so the click doesn't
-        fight the user (the click itself pins the cursor). Never waits long."""
+    def _wait_for_button_release():
+        """Never start a hold while the player is holding the left button:
+        the hold would swallow its release."""
         try:
             import ctypes
-            from ctypes import wintypes
             user32 = ctypes.windll.user32
-            point = wintypes.POINT()
-            user32.GetCursorPos(ctypes.byref(point))
-            last, still_since, give_up = (point.x, point.y), time.time(), time.time() + MOUSE_WAIT_MAX_S
-            while time.time() < give_up:
-                time.sleep(0.05)
-                user32.GetCursorPos(ctypes.byref(point))
-                held = user32.GetAsyncKeyState(0x01) & 0x8000
-                if (point.x, point.y) != last or held:
-                    last, still_since = (point.x, point.y), time.time()
-                elif time.time() - still_since >= MOUSE_STILL_S:
-                    return
+            give_up = time.time() + BUTTON_HELD_WAIT_S
+            while user32.GetAsyncKeyState(0x01) & 0x8000 and time.time() < give_up:
+                time.sleep(0.02)
         except Exception:
             pass
 
+    def _hold_input(self):
+        """The player's mouse and keyboard, held for one click (the friend
+        request's lock: low-level hooks, injected input passes, Esc stops)."""
+        try:
+            from ptcgl_friend import InputBlocker
+            return InputBlocker(on_escape=self._escaped.set, max_s=HOLD_MAX_S)
+        except Exception:
+            import contextlib
+            return contextlib.nullcontext()
+
     def _click(self, x, y):
-        self._wait_for_still_mouse()
-        AutoClicker.physical_click(x, y)
+        self._wait_for_button_release()
+        with self._hold_input():
+            AutoClicker.physical_click(x, y)
 
     def _click_sequence(self, sct, hwnd, rect, seen_at):
         """BATTLE LOG -> export, retried until the log is on the clipboard.
@@ -565,6 +588,7 @@ class BattleEndAutomation(threading.Thread):
         a moment, only costs a retry; the sequence ends when the log lands,
         the end screen is gone (Continue pressed), or after SEQUENCE_MAX_S."""
         self._capture_event.clear()
+        self._escaped.clear()
         deadline = time.time() + SEQUENCE_MAX_S
         last_open = last_export = 0.0
         opens = exports = 0
@@ -573,6 +597,9 @@ class BattleEndAutomation(threading.Thread):
         while time.time() < deadline and not self._stop.is_set():
             if self._captured_since(seen_at):
                 return True
+            if self._escaped.is_set():
+                self.log("Esc pressed - auto-export stopped (export manually).")
+                return False
             if not is_foreground(hwnd):
                 if not waiting_focus:
                     self.log("Game lost focus - waiting for it to come back.")
@@ -606,7 +633,7 @@ class BattleEndAutomation(threading.Thread):
                     if now - gone_since >= GONE_S:
                         self.log("End screen gone before the export (Continue pressed?).")
                         return self._captured_since(seen_at)
-            time.sleep(0.12)
+            time.sleep(0.05)
         if not self._captured_since(seen_at):
             self.log(f"Export not confirmed after {SEQUENCE_MAX_S}s "
                      f"({opens} BATTLE LOG and {exports} export clicks).")

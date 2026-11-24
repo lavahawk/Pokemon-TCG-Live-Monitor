@@ -60,10 +60,15 @@ class ContinueBlocker(QWidget):
         self._closing = False
         self.setWindowOpacity(0.0)
 
+        # Never take the focus from the game: the export only clicks while
+        # the game is in front, so a focused blocker stalled it until the
+        # player clicked the game again.
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+            | Qt.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 4, 4, 4)
