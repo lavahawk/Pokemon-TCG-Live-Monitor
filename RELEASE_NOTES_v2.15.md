@@ -1,12 +1,16 @@
-# Pokemon TCG Live Monitor v2.15.4
+# Pokemon TCG Live Monitor v2.15.5
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.4-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.5-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.5
+- **Limitless page buttons work in the app.** On the Limitless tab, **Open as Image** and the card links used to do nothing, because they open a new tab. They now open in a small window in the app's style (with its own taskbar button). Links to other sites (Docs, Discord, X) open in your browser. Limitless's Copy buttons can use the clipboard, downloads save to your Downloads folder, and Limitless's own notifications show as the in-game notice.
+- **Opponent decklist title:** the round and whose deck it is, e.g. "ROUND 2 · LEBOBBO'S DECK".
 
 ## What's new in 2.15.4
 - **A notice when your next round is up.** A small card at the top of the game shows the round and your opponent, with one ding. When Auto Check-In checks you in, the card flashes yellow and says so. It doesn't take the focus from the game and fades out after a few seconds (click it to close it sooner).
 - **No need to open the Limitless tab.** Check-in and round detection run in the background as long as the app is open and you've signed in to Limitless once. Between rounds the app now keeps checking the dashboard every 10 seconds for over an hour after your last match, so the next pairing is found right away. Outside a tournament the hidden dashboard reloads every few minutes so it never goes stale.
-- **Opponent decklist window:** the title just says the round ("ROUND 2"), and the cards sit straight on the window, without the inner panel, deck name and card counts.
+- **Opponent decklist window:** the cards sit straight on the window, without the inner panel, deck name and card counts.
 
 ## What's new in 2.15.3
 - **The opponent decklist's see-through slider only fades the background.** It used to fade the whole window, cards and text included. It's now the same slider as on the dashboard, in the same spot at the bottom left: the glass and the panel behind the cards fade, and the cards, text and buttons stay solid. A resize grip sits at the bottom right, as on the dashboard.

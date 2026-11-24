@@ -102,6 +102,79 @@ try:
 
         def createWindow(self, _window_type):
             return self
+
+    def _limitless_host(url):
+        host = (url.host() or "").lower()
+        return host == "limitlesstcg.com" or host.endswith(".limitlesstcg.com")
+
+    def _allow_limitless_page_features(page):
+        """What the Limitless site's own buttons need: new tabs (Open as
+        Image, card links), its Copy buttons, and its notifications."""
+        attrs = QWebEngineSettings.WebAttribute
+        for attr in (attrs.JavascriptEnabled, attrs.LocalStorageEnabled, attrs.JavascriptCanOpenWindows,
+                     attrs.JavascriptCanAccessClipboard, attrs.JavascriptCanPaste):
+            try:
+                page.settings().setAttribute(attr, True)
+            except Exception:
+                pass
+
+        def on_permission(permission):
+            try:
+                from PySide6.QtWebEngineCore import QWebEnginePermission
+                kind = permission.permissionType()
+                wanted = (QWebEnginePermission.PermissionType.ClipboardReadWrite,
+                          QWebEnginePermission.PermissionType.Notifications)
+                if kind in wanted and _limitless_host(permission.origin()):
+                    permission.grant()
+                else:
+                    permission.deny()
+            except Exception:
+                pass
+        try:
+            page.permissionRequested.connect(on_permission)
+        except Exception:
+            pass
+
+    class LimitlessPage(QWebEnginePage):
+        """The Limitless tab's page. Links and forms that open a new tab
+        (Open as Image, card links) open in a small window of their own;
+        new tabs to other sites open in the browser."""
+
+        def __init__(self, profile, parent, open_popup):
+            super().__init__(profile, parent)
+            self._open_popup = open_popup
+            _allow_limitless_page_features(self)
+
+        def createWindow(self, _window_type):
+            return self._open_popup()
+
+    class LimitlessPopupPage(QWebEnginePage):
+        """A new tab from the Limitless tab. Its first navigation decides
+        where it goes: Limitless pages show in a window, anything else opens
+        in the browser and the page is dropped."""
+
+        def __init__(self, profile, parent, on_decided):
+            super().__init__(profile, parent)
+            self._decided = False
+            self._on_decided = on_decided
+            _allow_limitless_page_features(self)
+
+        def acceptNavigationRequest(self, url, nav_type, is_main_frame):
+            if is_main_frame and url.scheme() in ("http", "https") and not _limitless_host(url):
+                link = url.toString()
+                if _is_safe_web_url(link):
+                    webbrowser.open(link)
+                if not self._decided:
+                    self._decided = True
+                    self._on_decided(self, False)
+                return False
+            if is_main_frame and not self._decided and url.scheme() in ("http", "https"):
+                self._decided = True
+                self._on_decided(self, True)
+            return super().acceptNavigationRequest(url, nav_type, is_main_frame)
+
+        def createWindow(self, _window_type):
+            return self
 except ImportError:
     WEBENGINE_AVAILABLE = False
     print("Warning: PySide6 WebEngine not available, web-based tabs will use link buttons")
@@ -1234,6 +1307,11 @@ class LimitlessDashboardManager(QObject):
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
         self.profile.setHttpUserAgent("TCGLiveMonitor/2.3 Limitless Dashboard")
         adblock.install(self.profile)
+        try:
+            self.profile.downloadRequested.connect(self._on_download)
+            self.profile.setNotificationPresenter(self._show_site_notification)
+        except Exception:
+            pass
 
         page = QWebEnginePage(self.profile, self)
         try:
@@ -1273,12 +1351,7 @@ class LimitlessDashboardManager(QObject):
         if not WEBENGINE_AVAILABLE:
             return
         self._ensure_profile()
-        page = QWebEnginePage(self.profile, view)
-        try:
-            page.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-            page.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
-        except Exception:
-            pass
+        page = LimitlessPage(self.profile, view, self._new_popup_page)
         page.urlChanged.connect(lambda url: self._update_view_status(url.toString()))
         page.urlChanged.connect(lambda url: self._on_visible_url_changed(url.toString(), view))
         page.loadFinished.connect(lambda ok: self._on_visible_load_finished(ok, view))
@@ -1286,6 +1359,45 @@ class LimitlessDashboardManager(QObject):
         self.visible_view = view
         self.visible_status_label = status_label
         self._update_view_status(page.url().toString())
+
+    # ── new tabs, downloads and notifications from the Limitless tab ──
+    def _new_popup_page(self):
+        page = LimitlessPopupPage(self.profile, self, self._popup_decided)
+        return page
+
+    def _popup_decided(self, page, show):
+        if not show:
+            QTimer.singleShot(0, page.deleteLater)
+            return
+        owner = getattr(self.get_overlay(), "stats_window", None)
+        window = LimitlessPopupWindow(owner, page)
+        window.open_panel()
+        _limitless_log(f"Opened {page.requestedUrl().toString() or 'a Limitless page'} in a window.")
+
+    def _on_download(self, item):
+        """A download from a Limitless page: save it to Downloads."""
+        try:
+            folder = os.path.join(os.path.expanduser("~"), "Downloads")
+            item.setDownloadDirectory(folder)
+            item.accept()
+            name = item.downloadFileName()
+
+            def finished():
+                if item.isFinished() and item.state() == item.DownloadState.DownloadCompleted:
+                    _limitless_log(f"Saved {name} to Downloads.")
+                    self.match_toast.notify("Saved to Downloads", name, done=False)
+            item.isFinishedChanged.connect(finished)
+        except Exception as exc:
+            _limitless_log(f"Download failed: {exc}")
+
+    def _show_site_notification(self, notification):
+        """Limitless's own browser notifications, as the in-game notice."""
+        try:
+            title = notification.title() or "Limitless"
+            self.match_toast.notify(title[:60], (notification.message() or "")[:80])
+            notification.show()
+        except Exception:
+            pass
 
     def _update_view_status(self, url_text):
         if self.visible_status_label is None:
@@ -4785,6 +4897,46 @@ def deck_section_totals(text):
     return "\n".join(f"{b[0]} {b[1]}" if isinstance(b, list) else b for b in blocks)
 
 
+class LimitlessPopupWindow(GlassPanel):
+    """A page the Limitless tab opened in a new tab (Open as Image, a card),
+    in the app's own window style with its own taskbar button."""
+
+    def __init__(self, owner, page):
+        super().__init__(owner, "Limitless", size=(940, 760), pill_text="Limitless",
+                         flags=Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        try:
+            from PySide6.QtGui import QIcon
+            icon = os.path.join(BASE_DIR, "icon.ico")
+            if os.path.exists(icon):
+                self.setWindowIcon(QIcon(icon))
+        except Exception:
+            pass
+        # The dashboard's title-button look (by class, as the decklist
+        # window does: the id selectors fall back to the light native face).
+        self.add_style("TitleBarButton { background-color: rgba(255,255,255,0.05);"
+                       " border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: rgba(255,255,255,0.7); }"
+                       "TitleBarButton:hover { background-color: rgba(255,255,255,0.12); }")
+        col = QVBoxLayout(self.content)
+        col.setContentsMargins(8, 4, 8, 8)
+        self.view = QWebEngineView()
+        page.setParent(self.view)
+        self.view.setPage(page)
+        col.addWidget(self.view, 1)
+        page.titleChanged.connect(self._retitle)
+        self._retitle(page.title())
+        self.setStyleSheet(self.styleSheet() + " ")  # once every child exists (title buttons)
+
+    def _retitle(self, title):
+        title = (title or "Limitless").strip()
+        if "imggen" in self.view.url().toString() or title.lower().startswith("imggen"):
+            title = "Decklist image"
+        self.setWindowTitle(title)
+        self.title_label.setText(title.upper()[:70])
+
+    def collapse(self):
+        self.showMinimized()
+
+
 class OpponentDeckWindow(GlassPanel):
     """The current round's opponent decklist: card scans with copy counts,
     hover a card to enlarge it. A normal window of its own (its own taskbar
@@ -5074,7 +5226,7 @@ class OpponentDeckWindow(GlassPanel):
         opponent = info.get("opponent") or "Opponent"
         rnd = info.get("round")
         self.setWindowTitle(f"{opponent}'s deck")
-        self.title_label.setText(f"ROUND {rnd}" if rnd else "OPPONENT DECKLIST")
+        self.title_label.setText((f"ROUND {rnd} · " if rnd else "") + f"{opponent}'s deck".upper())
         new_deck = info.get("url") != self.key or (info.get("text") or "") != self.deck_text
         self.key = info.get("url")
         self.deck_text = info.get("text") or ""
