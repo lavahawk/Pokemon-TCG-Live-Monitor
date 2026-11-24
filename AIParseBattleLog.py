@@ -973,6 +973,16 @@ def main():
         if battle_id:
             print(f"Battle saved to database{' (Limitless tournament)' if tournament else ''}.")
             print(f"BATTLE_ID={battle_id}")
+            if tournament and str(win_or_loss).lower() in ("win", "loss"):
+                # The HUD asks whether to report this result on the match page.
+                try:
+                    import json as _json
+                    import time as _time
+                    request = {"battle_id": battle_id, "result": str(win_or_loss).lower(), "at": _time.time()}
+                    with open(os.path.join(BASE_DIR, "Logs", ".limitless_report.json"), "w", encoding="utf-8") as handle:
+                        _json.dump(request, handle)
+                except Exception as exc:
+                    print(f"Warning: Could not ask to report the result on Limitless: {exc}")
             try:
                 # Overlay card: shows the AI's pick (click to fix) or asks for the deck.
                 from deck_confirm import write_request

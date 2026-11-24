@@ -564,6 +564,9 @@ def _steps():
         ("Limitless Dashboard", lambda w: w.limitless_auto_friend_btn, "Friend requests",
          "Each round, the app can add your opponent as a friend in the game, so you can invite "
          "them.\n\nOff: it asks you first. On: it just sends it."),
+        ("Limitless Dashboard", lambda w: getattr(w, "limitless_auto_report_btn", None), "Auto Report",
+         "After each tournament game, the app reports your win or loss on your match page.\n\n"
+         "Off: it asks you first, and you can pick the other result."),
         ("Limitless Dashboard", lambda w: getattr(w, "limitless_opp_deck_btn", None), "Chat and decklists",
          "Match chat shows over the game, above the HUD. Point at it to reply.\n\nWhen Limitless shows "
          "your opponent's deck, it opens in its own window. This button opens it again."),

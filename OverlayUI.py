@@ -1008,6 +1008,13 @@ class MinimalOverlay(QWidget):
             self._poll_update(anchor)
         except Exception as exc:
             _dbg(f"_poll_deck_confirm error: {exc}")
+        try:
+            geo = self.frameGeometry()
+            self._restack_limitless_cards((geo.right() + 1, geo.top() - 6))
+            if self.hud_notifications():
+                self._position_chat_window()
+        except Exception as exc:
+            _dbg(f"restack error: {exc}")
         self._poll_pet()
         self._poll_ball_hint()
 
@@ -1094,7 +1101,7 @@ class MinimalOverlay(QWidget):
         card = getattr(self, "_concede_card", None)
         try:
             if card is not None and card.isVisible():
-                card.reposition(self._above_open_cards(anchor))
+                card.reposition(self._stack_anchor(anchor, "_concede_card"))
                 return
         except RuntimeError:  # closed
             self._concede_card = None
@@ -1124,7 +1131,7 @@ class MinimalOverlay(QWidget):
         self._concede_card = NoticeCard("DID YOU CONCEDE?", concede_text(question),
                                         primary=("Yes, add a loss", conceded),
                                         secondary=("No", lambda: None), linger_ms=0)
-        self._concede_card.show_at(self._above_open_cards(anchor))
+        self._concede_card.show_at(self._stack_anchor(anchor, "_concede_card"))
         _dbg("concede question shown")
 
     def _poll_manual_mode_notice(self, anchor):
@@ -1134,7 +1141,7 @@ class MinimalOverlay(QWidget):
         notice = getattr(self, "_manual_notice", None)
         if notice is not None:
             if notice.isVisible():
-                notice.reposition(self._above_open_cards(anchor))
+                notice.reposition(self._stack_anchor(anchor, "_manual_notice"))
             return
         if getattr(self, "_manual_notice_checked", False) or not self.isVisible():
             return
@@ -1181,20 +1188,44 @@ class MinimalOverlay(QWidget):
             primary = ("Add API key", self.open_api_key_setting)
         self._manual_notice = NoticeCard(title, text, primary=primary,
                                          secondary=("Don't remind me", self._mute_manual_notice))
-        self._manual_notice.show_at(self._above_open_cards(anchor))
+        self._manual_notice.show_at(self._stack_anchor(anchor, "_manual_notice"))
         _dbg(f"manual mode notice shown (local_only={local_only}, has_key={has_key})")
 
-    def _above_open_cards(self, anchor):
-        """The anchor moved above the deck card and the Reset? prompt when they
-        show, so stacked cards never overlap (they used to fight for one spot)."""
+    # Cards over the mini GUI, bottom to top. Each sits above the visible
+    # cards before it, and the chat above them all, so a deck card, a
+    # report or friend question and the chat never cover each other.
+    HUD_CARD_ORDER = ("deck_popup", "_reset_popup", "_concede_card", "_manual_notice", "_update_card")
+
+    def _hud_card_stack(self):
+        stack = [(name, getattr(self, name, None)) for name in self.HUD_CARD_ORDER]
+        manager = getattr(self, "limitless_manager", None)
+        for card in (getattr(manager, "hud_notifications", lambda: [])() if manager else []):
+            stack.append((card, card))
+        return stack
+
+    def _stack_anchor(self, anchor, target):
+        """anchor (right, bottom) moved above every visible card that comes
+        before `target` (a name from HUD_CARD_ORDER, or the card itself)."""
         top = anchor[1]
-        for card in (self.deck_popup, getattr(self, "_reset_popup", None)):
+        for key, card in self._hud_card_stack():
+            if key == target or (card is not None and card is target):
+                break
             try:
                 if card is not None and card.isVisible():
                     top = min(top, card.y() - 6)
             except RuntimeError:  # deleted
                 pass
         return (anchor[0], top)
+
+    def _restack_limitless_cards(self, anchor):
+        manager = getattr(self, "limitless_manager", None)
+        for card in (getattr(manager, "hud_notifications", lambda: [])() if manager else []):
+            try:
+                if card is not None and card.isVisible():
+                    right, bottom = self._stack_anchor(anchor, card)
+                    card.move(int(right - card.width()), int(bottom - card.height()))
+            except RuntimeError:
+                pass
 
     UPDATE_CHECK_DELAY_S = 25  # after the mini GUI is placed: let the game settle first
 
@@ -1203,13 +1234,7 @@ class MinimalOverlay(QWidget):
         thread; offer it in a card above the mini GUI."""
         card = getattr(self, "_update_card", None)
         if card is not None and card.isVisible():
-            popup = self.deck_popup
-            notice = getattr(self, "_manual_notice", None)
-            bottom = anchor[1]
-            for other in (popup, notice):
-                if other is not None and other.isVisible():
-                    bottom = min(bottom, other.y() - 6)
-            card.reposition((anchor[0], bottom))
+            card.reposition(self._stack_anchor(anchor, "_update_card"))
         state = getattr(self, "_update_state", None)
         if state is None:
             self._update_state = state = {"placed_at": time.time(), "result": None, "checking": False,
@@ -1275,7 +1300,7 @@ class MinimalOverlay(QWidget):
             card.close()
         card.on_skip = skip
         card.on_update = lambda: self._start_update(card, release)
-        card.show_at(anchor)
+        card.show_at(self._stack_anchor(anchor, "_update_card"))
 
     def _start_update(self, card, release):
         """Download (worker thread), verify, run the installer silently, quit.
@@ -2130,13 +2155,12 @@ class MinimalOverlay(QWidget):
     def hud_notifications(self):
         """Our visible popups stacked above the mini GUI, lowest first."""
         notes = []
-        popup = getattr(self, "deck_popup", None)
-        if popup is not None and popup.isVisible():
-            notes.append(popup)
-        manager = getattr(self, "limitless_manager", None)
-        for note in (getattr(manager, "hud_notifications", lambda: [])() if manager else []):
-            if note is not None and note.isVisible() and note not in notes:
-                notes.append(note)
+        for _key, card in self._hud_card_stack():
+            try:
+                if card is not None and card.isVisible() and card not in notes:
+                    notes.append(card)
+            except RuntimeError:  # deleted
+                pass
         return notes
 
     def _position_chat_window(self):
@@ -2164,7 +2188,7 @@ class MinimalOverlay(QWidget):
             top = geo.y()
             for note in self.hud_notifications():
                 top = min(top, note.geometry().y())
-            y = top - self.chat_window.height() - 8
+            y = top - self.chat_window.frameGeometry().height() - 8
             if y < 0:
                 y = 0
             self.chat_window.move(x, y)

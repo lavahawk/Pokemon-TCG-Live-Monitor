@@ -310,6 +310,8 @@ LIMITLESS_DASHBOARD_STATE_FILE = os.path.join(BASE_DIR, ".limitless_dashboard_st
 # AIParseBattleLog.py so battles played while enrolled in a tournament get
 # tagged and weighted as tournament games.
 LIMITLESS_TOURNAMENT_FLAG_FILE = os.path.join(BASE_DIR, ".in_tournament")
+# Written by AIParseBattleLog after a tournament game: {battle_id, result, at}.
+LIMITLESS_REPORT_REQUEST_FILE = os.path.join(BASE_DIR, "Logs", ".limitless_report.json")
 # Shared capture file written by the Limitless dashboard manager and read by
 # AIParseBattleLog.py so the current match's chat (with round info) can be
 # attached to the battle record for later review.
@@ -994,14 +996,11 @@ class FriendRequestPrompt(LimitlessCheckInAlert):
     def _place(self, overlay):
         try:
             if overlay is not None and overlay.isVisible():
-                geo = overlay.geometry()
-                top = geo.y()
-                others = getattr(overlay, "hud_notifications", lambda: [])()
-                for note in others:
-                    if note is not self:
-                        top = min(top, note.geometry().y())
-                self.move(max(0, geo.x() + geo.width() - self.width()),
-                          max(0, top - self.height() - 12))
+                geo = overlay.frameGeometry()
+                anchor = (geo.right() + 1, geo.top() - 6)
+                if hasattr(overlay, "_stack_anchor"):
+                    anchor = overlay._stack_anchor(anchor, self)   # above the cards below it
+                self.move(max(0, int(anchor[0] - self.width())), max(0, int(anchor[1] - self.height())))
                 return
         except Exception:
             pass
@@ -1023,6 +1022,58 @@ class FriendRequestPrompt(LimitlessCheckInAlert):
         self.hide()
         self._restack(getattr(self, "_overlay", None))
         self.answered.emit(bool(yes))
+
+
+class ReportResultPrompt(FriendRequestPrompt):
+    """'Report game 1 as a win?' after a tournament game. chosen(str):
+    "win", "loss", or "" (not now: ×, or no answer within the timeout).
+    The main button is the result the battle log gave; the second button is
+    the other result, for when that was wrong."""
+
+    chosen = Signal(str)
+
+    def __init__(self, timeout_s=180):
+        super().__init__(timeout_s=timeout_s)
+        self.findChild(QLabel, "limitlessCheckinTitle").setText("Report your game on Limitless")
+        self._result = "win"
+        self.other_btn = None
+        for btn in self.findChildren(QPushButton):
+            if btn.objectName() == "limitlessCheckinSecondaryBtn":
+                self.other_btn = btn
+                btn.clicked.disconnect()
+                btn.clicked.connect(lambda: self._pick("loss" if self._result == "win" else "win"))
+        self.check_in_requested.disconnect()
+        self.check_in_requested.connect(lambda: self._pick(self._result))
+        self.answered.connect(lambda yes: None if yes else self.chosen.emit(""))
+
+    def ask_result(self, result, game, opponent, overlay=None):
+        self._result = "win" if result == "win" else "loss"
+        other = "loss" if self._result == "win" else "win"
+        self.action_btn.setText(f"Report {self._result}")
+        if self.other_btn is not None:
+            self.other_btn.setText(f"It was a {other}")
+        verb = "won" if self._result == "win" else "lost"
+        vs = f" against <b>{html.escape(opponent)}</b>" if opponent else ""
+        self._open = True
+        self.body_label.setText(
+            f"You {verb} game {html.escape(str(game or 1))}{vs}.<br>"
+            f"<span style='color:rgba(233,240,250,0.6);'>Report it on your Limitless match page?</span>")
+        self.adjustSize()
+        self._overlay = overlay
+        self._place(overlay)
+        self.show()
+        self.raise_()
+        self._restack(overlay)
+        self._timer.start()
+
+    def _pick(self, result):
+        if not self._open:
+            return
+        self._open = False
+        self._timer.stop()
+        self.hide()
+        self._restack(getattr(self, "_overlay", None))
+        self.chosen.emit(result)
 
 
 class WindowResizeHandle(QFrame):
@@ -1124,6 +1175,7 @@ class LimitlessDashboardManager(QObject):
         self.background_enabled = True
         self.auto_checkin_enabled = True
         self.auto_friend_request = False  # True: no "Add as friend?" popup
+        self.auto_report = True           # report each tournament game's result without asking
         self.authenticated = False
         self.in_tournament = False
         self.last_status = "Limitless dashboard idle."
@@ -1167,6 +1219,15 @@ class LimitlessDashboardManager(QObject):
         self.chat_poll_timer.setInterval(LIMITLESS_CHAT_POLL_INTERVAL_MS)
         self.chat_poll_timer.timeout.connect(self.poll_for_chat)
 
+        # A finished tournament game (AIParseBattleLog writes the request):
+        # ask, then report the result on the match page.
+        self._report_prompt = None
+        self._report_pending = None
+        self.report_timer = QTimer(self)
+        self.report_timer.setInterval(1500)
+        self.report_timer.timeout.connect(self._check_report_request)
+        self.report_timer.start()
+
         self._load_state()
         # Every status change goes to Logs/limitless.log (once per change).
         self._logged_status = ""
@@ -1200,6 +1261,7 @@ class LimitlessDashboardManager(QObject):
                 legacy_enabled = bool(state.get("background_enabled", True))
                 self.auto_checkin_enabled = bool(state.get("auto_checkin_enabled", legacy_enabled))
                 self.auto_friend_request = bool(state.get("auto_friend_request", False))
+                self.auto_report = bool(state.get("auto_report", True))
         except Exception:
             self.auto_checkin_enabled = True
         self.background_enabled = True
@@ -1212,6 +1274,7 @@ class LimitlessDashboardManager(QObject):
                         "background_enabled": True,
                         "auto_checkin_enabled": self.auto_checkin_enabled,
                         "auto_friend_request": bool(getattr(self, "auto_friend_request", False)),
+                        "auto_report": bool(getattr(self, "auto_report", True)),
                     },
                     handle,
                 )
@@ -1398,6 +1461,137 @@ class LimitlessDashboardManager(QObject):
             notification.show()
         except Exception:
             pass
+
+    # ── report the game result on Limitless ──
+    REPORT_MAX_AGE_S = 600
+
+    def _check_report_request(self):
+        try:
+            if not os.path.exists(LIMITLESS_REPORT_REQUEST_FILE):
+                return
+            with open(LIMITLESS_REPORT_REQUEST_FILE, "r", encoding="utf-8") as handle:
+                request = json.load(handle)
+            os.remove(LIMITLESS_REPORT_REQUEST_FILE)
+        except Exception:
+            return
+        try:
+            age = time.time() - float(request.get("at") or 0)
+        except (TypeError, ValueError):
+            age = 1e9
+        result = str(request.get("result") or "").lower()
+        if age > self.REPORT_MAX_AGE_S or result not in ("win", "loss"):
+            return
+        state = self.last_chat_state or {}
+        if not self.chat_target_url or "/match/" not in self.chat_target_url or state.get("match_done"):
+            _limitless_log("Tournament game saved, but no open Limitless match to report it on.")
+            return
+        self._ask_report(result, state)
+
+    def _ask_report(self, result, state):
+        url = self.chat_target_url
+        opponent = state.get("opponent") or ""
+        # The next game to report: one more than the games already reported.
+        reported = [m.get("text", "") for m in state.get("messages") or []]
+        game = 1 + sum(1 for t in reported if re.search(r"has reported game \d+", t, re.I)
+                       and self._is_own_message(t, opponent))
+        if getattr(self, "auto_report", True):
+            # Auto Report: no question; the notice says what was reported.
+            _limitless_log(f"Auto Report: game {game} as a {result} vs {opponent or '?'}.")
+            self._report_pending = {"url": url, "game": game, "opponent": opponent}
+            self._report_chosen(result)
+            return
+        try:
+            if self._report_prompt is None:
+                self._report_prompt = ReportResultPrompt()
+                self._report_prompt.chosen.connect(self._report_chosen)
+            self._report_pending = {"url": url, "game": game, "opponent": opponent}
+            _play_limitless_notification_sound()
+            self._report_prompt.ask_result(result, game, opponent, self.get_overlay())
+            _limitless_log(f"Asked to report game {game} as a {result} vs {opponent or '?'}.")
+        except Exception as exc:
+            _limitless_log(f"Report prompt failed: {exc}")
+
+    @staticmethod
+    def _is_own_message(text, opponent=""):
+        """A chat line about you, not your opponent. Limitless names you by
+        your Limitless name, which the app doesn't keep (the saved username
+        is the game's), so: any line that doesn't start with theirs."""
+        opponent = (opponent or "").strip().lower()
+        return not opponent or not text.strip().lower().startswith(opponent)
+
+    def _report_chosen(self, result):
+        pending, self._report_pending = self._report_pending, None
+        if not result or not pending:
+            _limitless_log("Report: not now.")
+            return
+        if self.chat_page is None or self.chat_page.url().toString() != pending["url"]:
+            self._report_failed(pending, "the match page isn't open")
+            return
+        want_win = "true" if result == "win" else "false"
+        click_js = """
+            (() => {
+                const visible = (el) => !!el && el.getClientRects().length > 0;
+                const games = Array.from(document.querySelectorAll('.reporting .game'));
+                const open = games.find(g => g.querySelector('.report')
+                    && !g.querySelector('.report.selected, .report.active, .report.reported, .report.chosen')
+                    && !((g.querySelector('.update') || {}).innerText || '').trim());
+                if (!open) return JSON.stringify({ok: false, why: 'no unreported game on the page'});
+                const btn = open.querySelector(""" + want_win + """ ? '.report.win' : '.report.loss');
+                if (!btn) return JSON.stringify({ok: false, why: 'no report button'});
+                btn.click();
+                return JSON.stringify({ok: true, game: open.getAttribute('data-game') || ''});
+            })();
+        """
+        pending["result"] = result
+        _limitless_log(f"Reporting game {pending['game']} as a {result}.")
+        self.chat_page.runJavaScript(click_js, lambda out, p=pending: self._report_clicked(p, out))
+
+    def _report_clicked(self, pending, out):
+        try:
+            out = json.loads(out) if isinstance(out, str) else (out or {})
+        except Exception:
+            out = {}
+        if not out.get("ok"):
+            self._report_failed(pending, out.get("why") or "the page didn't take the click")
+            return
+        if out.get("game"):
+            pending["game"] = out["game"]
+        # Limitless may ask to confirm: press its confirm button if one shows.
+        confirm_js = """
+            (() => {
+                const visible = (el) => !!el && el.getClientRects().length > 0;
+                const btn = Array.from(document.querySelectorAll('.modal button, .modal .button, [role="dialog"] button'))
+                    .find(b => visible(b) && /^(confirm|yes|submit|ok|report)$/i.test((b.innerText || '').trim()));
+                if (btn) { btn.click(); return true; }
+                return false;
+            })();
+        """
+        QTimer.singleShot(1200, lambda: self.chat_page.runJavaScript(confirm_js))
+        pending["deadline"] = time.time() + 12
+        QTimer.singleShot(2500, lambda: self._verify_report(pending))
+
+    def _verify_report(self, pending):
+        word = "win" if pending.get("result") == "win" else "loss"
+        pattern = re.compile(rf"has reported game {re.escape(str(pending['game']))} as an? {word}", re.I)
+        texts = [m.get("text", "") for m in (self.last_chat_state or {}).get("messages") or []]
+        if any(pattern.search(t) and self._is_own_message(t, pending.get("opponent")) for t in texts):
+            _limitless_log(f"Reported game {pending['game']} as a {word} on Limitless.")
+            self.match_toast.notify(f"Reported game {pending['game']} as a {word}",
+                                    f"vs {pending['opponent']}" if pending.get("opponent") else "Limitless",
+                                    done=True)
+            return
+        if time.time() < pending.get("deadline", 0):
+            try:
+                self.poll_for_chat()
+            except Exception:
+                pass
+            QTimer.singleShot(1500, lambda: self._verify_report(pending))
+            return
+        self._report_failed(pending, "Limitless didn't show the report")
+
+    def _report_failed(self, pending, why):
+        _limitless_log(f"Report failed: {why}.")
+        self.match_toast.notify("Couldn't report on Limitless", f"Report it on the match page ({why})")
 
     def _update_view_status(self, url_text):
         if self.visible_status_label is None:
@@ -2680,7 +2874,7 @@ class LimitlessDashboardManager(QObject):
 
     def hud_notifications(self):
         """Our popups that stack over the HUD (the chat moves above them)."""
-        return [self._friend_prompt] if self._friend_prompt is not None else []
+        return [p for p in (self._friend_prompt, getattr(self, "_report_prompt", None)) if p is not None]
 
     def _on_friend_shade(self, args):
         """The deck import's dim + card while the friend request is sent."""
@@ -12307,6 +12501,16 @@ class StatsWindow(QWidget):
         self.limitless_auto_friend_btn.clicked.connect(self.toggle_limitless_auto_friend)
         action_row.addWidget(self.limitless_auto_friend_btn)
 
+        self.limitless_auto_report_btn = QPushButton()
+        self.limitless_auto_report_btn.setObjectName("settingsBtn")
+        self.limitless_auto_report_btn.setFixedHeight(34)
+        self.limitless_auto_report_btn.setCheckable(True)
+        self.limitless_auto_report_btn.setToolTip(
+            "ON: after each tournament game, the result from the battle log is reported on your "
+            "Limitless match page by itself.\nOFF: a popup asks first (and lets you pick the other result).")
+        self.limitless_auto_report_btn.clicked.connect(self.toggle_limitless_auto_report)
+        action_row.addWidget(self.limitless_auto_report_btn)
+
         opp_deck_btn = QPushButton("Opponent Decklist")
         opp_deck_btn.setObjectName("settingsBtn")
         opp_deck_btn.setFixedHeight(34)
@@ -12361,6 +12565,10 @@ class StatsWindow(QWidget):
             self.limitless_auto_friend_btn.setChecked(on)
             self.limitless_auto_friend_btn.setText(
                 "Auto Friend Request: ON" if on else "Auto Friend Request: OFF")
+        if hasattr(self, "limitless_auto_report_btn"):
+            on = bool(self.limitless_manager and getattr(self.limitless_manager, "auto_report", True))
+            self.limitless_auto_report_btn.setChecked(on)
+            self.limitless_auto_report_btn.setText("Auto Report: ON" if on else "Auto Report: OFF")
 
     def toggle_limitless_auto_checkin(self):
         if not self.limitless_manager:
@@ -12381,6 +12589,14 @@ class StatsWindow(QWidget):
             return
         manager = self.limitless_manager
         manager.auto_friend_request = not getattr(manager, "auto_friend_request", False)
+        manager._save_state()
+        self._sync_limitless_autocheck_button()
+
+    def toggle_limitless_auto_report(self):
+        if not self.limitless_manager:
+            return
+        manager = self.limitless_manager
+        manager.auto_report = not getattr(manager, "auto_report", True)
         manager._save_state()
         self._sync_limitless_autocheck_button()
 
