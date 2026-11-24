@@ -1482,18 +1482,48 @@ class LimitlessDashboardManager(QObject):
         if age > self.REPORT_MAX_AGE_S or result not in ("win", "loss"):
             return
         state = self.last_chat_state or {}
-        if not self.chat_target_url or "/match/" not in self.chat_target_url or state.get("match_done"):
+        if not self.chat_target_url or "/match/" not in self.chat_target_url:
             _limitless_log("Tournament game saved, but no open Limitless match to report it on.")
             return
+        if any(re.search(r"the match has (?:finished|ended)|match is over", m.get("text") or "", re.I)
+               for m in state.get("messages") or []):
+            # A loser's report settles it: nothing left to report.
+            _limitless_log("Tournament game saved; the match already finished on Limitless.")
+            return
+        if self._next_report_game(state) is None:
+            _limitless_log("Tournament game saved; you already reported every game of this match.")
+            return
         self._ask_report(result, state)
+
+    @classmethod
+    def _report_sides(cls, messages, opponent):
+        """{game: {"me": bool, "opp": bool}} from the chat's report lines;
+        a removal undoes that side's report."""
+        sides = {}
+        for m in messages or []:
+            text = (m.get("text") or "").strip()
+            hit = re.search(r"has (reported|removed) game (\d+)", text, re.I)
+            if not hit:
+                continue
+            side = "me" if cls._is_own_message(text, opponent) else "opp"
+            sides.setdefault(int(hit.group(2)), {})[side] = hit.group(1).lower() == "reported"
+        return sides
+
+    def _next_report_game(self, state):
+        """The first game you haven't reported (None: a finished match where
+        you reported them all)."""
+        sides = self._report_sides(state.get("messages"), state.get("opponent"))
+        for game in sorted(sides):
+            if not sides[game].get("me"):
+                return game
+        if state.get("match_done") and sides:
+            return None
+        return (max(sides) + 1) if any(v.get("me") for v in sides.values()) else 1
 
     def _ask_report(self, result, state):
         url = self.chat_target_url
         opponent = state.get("opponent") or ""
-        # The next game to report: one more than the games already reported.
-        reported = [m.get("text", "") for m in state.get("messages") or []]
-        game = 1 + sum(1 for t in reported if re.search(r"has reported game \d+", t, re.I)
-                       and self._is_own_message(t, opponent))
+        game = self._next_report_game(state) or 1
         if getattr(self, "auto_report", True):
             # Auto Report: no question; the notice says what was reported.
             _limitless_log(f"Auto Report: game {game} as a {result} vs {opponent or '?'}.")
@@ -1532,10 +1562,9 @@ class LimitlessDashboardManager(QObject):
             (() => {
                 const visible = (el) => !!el && el.getClientRects().length > 0;
                 const games = Array.from(document.querySelectorAll('.reporting .game'));
-                const open = games.find(g => g.querySelector('.report')
-                    && !g.querySelector('.report.selected, .report.active, .report.reported, .report.chosen')
-                    && !((g.querySelector('.update') || {}).innerText || '').trim());
-                if (!open) return JSON.stringify({ok: false, why: 'no unreported game on the page'});
+                const open = games.find(g => g.getAttribute('data-game') === '""" + str(int(pending["game"])) + """')
+                    || games[""" + str(int(pending["game"]) - 1) + """];
+                if (!open) return JSON.stringify({ok: false, why: 'game """ + str(int(pending["game"])) + """ is not on the page'});
                 const btn = open.querySelector(""" + want_win + """ ? '.report.win' : '.report.loss');
                 if (!btn) return JSON.stringify({ok: false, why: 'no report button'});
                 btn.click();
@@ -2157,15 +2186,27 @@ class LimitlessDashboardManager(QObject):
                     messages,
                     pageTextSnippet: pageText.slice(0, 400),
                     // The round is over: Limitless says the match finished,
-                    // or every game under "Report games" has its Win/Loss
-                    // picked (the picked one gets a class besides
-                    // "report win"/"report loss").
+                    // or both players reported every game in the chat. One
+                    // side's report isn't the end: the other still has to.
                     matchDone: (() => {
                         if (messages.some(m => /the match has (?:finished|ended)|match is over/i.test(m.text || ''))) return true;
-                        const games = Array.from(document.querySelectorAll('.reporting .game'));
-                        if (!games.length) return false;
-                        return games.every(g => Array.from(g.querySelectorAll('.report')).some(r =>
-                            Array.from(r.classList).some(c => !['report', 'win', 'loss'].includes(c))));
+                        const opp = (opponent || '').trim().toLowerCase();
+                        if (!opp) return false;
+                        const sides = {};
+                        for (const m of messages) {
+                            const t = (m.text || '').trim();
+                            const rep = t.match(/has reported game (\d+)/i);
+                            const rem = t.match(/has removed game (\d+) report/i);
+                            const hit = rep || rem;
+                            if (!hit) continue;
+                            const side = t.toLowerCase().startsWith(opp) ? 'opp' : 'me';
+                            sides[hit[1]] = sides[hit[1]] || {};
+                            sides[hit[1]][side] = !!rep;
+                        }
+                        const nums = Array.from(document.querySelectorAll('.reporting .game'))
+                            .map(g => g.getAttribute('data-game')).filter(Boolean);
+                        const want = nums.length ? nums : Object.keys(sides);
+                        return want.length > 0 && want.every(n => sides[n] && sides[n].me && sides[n].opp);
                     })(),
                     // The opponent's Pokémon TCG Live name ("Screen name",
                     // click to copy) — often not their Limitless name.
