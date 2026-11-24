@@ -9,6 +9,7 @@ TCGLiveMonitor.py
 AIParseBattleLog.py
 BattleDatabase.py
 BattleEndAutomation.py
+end_screens.py
 BattleState.py
 AutoClicker.py
 ContinueBlocker.py

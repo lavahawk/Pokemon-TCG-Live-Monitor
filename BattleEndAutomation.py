@@ -497,6 +497,7 @@ class BattleEndAutomation(threading.Thread):
         seen_at = time.time()
         white_since, self._white_since = self._white_since, None
         self.log(f"BATTLE LOG button visible (score {hit[2]:.2f}).")
+        self._screenshot_end_screen(sct, rect)
 
         # Did the user already export THIS battle? "This battle" = since the
         # in-battle HUD was last seen, or the last 25 s if the HUD was never
@@ -547,6 +548,23 @@ class BattleEndAutomation(threading.Thread):
             # screen (or the next battle) never needs a cold start.
             self.prewarm_blocker()
             self.close_blocker(blocker)
+
+    END_SHOT_GAP_S = 90   # one picture per end screen, even if it's seen again
+
+    def _screenshot_end_screen(self, sct, rect):
+        """Auto Screenshot (Limitless tab): the end screen of a tournament
+        game, saved before anything is clicked."""
+        try:
+            import end_screens
+            if time.time() - getattr(self, "_last_end_shot", 0.0) < self.END_SHOT_GAP_S:
+                return
+            opponent = end_screens.tournament_opponent()
+            if not opponent or not end_screens.enabled():
+                return
+            self._last_end_shot = time.time()
+            end_screens.save(sct.grab(rect), opponent, self.log)
+        except Exception as exc:
+            self.log(f"End screen screenshot failed: {exc}")
 
     def _button_still_there(self, sct, rect):
         """Template only: this end screen already passed the OCR check, and

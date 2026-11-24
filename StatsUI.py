@@ -1176,6 +1176,7 @@ class LimitlessDashboardManager(QObject):
         self.auto_checkin_enabled = True
         self.auto_friend_request = False  # True: no "Add as friend?" popup
         self.auto_report = True           # report each tournament game's result without asking
+        self.auto_end_screenshot = True   # save the end screen of each tournament game (end_screens.py)
         self.authenticated = False
         self.in_tournament = False
         self.last_status = "Limitless dashboard idle."
@@ -1262,6 +1263,7 @@ class LimitlessDashboardManager(QObject):
                 self.auto_checkin_enabled = bool(state.get("auto_checkin_enabled", legacy_enabled))
                 self.auto_friend_request = bool(state.get("auto_friend_request", False))
                 self.auto_report = bool(state.get("auto_report", True))
+                self.auto_end_screenshot = bool(state.get("auto_end_screenshot", True))
         except Exception:
             self.auto_checkin_enabled = True
         self.background_enabled = True
@@ -1275,6 +1277,7 @@ class LimitlessDashboardManager(QObject):
                         "auto_checkin_enabled": self.auto_checkin_enabled,
                         "auto_friend_request": bool(getattr(self, "auto_friend_request", False)),
                         "auto_report": bool(getattr(self, "auto_report", True)),
+                        "auto_end_screenshot": bool(getattr(self, "auto_end_screenshot", True)),
                     },
                     handle,
                 )
@@ -5292,6 +5295,58 @@ class OpponentDeckWindow(GlassPanel):
     def collapse(self):
         self.showMinimized()
 
+    # ── reopens where it was left (position and size), on any round ──
+    GEOMETRY_KEY = "opponent_deck_geometry"
+
+    def _saved_geometry(self):
+        try:
+            x, y, w, h = (int(v) for v in load_app_settings().get(self.GEOMETRY_KEY) or ())
+        except (TypeError, ValueError):
+            return None
+        rect = QRect(x, y, max(w, self.minimumWidth()), max(h, self.minimumHeight()))
+        # Only if its title bar is still on a screen (a monitor may be gone).
+        bar = QPoint(rect.center().x(), rect.top() + 16)
+        return rect if any(sc.availableGeometry().contains(bar) for sc in QGuiApplication.screens()) else None
+
+    def open_panel_geometry(self):
+        rect = self._saved_geometry()
+        self._restored = rect is not None
+        if rect is None:
+            super().open_panel_geometry()
+            return
+        self.setGeometry(rect)
+
+    def _geometry_changed(self):
+        if not self.isVisible() or self.isMinimized() or getattr(self, "_collapsed", False):
+            return
+        timer = getattr(self, "_save_geometry", None)
+        if timer is None:
+            timer = self._save_geometry = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(600)
+            timer.timeout.connect(self._store_geometry)
+        timer.start()
+
+    def _store_geometry(self):
+        if not self.isVisible() or self.isMinimized() or getattr(self, "_collapsed", False):
+            return
+        try:
+            from app_settings import save_app_settings
+            settings = load_app_settings()
+            geo = self.geometry()
+            settings[self.GEOMETRY_KEY] = [geo.x(), geo.y(), geo.width(), geo.height()]
+            save_app_settings(settings)
+        except Exception:
+            pass
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._geometry_changed()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._geometry_changed()
+
     # ── see-through background: the dashboard's slider, in the same spot ──
     # Only the glass behind the cards fades (as on the dashboard); the cards,
     # text and buttons stay solid. It used to fade the whole window.
@@ -5478,7 +5533,7 @@ class OpponentDeckWindow(GlassPanel):
             self.picture.setToolTip("Limitless's picture of the list")
             self._fetch_list_image(info["image_url"])
         self._render()
-        if new_deck and self.isVisible():
+        if new_deck and self.isVisible() and self._saved_geometry() is None:
             self._fit_to_deck(recenter=False)
         if not show:
             return
@@ -5491,7 +5546,9 @@ class OpponentDeckWindow(GlassPanel):
             self.show()
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
             # Measured once shown: a hidden window's layout has no real sizes.
-            self._fit_to_deck(recenter=True)
+            # A window put back where it was keeps the size it was left at.
+            if not getattr(self, "_restored", False):
+                self._fit_to_deck(recenter=True)
             self._render()
         self.raise_()
         if activate:
@@ -12552,6 +12609,25 @@ class StatsWindow(QWidget):
         self.limitless_auto_report_btn.clicked.connect(self.toggle_limitless_auto_report)
         action_row.addWidget(self.limitless_auto_report_btn)
 
+        self.limitless_auto_shot_btn = QPushButton()
+        self.limitless_auto_shot_btn.setObjectName("settingsBtn")
+        self.limitless_auto_shot_btn.setFixedHeight(34)
+        self.limitless_auto_shot_btn.setCheckable(True)
+        self.limitless_auto_shot_btn.setToolTip(
+            "ON: when a tournament game ends, a picture of the end screen (the one with the Battle Log "
+            "button) is saved before the battle log is exported, as proof of the result.\n"
+            "Saved to Pictures \\ TCG Live Monitor \\ End screens (the folder button opens it).")
+        self.limitless_auto_shot_btn.clicked.connect(self.toggle_limitless_auto_screenshot)
+        action_row.addWidget(self.limitless_auto_shot_btn)
+
+        shots_btn = QPushButton("📁")
+        shots_btn.setObjectName("iconBtn")
+        shots_btn.setFixedSize(34, 34)
+        shots_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        shots_btn.setToolTip("Open the end screen pictures")
+        shots_btn.clicked.connect(self._open_end_screens_folder)
+        action_row.addWidget(shots_btn)
+
         opp_deck_btn = QPushButton("Opponent Decklist")
         opp_deck_btn.setObjectName("settingsBtn")
         opp_deck_btn.setFixedHeight(34)
@@ -12610,6 +12686,10 @@ class StatsWindow(QWidget):
             on = bool(self.limitless_manager and getattr(self.limitless_manager, "auto_report", True))
             self.limitless_auto_report_btn.setChecked(on)
             self.limitless_auto_report_btn.setText("Auto Report: ON" if on else "Auto Report: OFF")
+        if hasattr(self, "limitless_auto_shot_btn"):
+            on = bool(self.limitless_manager and getattr(self.limitless_manager, "auto_end_screenshot", True))
+            self.limitless_auto_shot_btn.setChecked(on)
+            self.limitless_auto_shot_btn.setText("Auto Screenshot: ON" if on else "Auto Screenshot: OFF")
 
     def toggle_limitless_auto_checkin(self):
         if not self.limitless_manager:
@@ -12640,6 +12720,22 @@ class StatsWindow(QWidget):
         manager.auto_report = not getattr(manager, "auto_report", True)
         manager._save_state()
         self._sync_limitless_autocheck_button()
+
+    def toggle_limitless_auto_screenshot(self):
+        if not self.limitless_manager:
+            return
+        manager = self.limitless_manager
+        manager.auto_end_screenshot = not getattr(manager, "auto_end_screenshot", True)
+        manager._save_state()
+        self._sync_limitless_autocheck_button()
+
+    def _open_end_screens_folder(self):
+        import end_screens
+        try:
+            os.makedirs(end_screens.FOLDER, exist_ok=True)
+            os.startfile(end_screens.FOLDER)
+        except Exception as exc:
+            QMessageBox.information(self, "End screens", f"Couldn't open {end_screens.FOLDER}: {exc}")
 
     def open_limitless_dashboard_tab(self):
         if hasattr(self, "limitless_dashboard_tab_index"):
