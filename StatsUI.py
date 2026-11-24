@@ -9608,7 +9608,7 @@ class StatsWindow(QWidget):
             self._weights_status.setText("Applied to your stats.")
 
     def create_settings_tab(self):
-        """Settings: the cards in five sections, most-used first, with a
+        """Settings: the cards in six sections, most-used first, with a
         section list on the left that jumps to (and follows) the page."""
         scroll = self._create_standard_scroll_area()
         self.settings_scroll = scroll
@@ -10006,12 +10006,15 @@ class StatsWindow(QWidget):
         
         app_control_card.layout().addLayout(app_control_layout)
 
+        updates_card = self._create_updates_card()
+        background_updates_card = self._create_advanced_updates_card()
         sections = [
-            ("General", (appearance_card, overlay_card, sound_card, autorun_card)),
+            ("General", (appearance_card, overlay_card, sound_card)),
             ("Battle tracking", (export_card, parser_card)),
-            ("Data && weights", (weights_card, meta_card)),  # && shows one & on a button
+            ("Startup && updates", (autorun_card, updates_card)),  # && shows one & on a button
             ("Your data", (import_card, transfer_card, battle_mgmt_card)),
-            ("Troubleshooting", (ocr_card, debug_card, app_control_card)),
+            ("Stats && meta", (weights_card, meta_card)),
+            ("Advanced", (background_updates_card, ocr_card, debug_card, app_control_card)),
         ]
         headers = []
         for title, cards in sections:
@@ -12625,7 +12628,7 @@ class StatsWindow(QWidget):
         shots_btn.setFixedSize(34, 34)
         shots_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         shots_btn.setToolTip("Open the end screen pictures")
-        shots_btn.clicked.connect(self._open_end_screens_folder)
+        shots_btn.clicked.connect(self._open_tournament_shots_folder)
         action_row.addWidget(shots_btn)
 
         opp_deck_btn = QPushButton("Opponent Decklist")
@@ -12729,7 +12732,7 @@ class StatsWindow(QWidget):
         manager._save_state()
         self._sync_limitless_autocheck_button()
 
-    def _open_end_screens_folder(self):
+    def _open_tournament_shots_folder(self):
         import end_screens
         try:
             os.makedirs(end_screens.FOLDER, exist_ok=True)
@@ -13640,6 +13643,56 @@ class StatsWindow(QWidget):
             return
         os._exit(0)  # background threads would keep this copy alive next to the new one
 
+    def _create_updates_card(self):
+        """Settings -> Startup & updates: the version, checking GitHub."""
+        card = self.create_card("Updates")
+        body = QVBoxLayout()
+        body.setContentsMargins(12, 0, 12, 12)
+        body.setSpacing(6)
+        box = QCheckBox("Check for updates when the app starts")
+        box.setObjectName("settingsCheck")
+        box.setToolTip(infotip.tip("Check GitHub on launch",
+                                   "If there is a newer release, a card offers to install it in one click. "
+                                   "Your battles and settings stay."))
+        box.setChecked(bool(load_app_settings().get("check_updates", True)))
+        box.toggled.connect(lambda checked: self._save_app_setting("check_updates", bool(checked)))
+        body.addWidget(box)
+        update_row = QHBoxLayout()
+        update_row.setSpacing(8)
+        from version import APP_VERSION as _app_version
+        update_label = QLabel(f"Version {_app_version}")
+        update_label.setStyleSheet("color: rgba(235,242,250,0.65); font-size: 11px;")
+        update_row.addWidget(update_label)
+        update_btn = QPushButton("Check for updates now")
+        update_btn.setObjectName("eloScaleBtn")
+        update_btn.setFixedHeight(26)
+        update_btn.setToolTip("Ask GitHub for the latest release now (a skipped version is offered again).")
+        update_btn.clicked.connect(self._check_updates_now)
+        update_row.addWidget(update_btn)
+        update_row.addStretch()
+        body.addLayout(update_row)
+        card.layout().addLayout(body)
+        return card
+
+    def _create_advanced_updates_card(self):
+        """Settings -> Advanced: install updates with no installer window."""
+        card = self.create_card("Background updates")
+        body = QVBoxLayout()
+        body.setContentsMargins(12, 0, 12, 12)
+        body.setSpacing(6)
+        box = QCheckBox("Install updates in the background (no installer window)")
+        box.setObjectName("settingsCheck")
+        box.setToolTip(infotip.tip(
+            "Headless update",
+            "Off (default): the installer shows its progress window while it updates. "
+            "On: it runs with no window at all. Some antivirus programs are stricter about "
+            "invisible installers, so leave this off if yours complains about updates."))
+        box.setChecked(bool(load_app_settings().get("update_headless", False)))
+        box.toggled.connect(lambda checked: self._save_app_setting("update_headless", bool(checked)))
+        body.addWidget(box)
+        card.layout().addLayout(body)
+        return card
+
     def _create_overlay_prefs_card(self):
         """Settings → Overlay: what the in-game mini GUI shows.
         Saved immediately; the overlay re-reads them every few seconds."""
@@ -13658,32 +13711,13 @@ class StatsWindow(QWidget):
                 ("manual_mode_notice", "Remind me when AI deck detection is off",
                  infotip.tip("Card when AI detection is off",
                              "Without a working AI (no key, or detection Off) a small card says so when the "
-                             "overlay starts, with a shortcut to the setting.")),
-                ("check_updates", "Check for updates when the app starts",
-                 infotip.tip("Check GitHub on launch",
-                             "If there is a newer release, a card offers to install it in one click. "
-                             "Your battles and settings stay."))):
+                             "overlay starts, with a shortcut to the setting."))):
             box = QCheckBox(text)
             box.setObjectName("settingsCheck")
             box.setToolTip(tip)
             box.setChecked(bool(settings.get(key, True)))
             box.toggled.connect(lambda checked, k=key: self._save_app_setting(k, bool(checked)))
             body.addWidget(box)
-
-        update_row = QHBoxLayout()
-        update_row.setSpacing(8)
-        from version import APP_VERSION as _app_version
-        update_label = QLabel(f"Version {_app_version}")
-        update_label.setStyleSheet("color: rgba(235,242,250,0.65); font-size: 11px;")
-        update_row.addWidget(update_label)
-        update_btn = QPushButton("Check for updates now")
-        update_btn.setObjectName("eloScaleBtn")
-        update_btn.setFixedHeight(26)
-        update_btn.setToolTip("Ask GitHub for the latest release now (a skipped version is offered again).")
-        update_btn.clicked.connect(self._check_updates_now)
-        update_row.addWidget(update_btn)
-        update_row.addStretch()
-        body.addLayout(update_row)
 
         # HUD buddy (pet.py): off by default.
         pet_row = QHBoxLayout()

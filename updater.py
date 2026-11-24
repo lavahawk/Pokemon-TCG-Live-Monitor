@@ -170,10 +170,21 @@ def download(release, progress=None, cancelled=None, opener=None):
     return path
 
 
-def launch_installer(path, base_dir=BASE_DIR):
+def headless_updates():
+    """Settings -> Advanced -> "Install updates in the background": the
+    installer runs with no window (/VERYSILENT). Off by default."""
+    try:
+        from app_settings import load_app_settings
+        return bool(load_app_settings().get("update_headless", False))
+    except Exception:
+        return False
+
+
+def launch_installer(path, base_dir=BASE_DIR, headless=None):
     """Start the installer, detached from this process, with its progress
-    window showing (/SILENT, not /VERYSILENT: an invisible installer started
-    by a script looks like malware to antivirus heuristics). It stops
+    window showing (/SILENT; an invisible installer started by a script looks
+    like malware to antivirus heuristics), or with no window at all
+    (/VERYSILENT) when the user chose background updates. It stops
     the running app itself, installs into the same folder (UsePreviousAppDir)
     and starts the monitor again. The installer only replaces program files;
     battles, settings, keys and logs are left alone - and are copied to
@@ -186,7 +197,9 @@ def launch_installer(path, base_dir=BASE_DIR):
     # Log outside the app folder: the installer stops processes whose command
     # line mentions the app folder.
     log = os.path.join(update_dir(), "install.log")
-    args = [path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1", f"/LOG={log}"]
+    if headless is None:
+        headless = headless_updates()
+    args = [path, "/VERYSILENT" if headless else "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1", f"/LOG={log}"]
     flags = 0
     if sys.platform == "win32":
         flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
