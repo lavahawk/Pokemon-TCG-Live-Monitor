@@ -1,7 +1,11 @@
-# Pokemon TCG Live Monitor v2.15.8
+# Pokemon TCG Live Monitor v2.15.9
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.8-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.9-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.9
+- **Auto Screenshot of end screens.** After each Limitless tournament game, the app saves a picture of the end screen (the one with the Battle Log button) before it exports the log, as proof of the result. The pictures go to **Pictures \ TCG Live Monitor \ End screens**, named by date and opponent. It's on by default; turn it off with **Auto Screenshot** on the Limitless tab, and the folder button next to it opens the pictures. It needs the battle log auto-export on.
+- **The opponent decklist opens where you left it.** It keeps its last position and size from round to round (the first time it opens centered, sized to the deck).
 
 ## What's new in 2.15.8
 - **Auto Report works when your opponent reports first.** If they reported before you, the app used to think the match was over and skip your report. It now checks the match chat to see whether *you* have reported, and reports the game you haven't. If Limitless has already closed the match (a loss report settles it), the app leaves it alone instead of showing a "couldn't report" notice.
