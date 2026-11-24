@@ -134,7 +134,7 @@ class RankDetector:
                 'height': region['height']
             }
     
-    def capture_region(self, region_name, pad_y=0.0):
+    def capture_region(self, region_name, pad_y=0.0, pad_x=0.0):
         """
         Capture a specific screen region
         Automatically finds game window and adjusts coordinates
@@ -143,6 +143,7 @@ class RankDetector:
             region_name: Name of the region defined in config
             pad_y: extra height above AND below, as a fraction of the region's
                    own height (so it scales with the window like the region)
+            pad_x: the same, left AND right, as a fraction of its width
 
         Returns:
             PIL Image of the captured region or None if region not found
@@ -155,6 +156,10 @@ class RankDetector:
             extra = int(round(abs_region["height"] * pad_y))
             abs_region = dict(abs_region, top=abs_region["top"] - extra,
                               height=abs_region["height"] + 2 * extra)
+        if pad_x:
+            extra = int(round(abs_region["width"] * pad_x))
+            abs_region = dict(abs_region, left=abs_region["left"] - extra,
+                              width=abs_region["width"] + 2 * extra)
         
         # Validate region bounds
         if abs_region["width"] <= 0 or abs_region["height"] <= 0:
@@ -268,7 +273,7 @@ class RankDetector:
         deck_found = False
         if "my_deck_name" in self.regions:
             # Use silent mode to avoid spam during waiting periods
-            deck_text = self.extract_text("my_deck_name", debug=debug, silent=not debug)
+            deck_text = self.read_deck_name(debug=debug)
             # Deck name should have at least 3 characters
             deck_found = deck_text is not None and len(deck_text.strip()) >= 3
             validations.append(("deck_name", deck_found))
@@ -440,6 +445,25 @@ class RankDetector:
         
         return self.extract_rank(debug=debug)
     
+    def read_deck_name(self, debug=False):
+        """The deck name on the main menu, or None (see read_deck_name_image)."""
+        img = self.capture_region("my_deck_name", pad_y=DECK_PAD_Y, pad_x=DECK_PAD_X)
+        if img is None:
+            return None
+        if debug:
+            img.save(os.path.join(BASE_DIR, "debug_my_deck_name.png"))
+        text, conf = read_deck_name_image(img)
+        self.last_deck_conf = conf
+        try:
+            import ocr_debug
+            box = self.get_absolute_region("my_deck_name")
+            if box:
+                ocr_debug.report("my_deck_name", box, hit=bool(text),
+                                 text=f"{text} ({conf:.0f})" if text else f"(nothing read, {conf:.0f})")
+        except Exception:
+            pass
+        return text
+
     def extract_text(self, region_name, debug=False, silent=False):
         """
         Extract any text from a screen region
@@ -487,6 +511,102 @@ class RankDetector:
             if not silent:
                 print("No text detected")
             return None
+
+
+# ── deck name (main menu) ────────────────────────────────────────────────
+# The deck name is ~14 px grey text on a light dotted panel at 1920x1080.
+# Read a box wider and taller than the calibrated one (long names ran past
+# it, descenders were cut), scaled so the text is the same size at any
+# window size, the dot pattern blurred away, as ONE line of text (psm 7);
+# a few image variants are read and the most confident one wins.
+DECK_PAD_X = 0.35   # each side, as a share of the region's width
+DECK_PAD_Y = 0.30   # above and below, as a share of its height
+DECK_TEXT_PX = 34   # text height Tesseract reads best
+# Real names read at 90+; other screens caught in the box (a card, the
+# battle board) come back as two-letter junk at 25-45.
+DECK_MIN_CONF = 60
+
+
+def _deck_name_variants(gray):
+    h = gray.shape[0]
+    # The text is about 55 % of the padded box's height.
+    scale = max(1.5, min(10.0, DECK_TEXT_PX / max(1.0, 0.55 * h)))
+    big = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    if np.median(big) < 128:          # light text on a dark panel: flip it
+        big = 255 - big
+    soft = cv2.GaussianBlur(big, (0, 0), max(0.8, scale * 0.45))   # melts the dots
+    otsu = cv2.threshold(soft, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+    # Text darker than the panel by a margin: the dots never are.
+    panel = float(np.percentile(soft, 75))
+    fixed = np.where(soft < panel - 45, 0, 255).astype(np.uint8)
+    for img in (otsu, fixed, soft):
+        yield cv2.copyMakeBorder(img, 14, 14, 14, 14, cv2.BORDER_CONSTANT, value=255)
+
+
+def _read_line(img):
+    """(text, mean confidence) of one text line, specks dropped."""
+    data = pytesseract.image_to_data(img, config="--oem 1 --psm 7", output_type=pytesseract.Output.DICT)
+    words = []
+    for text, conf, left, width, height in zip(data["text"], data["conf"], data["left"],
+                                               data["width"], data["height"]):
+        text = (text or "").strip()
+        try:
+            conf = float(conf)
+        except (TypeError, ValueError):
+            conf = -1.0
+        if text and conf >= 0:
+            words.append((text, conf, height, left, left + width))
+    if not words:
+        return "", -1.0
+    tallest = max(w[2] for w in words)
+    words = [w for w in words if w[2] >= 0.45 * tallest and (w[1] >= 30 or len(w[0]) > 1)]
+    if not words:
+        return "", -1.0
+    # The name is centred in the box; the wider capture can catch other text
+    # on the same row. Keep the run of words around the centre (a gap wider
+    # than ~2.5 letter heights starts another piece of text).
+    words.sort(key=lambda w: w[3])
+    centre = img.shape[1] / 2.0
+    groups, current = [], [words[0]]
+    for w in words[1:]:
+        if w[3] - current[-1][4] > 2.5 * tallest:
+            groups.append(current)
+            current = [w]
+        else:
+            current.append(w)
+    groups.append(current)
+    words = min(groups, key=lambda g: 0 if g[0][3] <= centre <= g[-1][4]
+                else min(abs(g[0][3] - centre), abs(g[-1][4] - centre)))
+    text = " ".join(w[0] for w in words)
+    text = text.strip(" .,:;'\"|_-~`!*")
+    return text, sum(w[1] for w in words) / len(words)
+
+
+def _looks_like_name(text):
+    """At least 3 letters/digits, and mostly letters/digits (junk is symbols)."""
+    alnum = sum(ch.isalnum() for ch in text)
+    return alnum >= 3 and alnum >= 0.7 * len(text.replace(" ", ""))
+
+
+def read_deck_name_image(image):
+    """(deck name, confidence 0-100) from a capture of the deck-name box."""
+    try:
+        gray = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2GRAY)
+    except Exception:
+        return None, -1.0
+    best = ("", -1.0)
+    for variant in _deck_name_variants(gray):
+        try:
+            text, conf = _read_line(variant)
+        except Exception:
+            continue
+        if _looks_like_name(text) and conf > best[1]:
+            best = (text, conf)
+        if best[1] >= 88:   # confident: the other variants won't do better
+            break
+    if best[1] < DECK_MIN_CONF:
+        return None, best[1]
+    return (best[0] or None), best[1]
 
 
 def read_rank_confirmed(detector, last_accepted=None, reads=2, delay=1.0, big_jump=100, debug=False):

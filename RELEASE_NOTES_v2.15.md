@@ -1,7 +1,11 @@
-# Pokemon TCG Live Monitor v2.15.5
+# Pokemon TCG Live Monitor v2.15.6
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.5-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.6-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.6
+- **Deck names are read more accurately from the main menu.** The app now reads a slightly bigger area around the name (long names used to be cut off, and so were the bottoms of letters like g and y). It enlarges the text to the same size at any window size, smooths out the dotted background, and reads it as a single line. On test pictures at 1920x1080 it got every name right, up from about 8 in 10. Captures that aren't a deck name (another screen in the way) are no longer saved as one.
+- **New installs start see-through:** the dashboard's background starts at 75 % and the opponent decklist's at 50 % (its slider now goes down to 30 %). If you've already moved a slider, your setting is kept.
 
 ## What's new in 2.15.5
 - **Limitless page buttons work in the app.** On the Limitless tab, **Open as Image** and the card links used to do nothing, because they open a new tab. They now open in a small window in the app's style (with its own taskbar button). Links to other sites (Docs, Discord, X) open in your browser. Limitless's Copy buttons can use the clipboard, downloads save to your Downloads folder, and Limitless's own notifications show as the in-game notice.

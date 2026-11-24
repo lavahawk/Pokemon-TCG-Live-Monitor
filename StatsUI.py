@@ -5060,13 +5060,13 @@ class OpponentDeckWindow(GlassPanel):
     # ── see-through background: the dashboard's slider, in the same spot ──
     # Only the glass behind the cards fades (as on the dashboard); the cards,
     # text and buttons stay solid. It used to fade the whole window.
-    SURFACE_MIN, SURFACE_MAX = 70, 125
+    SURFACE_MIN, SURFACE_MAX, SURFACE_DEFAULT = 30, 125, 50   # starts at 50 %
 
     def _surface_value(self):
         try:
             value = load_app_settings().get("opponent_deck_surface")
             if value is None:
-                value = round(100 * getattr(self.owner, "surface_opacity_scale", 1.0))
+                value = self.SURFACE_DEFAULT
             return max(self.SURFACE_MIN, min(self.SURFACE_MAX, int(value)))
         except (TypeError, ValueError):
             return 100
@@ -5369,7 +5369,7 @@ class StatsWindow(QWidget):
         # and re-scaling sprite PNGs from disk on every UI refresh.
         self._sprite_pixmap_cache = {}
         self._deck_icon_choices_cache = None
-        self.surface_opacity_scale = 0.80
+        self.surface_opacity_scale = 0.75   # a first install starts at 75 %
         self._protected_interaction_depth = 0
         self._deck_dashboards_dirty = True
         self._stats_scroll_restore_pending = None

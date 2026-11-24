@@ -483,7 +483,7 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
                 db = BattleDatabase()
                 if not deck:
                     # The menu check just read the deck name; don't OCR it twice
-                    raw_deck = (checks or {}).get("deck_name") or detector.extract_text("my_deck_name", silent=True)
+                    raw_deck = (checks or {}).get("deck_name") or detector.read_deck_name()
                     deck = snap_deck_name(raw_deck, db.get_known_deck_names()) if raw_deck else None
                 rank = read_rank_confirmed(detector, last_accepted=read_int(LAST_RANK_FILE))
                 if rank is None and time.time() + 4 < deadline:
@@ -874,7 +874,7 @@ def ocr_test():
     detector = RankDetector()
     print("Game window:", detector.find_game_window())
     print("On main menu:", detector.is_on_main_menu(validation_method="auto", debug=True))
-    print("Deck:", detector.extract_text("my_deck_name", debug=True))
+    print("Deck:", detector.read_deck_name(debug=True))
     print("Rank:", detector.extract_rank(debug=True))
     print("Debug images saved next to the app (debug_*.png).")
     if has_console():
