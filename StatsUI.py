@@ -4586,12 +4586,16 @@ class OpponentDeckWindow(GlassPanel):
                        " border-radius: 6px; color: #DCEBFA; font-size: 11px; padding: 3px 10px; }"
                        "QPushButton#oppDeckCopy:hover { background: rgba(74,159,216,0.28); }"
                        "QPushButton#oppDeckCopy:disabled { color: rgba(220,235,250,0.55); }"
-                       "QSlider#oppDeckOpacity { background: transparent; }"
-                       "QSlider#oppDeckOpacity::groove:horizontal { height: 4px; background: rgba(255,255,255,0.14); border-radius: 2px; }"
-                       "QSlider#oppDeckOpacity::sub-page:horizontal { background: rgba(74,159,216,0.75); border-radius: 2px; }"
-                       "QSlider#oppDeckOpacity::handle:horizontal { width: 10px; margin: -4px 0; border-radius: 5px;"
-                       " background: rgba(235,243,252,0.92); border: 1px solid rgba(255,255,255,0.35); }"
-                       "QSlider#oppDeckOpacity::handle:horizontal:hover { background: #FFFFFF; border-color: rgba(74,159,216,0.9); }")
+                       "QFrame#footerBar { background: transparent; border: none; }"
+                       "QSlider#opacitySlider { background: transparent; }"
+                       "QSlider#opacitySlider::groove:horizontal { height: 4px; background: rgba(255,255,255,0.10); border-radius: 2px; }"
+                       "QSlider#opacitySlider::sub-page:horizontal { background: rgba(74,159,216,0.34); border-radius: 2px; }"
+                       "QSlider#opacitySlider::handle:horizontal { width: 9px; margin: -4px 0; border-radius: 4px;"
+                       " background: rgba(235,243,252,0.68); border: 1px solid rgba(255,255,255,0.16); }"
+                       "QSlider#opacitySlider::handle:horizontal:hover { background: rgba(255,255,255,0.86);"
+                       " border-color: rgba(74,159,216,0.38); }"
+                       "QFrame#windowSizeHandle { background: transparent; border: none; border-radius: 4px; }"
+                       "QFrame#windowSizeHandle:hover { background: rgba(74,159,216,0.12); }")
         col = QVBoxLayout(self.content)
         col.setContentsMargins(14, 8, 14, 12)
         col.setSpacing(6)
@@ -4602,28 +4606,6 @@ class OpponentDeckWindow(GlassPanel):
         self.sub = QLabel("")
         self.sub.setObjectName("oppDeckSub")
         bar.addWidget(self.sub, 1)
-        fade = QLabel("Opacity")
-        fade.setObjectName("oppDeckFade")
-        bar.addWidget(fade)
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setObjectName("oppDeckOpacity")
-        self.opacity_slider.setRange(30, 100)
-        self.opacity_slider.setFixedWidth(110)
-        self.opacity_slider.setFixedHeight(16)
-        self.opacity_slider.setToolTip("See the game through this window")
-        try:
-            opacity = int(load_app_settings().get("opponent_deck_opacity", 100))
-        except (TypeError, ValueError):
-            opacity = 100
-        self.opacity_slider.setValue(max(30, min(100, opacity)))
-        self.setWindowOpacity(self.opacity_slider.value() / 100)
-        self.opacity_slider.valueChanged.connect(self._set_opacity)
-        bar.addWidget(self.opacity_slider)
-        self._save_opacity = QTimer(self)
-        self._save_opacity.setSingleShot(True)
-        self._save_opacity.setInterval(600)
-        self._save_opacity.timeout.connect(self._store_opacity)
-        bar.addSpacing(4)
         self.copy_btn = QPushButton("Copy image")
         self.copy_btn.setObjectName("oppDeckCopy")
         self.copy_btn.setFixedHeight(26)
@@ -4653,6 +4635,7 @@ class OpponentDeckWindow(GlassPanel):
         self.picture.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self.scroll.setWidget(self.picture)
         col.addWidget(self.scroll, 1)
+        self.container.layout().addWidget(self._make_footer())
         from PySide6.QtNetwork import QNetworkAccessManager
         self.net = QNetworkAccessManager(self)
         self.cache_dir = os.path.join(BASE_DIR, ".card_image_cache")
@@ -4683,15 +4666,75 @@ class OpponentDeckWindow(GlassPanel):
     def collapse(self):
         self.showMinimized()
 
-    def _set_opacity(self, value):
-        self.setWindowOpacity(max(0.3, min(1.0, value / 100)))
-        self._save_opacity.start()
+    # ── see-through background: the dashboard's slider, in the same spot ──
+    # Only the glass behind the cards fades (as on the dashboard); the cards,
+    # text and buttons stay solid. It used to fade the whole window.
+    SURFACE_MIN, SURFACE_MAX = 70, 125
 
-    def _store_opacity(self):
+    def _surface_value(self):
+        try:
+            value = load_app_settings().get("opponent_deck_surface")
+            if value is None:
+                value = round(100 * getattr(self.owner, "surface_opacity_scale", 1.0))
+            return max(self.SURFACE_MIN, min(self.SURFACE_MAX, int(value)))
+        except (TypeError, ValueError):
+            return 100
+
+    def _make_footer(self):
+        footer = QFrame()
+        footer.setObjectName("footerBar")
+        footer.setFixedHeight(26)
+        row = QHBoxLayout(footer)
+        row.setContentsMargins(10, 0, 10, 4)
+        row.setSpacing(8)
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setObjectName("opacitySlider")
+        self.opacity_slider.setRange(self.SURFACE_MIN, self.SURFACE_MAX)
+        self.opacity_slider.setValue(self._surface)
+        self.opacity_slider.setFixedWidth(96)
+        self.opacity_slider.setFixedHeight(14)
+        self.opacity_slider.setToolTip("Adjust surface transparency")
+        self.opacity_slider.valueChanged.connect(self._set_surface)
+        row.addWidget(self.opacity_slider, alignment=Qt.AlignmentFlag.AlignVCenter)
+        row.addStretch()
+        grip = WindowResizeHandle(footer)
+        grip.setToolTip("Drag to resize")
+        grip.resize_started.connect(self._grip_start)
+        grip.resize_delta.connect(self._grip_move)
+        row.addWidget(grip, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+        self._save_surface = QTimer(self)
+        self._save_surface.setSingleShot(True)
+        self._save_surface.setInterval(500)
+        self._save_surface.timeout.connect(self._store_surface)
+        return footer
+
+    def _grip_start(self, pos):
+        self._grip_from = (pos, self.size())
+
+    def _grip_move(self, pos):
+        start, size = getattr(self, "_grip_from", (pos, self.size()))
+        self.resize(max(self.minimumWidth(), size.width() + pos.x() - start.x()),
+                    max(self.minimumHeight(), size.height() + pos.y() - start.y()))
+
+    def apply_theme(self):
+        super().apply_theme()
+        if not hasattr(self, "_surface"):
+            self._surface = self._surface_value()
+        self.container.set_scale(self._surface / 100)
+
+    def _set_surface(self, value):
+        self._surface = max(self.SURFACE_MIN, min(self.SURFACE_MAX, int(value)))
+        self.container.set_scale(self._surface / 100)
+        if self.cards:
+            self._debounce.start()  # the panel behind the cards fades too
+        self._save_surface.start()
+
+    def _store_surface(self):
         try:
             from app_settings import save_app_settings
             settings = load_app_settings()
-            settings["opponent_deck_opacity"] = int(self.opacity_slider.value())
+            settings["opponent_deck_surface"] = int(self._surface)
+            settings.pop("opponent_deck_opacity", None)
             save_app_settings(settings)
         except Exception:
             pass
@@ -4877,7 +4920,8 @@ class OpponentDeckWindow(GlassPanel):
         if self.cards:
             rects = []
             pixmap = StatsWindow._render_deck_picture(StatsWindow, self.entry, self.cards, self.images, rects,
-                                                      cols=self._cols(), res=self.RES)
+                                                      cols=self._cols(), res=self.RES,
+                                                      surface=getattr(self, "_surface", 100) / 100)
             self.state["rects"] = rects
             self.state["mode"] = "prints"
         else:
@@ -7658,11 +7702,13 @@ class StatsWindow(QWidget):
         label.setCursor(Qt.CursorShape.PointingHandCursor)
         panel._hide_card_zoom = hide_zoom
 
-    def _render_deck_picture(self, entry, cards, images, rects_out=None, cols=None, res=1.0):
+    def _render_deck_picture(self, entry, cards, images, rects_out=None, cols=None, res=1.0, surface=1.0):
         """Paint the list: title, then a grid per section, copy counts as badges.
         rects_out (a list) receives (QRectF in picture pixels, card) per card.
         cols: cards per row (default CARD_COLS); res: the picture is drawn
-        that many times bigger, for a sharp preview on scaled displays."""
+        that many times bigger, for a sharp preview on scaled displays.
+        surface: how solid the panel behind the cards is (the see-through
+        slider; the cards themselves are always solid)."""
         from PySide6.QtGui import QFont, QLinearGradient, QPainterPath
         w, h, gap = self.CARD_W, self.CARD_H, self.CARD_GAP
         cols = max(1, int(cols or self.CARD_COLS))
@@ -7685,8 +7731,9 @@ class StatsWindow(QWidget):
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         p.scale(res, res)
         bg = QLinearGradient(0, 0, 0, height)
-        bg.setColorAt(0, theme.qcolor(18, 23, 33))
-        bg.setColorAt(1, theme.qcolor(11, 14, 20))
+        panel_alpha = int(255 * max(0.0, min(1.0, surface)))
+        bg.setColorAt(0, theme.qcolor(18, 23, 33, panel_alpha))
+        bg.setColorAt(1, theme.qcolor(11, 14, 20, panel_alpha))
         p.setPen(QPen(QColor(255, 255, 255, 28), 1))
         p.setBrush(bg)
         p.drawRoundedRect(QRectF(0.5, 0.5, width - 1, height - 1), 14, 14)

@@ -1,7 +1,10 @@
-# Pokemon TCG Live Monitor v2.15.2
+# Pokemon TCG Live Monitor v2.15.3
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.2-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.3-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.3
+- **The opponent decklist's see-through slider only fades the background.** It used to fade the whole window, cards and text included. It's now the same slider as on the dashboard, in the same spot at the bottom left: the glass and the panel behind the cards fade, and the cards, text and buttons stay solid. A resize grip sits at the bottom right, as on the dashboard.
 
 ## What's new in 2.15.2
 - **Battle log export clicks are quicker and don't fight your mouse.** The app used to wait for your mouse to stop moving before each click (up to 1.5 seconds), then pin the cursor to the button. Now it clicks right away and pauses your mouse and keyboard only for the moment of the click, with the cursor hidden. That's about half a second per click, the same way friend requests work. Esc stops the export.
