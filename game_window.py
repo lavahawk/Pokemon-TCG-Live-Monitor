@@ -185,6 +185,44 @@ def is_foreground(hwnd):
         return False
 
 
+# Where the end screen's Continue button sits, as a fraction of the window
+# (the blocker's default box is centred here).
+CONTINUE_AT = (0.50, 0.955)
+
+
+def continue_on_screen(hwnd, rect=None):
+    """True when the game's own pixels are showing where Continue sits: the
+    game is on screen there even if another app has the focus. A click that
+    focuses the game also lands on Continue, so the cover is needed then too."""
+    if not WIN32_AVAILABLE or not hwnd:
+        return False
+    try:
+        if win32gui.IsIconic(hwnd):
+            return False
+        rect = rect or game_rect(hwnd)
+        if not rect:
+            return False
+        x = rect["left"] + int(rect["width"] * CONTINUE_AT[0])
+        y = rect["top"] + int(rect["height"] * CONTINUE_AT[1])
+        under = win32gui.WindowFromPoint((x, y))
+        if not under:
+            return False
+        root = win32gui.GetAncestor(under, 2)  # GA_ROOT
+        if root == hwnd or under == hwnd:
+            return True
+        _, under_pid = win32process.GetWindowThreadProcessId(root or under)
+        _, game_pid = win32process.GetWindowThreadProcessId(hwnd)
+        return bool(under_pid) and under_pid == game_pid
+    except Exception:
+        return False
+
+
+def can_cover_continue(hwnd, rect=None):
+    """The Continue blocker may go up: the game has the focus, or Continue is
+    visible on screen with another window focused."""
+    return is_foreground(hwnd) or continue_on_screen(hwnd, rect)
+
+
 class GameWindowCache:
     """Caches the game hwnd and re-validates it cheaply.
 

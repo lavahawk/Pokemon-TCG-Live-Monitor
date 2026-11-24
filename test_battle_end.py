@@ -13,9 +13,10 @@ RECT = {"left": 0, "top": 0, "width": 1942, "height": 1136}
 
 
 class Fake:
-    def __init__(self, score, text_ok=True, foreground=True):
+    def __init__(self, score, text_ok=True, foreground=True, on_screen=False):
         self.events = []
         B.is_foreground = lambda hwnd: foreground
+        B.can_cover_continue = lambda hwnd, rect=None: foreground or on_screen
         B.reads_battle_log = self._ocr
         self.text_ok = text_ok
         self.auto = B.BattleEndAutomation(
@@ -50,7 +51,8 @@ def test_strong_hit_covers_before_ocr():
 def test_look_alike_drops_the_cover():
     f = Fake(0.95, text_ok=False)
     assert not f.auto._battle_log_visible(None, RECT, cover_hwnd=1)
-    assert f.events == [("show", 0), "ocr", ("close", "blocker"), "prewarm"]
+    # the next standby is loaded before this cover closes
+    assert f.events == [("show", 0), "ocr", "prewarm", ("close", "blocker")]
     assert f.auto._cover is None
 
 
@@ -102,6 +104,7 @@ class EndScreen:
         self.events, self.auto = f.events, f.auto
         B.SEQUENCE_MAX_S, B.REOPEN_EVERY_S, B.CAPTURE_CONFIRM_S, B.GONE_S = 3, 0.05, 0.05, 0.3
         B.is_foreground = lambda hwnd: self.focus
+        B.can_cover_continue = lambda hwnd, rect=None: self.focus
         self.auto._wait_for_still_mouse = lambda: None
         self.auto._find = lambda sct, name, rect, region=None, verify=None: (
             (900, 100, 1.0) if (name == B.EXPORT and self.popup and self.end) else None)
@@ -277,6 +280,22 @@ def test_white_flash_unfocused_does_not_cover():
     f = Fake(0.5, foreground=False)
     f.auto._start_white_stage(1)
     assert ("show", 0) not in f.events and f.auto._white_since is not None
+
+
+def test_white_flash_covers_when_the_game_shows_but_is_unfocused():
+    # Clicking the game to focus it would also press Continue.
+    f = Fake(0.5, foreground=False, on_screen=True)
+    f.auto._start_white_stage(1, RECT)
+    assert f.events[0] == ("show", 0) and f.auto._cover == "blocker"
+
+
+def test_end_screen_unfocused_is_covered_before_waiting_for_focus():
+    f = Fake(0.98, foreground=False, on_screen=True)
+    B.FOREGROUND_WAIT_S = 0.2
+    f.auto._handle_end_screen(1, None, RECT, (100, 200, 0.98))
+    assert f.events.index(("show", 0)) < f.events.index(("close", "blocker"))
+    assert any("not in foreground" in str(e) for e in f.events)
+    B.FOREGROUND_WAIT_S = 20
 
 
 def test_stage_signals_on_synthetic_frames():

@@ -47,7 +47,7 @@ import numpy as np
 import ocr_debug
 from AutoClicker import AutoClicker
 from BattleState import battle_signals, check_hud, white_flash
-from game_window import GameWindowCache, is_foreground, is_game_process_running
+from game_window import GameWindowCache, can_cover_continue, is_foreground, is_game_process_running
 
 BATTLE_LOG = "battle_log"
 EXPORT = "battle_log_export"
@@ -84,11 +84,18 @@ HOT_WINDOW_S = 180
 # buttons, prize counters) is polled every HUD_POLL_S; once all of it is gone
 # the white flash is looked for every HOT_POLL_S; on the flash Continue is
 # covered at once and BATTLE LOG is looked for every WHITE_POLL_S.
-HOT_POLL_S = 0.15
+HOT_POLL_S = 0.06          # was 0.15: a short white flash was missed on slow PCs
 WHITE_POLL_S = 0.03
 WHITE_STAGE_MAX_S = 12     # no end screen this long after the flash: uncover
 COLD_POLL_S = 1.5
 HUD_POLL_S = 0.5
+# HUD seen without the gear (only the emote buttons or prize counters): those
+# also match some end screens, so keep looking for BATTLE LOG quickly.
+WEAK_HUD_POLL_S = 0.15
+# During the white stage the HUD has to be back this long before Continue is
+# uncovered: a one-frame false HUD on the end screen used to drop the cover
+# just before BATTLE LOG showed, and the new cover needed a fresh blocker.
+HUD_BACK_S = 1.0
 USER_EXPORT_GRACE_S = 25
 FOREGROUND_WAIT_S = 20
 # The export keeps retrying until the log is on the clipboard: a click of
@@ -113,7 +120,7 @@ PREWARM_EVERY_S = 30
 # template is stale (a game update moved or redrew it, as in Nov 2026). The
 # HOT/COLD choice then always picks COLD, so the end screen was found up to
 # 1.5 s late; poll at this rate instead until the gear matches again.
-HUDLESS_POLL_S = 0.25
+HUDLESS_POLL_S = 0.15
 # Look-alikes that failed the text check: an identical crop is rejected
 # again without OCR (Tesseract gives the same answer on the same pixels) and
 # without raising the Continue cover over a live battle.
@@ -162,6 +169,9 @@ class BattleEndAutomation(threading.Thread):
         self._lookalikes_saved = 0
         self._hud_unreliable = False
         self._white_since = None    # white flash seen; Continue covered since then
+        self._hud_back_since = None  # HUD seen again during the white stage
+        self._hud_ever_seen = False  # until then the HUD templates are unproven
+        self._cover_rect = None
         self.recorder = ocr_debug.EndScreenRecorder(log_fn)
         self.ready = self.clicker.load_template(BATTLE_LOG) and self.clicker.load_template(EXPORT)
 
@@ -248,7 +258,7 @@ class BattleEndAutomation(threading.Thread):
         # find_in_frame sets last_score before calling verify.
         if (self._can_cover and self._cover is None
                 and self.clicker.last_score.get(BATTLE_LOG, 0) >= EARLY_COVER_SCORE
-                and is_foreground(self._cover_hwnd)):
+                and can_cover_continue(self._cover_hwnd, self._cover_rect)):
             self._cover = self.launch_blocker(wait_s=0)
         ok = reads_battle_log(crop)
         if not ok:
@@ -258,11 +268,14 @@ class BattleEndAutomation(threading.Thread):
                 self._remember_lookalike(sig, crop)
         return ok
 
-    def _start_white_stage(self, hwnd):
+    def _start_white_stage(self, hwnd, rect=None):
         """The white flash before the end screen: cover Continue now, so
-        the end screen can't be clicked away before BATTLE LOG is found."""
+        the end screen can't be clicked away before BATTLE LOG is found.
+        Also when another window has the focus but the game shows: the click
+        that focuses the game would land on Continue."""
         self._white_since = time.time()
-        if self._cover is None and is_foreground(hwnd):
+        self._hud_back_since = None
+        if self._cover is None and can_cover_continue(hwnd, rect):
             self._cover = self.launch_blocker(wait_s=0)
             self.log("White flash - Continue covered, watching for BATTLE LOG.")
         else:
@@ -275,13 +288,16 @@ class BattleEndAutomation(threading.Thread):
 
     def _drop_cover(self):
         if self._cover is not None:
+            # Load the next hidden blocker before closing this one, so a
+            # cover needed right after (the end screen a moment later) is a
+            # signal away, not a 1-2 s Qt start.
+            self.prewarm_blocker()
             self.close_blocker(self._cover)
             self._cover = None
-            self.prewarm_blocker()
 
     def _battle_log_visible(self, sct, rect, cover_hwnd=None):
         """cover_hwnd: show the blocker on a strong template hit, before OCR."""
-        self._can_cover, self._cover_hwnd = bool(cover_hwnd), cover_hwnd
+        self._can_cover, self._cover_hwnd, self._cover_rect = bool(cover_hwnd), cover_hwnd, rect
         try:
             hit = self._find(sct, BATTLE_LOG, rect, self._bottom_half(rect), verify=self._verify_battle_log)
         finally:
@@ -321,9 +337,14 @@ class BattleEndAutomation(threading.Thread):
                         continue
 
                     gear, _score, details = check_hud(rect, sct)
-                    signals = battle_signals(rect, sct)
-                    hud = gear or signals["emotes"] or signals["counters"]
-                    details = [f"{details[0]} {signals['details']}"]
+                    if gear:
+                        # The gear is proof on its own; the board checks
+                        # (~10 ms) only run when it doesn't match.
+                        hud = True
+                    else:
+                        signals = battle_signals(rect, sct)
+                        hud = signals["emotes"] or signals["counters"]
+                        details = [f"{details[0]} {signals['details']}"]
                     now = time.time()
                     if now - last_prewarm >= PREWARM_EVERY_S:
                         # Keep a hidden blocker loaded while the game is open,
@@ -343,6 +364,7 @@ class BattleEndAutomation(threading.Thread):
                             # cover Continue the instant the end screen shows.
                             self.prewarm_blocker()
                         in_battle, last_hud, armed = True, now, True
+                        self._hud_ever_seen = True
                         if self._hud_unreliable:
                             self._hud_unreliable = False
                             self.log("Battle HUD gear matches again - normal end-screen polling.")
@@ -350,13 +372,17 @@ class BattleEndAutomation(threading.Thread):
                         if self._battle_since is None:
                             self._battle_since = now
                         if self._white_since is not None:
-                            self._end_white_stage("Battle HUD back after a white frame - Continue uncovered.")
+                            self._hud_back_since = self._hud_back_since or now
+                            if now - self._hud_back_since >= HUD_BACK_S:
+                                self._end_white_stage("Battle HUD back after a white frame - Continue uncovered.")
                         self.recorder.hud_back()
                     elif in_battle:
                         in_battle = False
                         self.log("Battle HUD gone - watching for the end screen.")
                         if ocr_debug.enabled():
                             self.recorder.start()
+                    if not hud:
+                        self._hud_back_since = None
                     self.recorder.tick(sct, rect)
                     if (not hud and armed and self._battle_since and self._menu_watch is None
                             and now - self._last_hud_at >= MENU_WATCH_AFTER_S):
@@ -369,7 +395,7 @@ class BattleEndAutomation(threading.Thread):
                     # white flash comes right before the end screen.
                     if (not hud and armed and last_hud and self._white_since is None
                             and now - last_hud < HOT_WINDOW_S and white_flash(rect, sct)):
-                        self._start_white_stage(hwnd)
+                        self._start_white_stage(hwnd, rect)
                     elif self._white_since is not None and now - self._white_since > WHITE_STAGE_MAX_S:
                         self._end_white_stage(f"No end screen {WHITE_STAGE_MAX_S}s after the white "
                                               "flash - Continue uncovered.")
@@ -404,12 +430,15 @@ class BattleEndAutomation(threading.Thread):
                         time.sleep(WHITE_POLL_S)
                         continue
                     if in_battle and streak == 0:
-                        time.sleep(HUD_POLL_S)
+                        time.sleep(HUD_POLL_S if gear else WEAK_HUD_POLL_S)
                         continue
                     hot = (now - last_hud) < HOT_WINDOW_S or streak > 0
                     if hot and armed:
                         time.sleep(HOT_POLL_S)
-                    elif self._hud_unreliable and armed:
+                    elif armed and (self._hud_unreliable or not self._hud_ever_seen) and is_foreground(hwnd):
+                        # No working HUD check to say a battle is on (a new
+                        # PC, a game update): look for BATTLE LOG often
+                        # while the game has the focus, not every 1.5 s.
                         time.sleep(HUDLESS_POLL_S)
                     else:
                         time.sleep(COLD_POLL_S)
@@ -459,9 +488,12 @@ class BattleEndAutomation(threading.Thread):
             self._drop_cover()
             return
 
-        # The blocker is always-on-top, so only show it while the game is the
-        # focused window (it used to sit over other apps while the game was in
-        # the background). Never click into another app either.
+        # Cover Continue before anything else whenever the game shows there,
+        # focused or not: the click that brings the game to the front would
+        # otherwise press Continue. Never click into another app, though.
+        early = self._cover is not None
+        if self._cover is None and can_cover_continue(hwnd, rect):
+            self._cover = self.launch_blocker(wait_s=0)
         deadline = time.time() + FOREGROUND_WAIT_S
         while not is_foreground(hwnd):
             if time.time() > deadline or self._stop.is_set():
@@ -477,10 +509,12 @@ class BattleEndAutomation(threading.Thread):
         # it already is: the cover went up on the template hit, before OCR).
         blocker, self._cover = self._cover, None
         if blocker is not None:
-            if white_since is not None:
+            if white_since is not None and early:
                 self.log(f"Continue covered since the white flash ({seen_at - white_since:.2f}s before BATTLE LOG).")
-            else:
+            elif early:
                 self.log("Continue covered on the template hit, before the text check.")
+            else:
+                self.log("Continue covered as soon as BATTLE LOG was confirmed.")
             self.wait_blocker(blocker)
         else:
             blocker = self.launch_blocker()
@@ -488,10 +522,10 @@ class BattleEndAutomation(threading.Thread):
             exported = self._click_sequence(sct, hwnd, rect, seen_at)
             self.log("Auto-export complete." if exported else "Auto-export did not confirm a clipboard capture.")
         finally:
-            self.close_blocker(blocker)
-            # Reload a hidden standby blocker straight away, so a re-detected
-            # end screen (or the next battle) never needs a cold start.
+            # Reload a hidden standby blocker first, so a re-detected end
+            # screen (or the next battle) never needs a cold start.
             self.prewarm_blocker()
+            self.close_blocker(blocker)
 
     def _button_still_there(self, sct, rect):
         """Template only: this end screen already passed the OCR check, and
