@@ -8169,7 +8169,7 @@ class StatsWindow(QWidget):
         update = current is not None
         fixed = bool(deck_name)          # the deck is decided: no choice to show
         dialog = GlassPanel(self, "Update decklist" if update else "Import decklist",
-                            size=(430, 280) if fixed else (440, 400),
+                            size=(430, 280) if fixed else (440, 470),
                             pill_text="Waiting for the new list on your clipboard…" if update
                             else "Waiting for a decklist on your clipboard…")
         self._decklist_panel = dialog
@@ -8196,7 +8196,12 @@ class StatsWindow(QWidget):
             "QPushButton#primary:disabled { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.35); }"
             "QPushButton#secondary { background: transparent; border: 1px solid rgba(255,255,255,0.16);"
             " border-radius: 6px; color: #D6DAE0; padding: 7px 16px; }"
-            "QPushButton#secondary:hover { border-color: rgba(255,255,255,0.32); color: #FFFFFF; }")
+            "QPushButton#secondary:hover { border-color: rgba(255,255,255,0.32); color: #FFFFFF; }"
+            "QCheckBox { color: rgba(235,242,250,0.88); font-size: 12px; spacing: 8px; background: transparent; }"
+            "QCheckBox:disabled { color: rgba(235,242,250,0.38); }"
+            "QCheckBox::indicator { width: 14px; height: 14px; border-radius: 4px;"
+            " border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.05); }"
+            "QCheckBox::indicator:checked { background: rgba(74,159,216,0.75); border-color: rgba(74,159,216,0.85); }")
         col = QVBoxLayout(dialog.content)
         col.setContentsMargins(18, 12, 18, 14)
         col.setSpacing(10)
@@ -8244,6 +8249,19 @@ class StatsWindow(QWidget):
         upd_btn.body.addWidget(preview)
         choice_col.addWidget(new_btn)
         choice_col.addWidget(upd_btn)
+        # Where it goes: the game, the app, or both (as in the shared-deck box).
+        import game_window
+        from edition import APP_NAME
+        game_open = bool(game_window.find_game_hwnd())
+        to_game = QCheckBox("Add it to Pokémon TCG Live")
+        to_game.setChecked(game_open)
+        to_game.setEnabled(game_open)
+        to_game.setToolTip("" if game_open else "Open Pokémon TCG Live to add it there too")
+        to_app = QCheckBox(f"Add it to {APP_NAME}")
+        to_app.setChecked(True)
+        choice_col.addSpacing(2)
+        choice_col.addWidget(to_game)
+        choice_col.addWidget(to_app)
 
         def pick(card):
             for c in (new_btn, upd_btn):
@@ -8361,9 +8379,14 @@ class StatsWindow(QWidget):
             updating = upd_btn.isChecked() and not fixed
             name_edit.setVisible(not updating and not fixed)
             deck_combo.setVisible(updating)
+            to_game.setText("Add the new version to Pokémon TCG Live" if updating else "Add it to Pokémon TCG Live")
+            to_app.setText(f"Update it in {APP_NAME}" if updating else f"Add it to {APP_NAME}")
             preview.setText("")
             if not text:
                 primary.setEnabled(False)
+                return
+            if not fixed and not to_app.isChecked() and not (to_game.isChecked() and to_game.isEnabled()):
+                primary.setEnabled(False)   # nowhere to put it
                 return
             deck = target()
             old = decklist_for_deck(deck) if deck else None
@@ -8400,6 +8423,18 @@ class StatsWindow(QWidget):
             # On the pill, let its check pop land before the panel opens.
             QTimer.singleShot(750 if dialog._collapsed else 0, open_up)
 
+        def to_the_game(text, name):
+            """Add it to Pokémon TCG Live: the shared-deck importer drives the
+            game; the panel and the dashboard step out of its way."""
+            import subprocess
+            import deck_link
+            import deck_share
+            link = deck_share.share_url(text, name, web=False)
+            subprocess.Popen([deck_link._gui_python(), os.path.join(BASE_DIR, "deck_link.py"), link, "--to-game"],
+                             cwd=BASE_DIR)
+            dialog.close()
+            self.minimize_to_overlay()
+
         def accept():
             if state["done"]:
                 dialog.close()
@@ -8408,6 +8443,21 @@ class StatsWindow(QWidget):
             if not text:
                 return
             deck = target()
+            game = (not fixed) and to_game.isChecked() and to_game.isEnabled()
+            if not fixed and not to_app.isChecked():
+                if game:   # only the game
+                    to_the_game(text, deck or game_deck_name(name_edit.text()) or game_deck_name(auto_name(text)))
+                return
+            if game:
+                name = deck or game_deck_name(name_edit.text()) or game_deck_name(auto_name(text))
+                if deck and decklist_for_deck(deck) is not None:
+                    import_decklist(text, deck)
+                else:
+                    import_decklist(text, name)
+                self._deck_dashboards_dirty = True
+                QTimer.singleShot(0, self._refresh_deck_dashboards)
+                to_the_game(text, name)
+                return
             old = decklist_for_deck(deck) if deck else None
             if old is not None:
                 if list_id(text) == old.get("id"):
@@ -8460,6 +8510,8 @@ class StatsWindow(QWidget):
         clipboard.dataChanged.connect(check_clipboard)
         deck_combo.currentIndexChanged.connect(refresh)
         name_edit.textChanged.connect(refresh)
+        to_game.toggled.connect(refresh)
+        to_app.toggled.connect(refresh)
         edit.textChanged.connect(paste_changed)
         manual_btn.clicked.connect(toggle_manual)
         cancel.clicked.connect(dialog.close)

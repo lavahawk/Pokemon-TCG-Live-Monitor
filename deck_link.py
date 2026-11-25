@@ -360,6 +360,10 @@ def main(argv):
     # --from-clipboard: the HUD asked about a copied list and you said Import.
     # A list you saved before (without a deck) still goes into the game.
     from_clipboard = "--from-clipboard" in argv[2:]
+    # --to-game: the dashboard's import panel saved it already; only add it to
+    # the game (no box first, just the import and its outcome).
+    to_game_only = "--to-game" in argv[2:]
+    from_clipboard = from_clipboard or to_game_only
     try:
         cards, shared_name = deck_share.parse(link)
         import decklists
@@ -586,7 +590,7 @@ def main(argv):
                             else f"saved as {entry['name']}.") + (
                                 f" {deck_name} is on your Decks tab." if deck_name else "")
         else:
-            monitor_line = "not added."
+            monitor_line = "saved." if to_game_only else "not added."
         QGuiApplication.clipboard().setText(text)
         if not (to_game.isChecked() and game_window.find_game_hwnd()):
             finish(monitor_line)
@@ -617,11 +621,18 @@ def main(argv):
     buttons.addWidget(cancel)
     buttons.addWidget(primary)
     box.addLayout(buttons)
-    dialog.setWindowOpacity(0.0)
-    dialog.show()
-    dialog.raise_()
-    dialog.activateWindow()
-    fade(dialog, 0.0, 1.0, 220)
+    if to_game_only and game_open:
+        target.setCurrentIndex(0)
+        to_app.setChecked(False)
+        to_game.setChecked(True)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, do_import)
+    else:
+        dialog.setWindowOpacity(0.0)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        fade(dialog, 0.0, 1.0, 220)
     # The app's loop, not dialog.exec(): the dialog hides while the import
     # drives the game, and hiding would end exec() (and this process).
     outcome = {}
