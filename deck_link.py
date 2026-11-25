@@ -466,8 +466,9 @@ def main(argv):
         return 1
 
     import decklists
-    name_field = QLineEdit(name or decklists.auto_name(text))
-    name_field.setMaxLength(deck_share.MAX_NAME)
+    # The game's limit, so the deck has the same name in both places.
+    name_field = QLineEdit(decklists.game_deck_name(name or decklists.auto_name(text)))
+    name_field.setMaxLength(decklists.GAME_NAME_MAX)
     box.addWidget(name_field)
     import game_window
     from edition import APP_NAME

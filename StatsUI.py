@@ -8247,7 +8247,9 @@ class StatsWindow(QWidget):
                 line.setContentsMargins(0, 0, 0, 0)
                 box = QCheckBox()
                 box.setChecked(True)
-                name = QLineEdit(auto_name(text))
+                from decklists import GAME_NAME_MAX, game_deck_name
+                name = QLineEdit(game_deck_name(auto_name(text)))
+                name.setMaxLength(GAME_NAME_MAX)   # the game's own limit
                 name.setToolTip("The deck's name in Pokémon TCG Live")
                 box.toggled.connect(name.setEnabled)
                 box.toggled.connect(lambda *_: update_import())
@@ -8266,10 +8268,12 @@ class StatsWindow(QWidget):
             for box, name_edit, text in picks:
                 if not box.isChecked():
                     continue
-                name = " ".join(name_edit.text().split()) or auto_name(text)
+                from decklists import GAME_NAME_MAX, game_deck_name
+                name = game_deck_name(name_edit.text() or auto_name(text))
                 base, n = name, 2
                 while name.lower() in used:
-                    name, n = f"{base} ({n})", n + 1
+                    tail = f" ({n})"
+                    name, n = base[:GAME_NAME_MAX - len(tail)].rstrip() + tail, n + 1
                 used.add(name.lower())
                 entry = import_decklist(text, name)
                 rename_decklist(entry["id"], name)

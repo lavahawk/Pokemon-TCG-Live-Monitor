@@ -5,6 +5,7 @@ Run **`PokemonTCGLiveMonitor-2.15.16-Free-Setup.exe`**. Install over any 2.x ver
 
 ## What's new in 2.15.16
 - **A decklist you copy from a website now really gets imported.** Copy a list from Limitless, a chat or anywhere outside the game and press **Import** on the card that pops up: the import box opens, like it does for a shared deck link. Give the deck a name and it goes into Pokémon TCG Live (with your Import settings choice) and onto the app's Decks tab. Before, Import only filed the list away with your saved decklists. Lists you export from the game itself are still just saved, since that deck is already in the game.
+- **Imported deck names fit the game.** Pokémon TCG Live cuts deck names at 22 characters ("Teal Mask Ogerpon ex /"), so the import boxes now stop there too and the deck has the same name in the game and in the app. You can still rename a deck in the app to anything you like.
 
 ## What's new in 2.15.15
 - **Your rank is only read on the Home screen.** The app used to treat any screen with the top menu bar (Decks, Profile, Shop…) as the main menu, because those words are on all of them; on the Decks screen it could read a card as your rank. It now checks that **HOME** is the highlighted tab before it reads anything.

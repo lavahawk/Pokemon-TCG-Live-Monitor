@@ -492,7 +492,8 @@ class PTCGLImporter:
         self._click(screen, field)
         self._key(0x23)        # End
         self._key(0x08, 40)    # Backspace the old name
-        self._type(self.name[:30])
+        from decklists import game_deck_name
+        self._type(game_deck_name(self.name))
         # Done sits on the row of buttons just under the name field, right of
         # the heading's centre: read only that strip (fast, few look-alikes).
         heading = _heading

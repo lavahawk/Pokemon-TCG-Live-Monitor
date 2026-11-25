@@ -281,6 +281,14 @@ def test_regression_null_lists_in_store():
     reset_store()
 
 
+def test_game_deck_name():
+    assert D.GAME_NAME_MAX == 22
+    assert D.game_deck_name("Teal Mask Ogerpon ex / Dragapult ex") == "Teal Mask Ogerpon ex /"
+    assert D.game_deck_name("  Gardevoir   ex ") == "Gardevoir ex"
+    assert D.game_deck_name("Teal Mask Ogerpon exx  Box") == "Teal Mask Ogerpon exx"   # no trailing space
+    assert D.game_deck_name("") == ""
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):

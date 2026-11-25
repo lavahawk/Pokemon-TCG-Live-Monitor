@@ -93,6 +93,17 @@ def list_id(text):
     return hashlib.sha1(canon.encode("utf-8")).hexdigest()[:12]
 
 
+# Pokémon TCG Live's deck names stop at 22 characters ("Teal Mask Ogerpon ex /").
+# Imported decks get a name that fits, so the app's name and the game's match;
+# you can still rename a deck in the app to anything.
+GAME_NAME_MAX = 22
+
+
+def game_deck_name(name):
+    """`name` cut to what the game's deck name field takes."""
+    return " ".join((name or "").split())[:GAME_NAME_MAX].rstrip()
+
+
 def auto_name(text):
     """A readable name from the list itself: its main Pokemon (the most
     copies of a rule-box Pokemon, else of any Pokemon), plus a partner."""
