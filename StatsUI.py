@@ -9286,7 +9286,10 @@ class StatsWindow(QWidget):
         page = getattr(self, "replay_page", None)
         if view is None or page is None or view.width() < 50 or view.height() < 50:
             return
-        focus = self._replay_board_focus()
+        # The custom layout gave up on this game (the site changed under
+        # it): show the site as the site draws it.
+        broken = getattr(self, "_replay_layout_broken", False)
+        focus = self._replay_board_focus() and not broken
         if focus:
             zoom = 1.0   # the page script sizes the board itself
         else:
@@ -9301,7 +9304,8 @@ class StatsWindow(QWidget):
         try:
             if "ptcglreplay.com" in page.url().toString() and self._replay_script():
                 page.runJavaScript(self._replay_script())
-                page.runJavaScript(f"window.__tlm && window.__tlm.setFocus({'true' if focus else 'false'})")
+                if not broken:
+                    page.runJavaScript(f"window.__tlm && window.__tlm.setFocus({'true' if focus else 'false'})")
         except Exception:
             pass
 
@@ -9313,6 +9317,7 @@ class StatsWindow(QWidget):
     def _sync_replay_focus_button(self):
         btn = getattr(self, "replay_focus_btn", None)
         if btn is not None:
+            btn.setEnabled(not getattr(self, "_replay_layout_broken", False))
             focus = self._replay_board_focus()
             btn.setText("Side panels" if focus else "Full board")
             btn.setToolTip("Show the site's controls, card detail and action log beside the board" if focus
@@ -9322,7 +9327,8 @@ class StatsWindow(QWidget):
     REPLAY_STATE_JS = """(() => {
         const r = document.querySelector('input[type="range"]');
         if (!r) return JSON.stringify({ok: false});
-        const out = {ok: true, value: Number(r.value), max: Number(r.max)};
+        const out = {ok: true, value: Number(r.value), max: Number(r.max),
+                     broken: !!(window.__tlm && window.__tlm.broken)};
         if (%s) {
             // Text by its leaf elements, not innerText: the log is hidden in
             // the full-board layout, and hidden text has no line breaks.
@@ -9363,7 +9369,15 @@ class StatsWindow(QWidget):
                 self._replay_zoom_timer.start()
             self._replay_actions_max = -1
             timeline.set_actions([])
+            if getattr(self, "_replay_layout_broken", False):
+                self._replay_layout_broken = False   # the next game gets the custom layout again
+                self._sync_replay_focus_button()
             return
+        if d.get("broken") and not getattr(self, "_replay_layout_broken", False):
+            print("[Replay] custom board layout didn't fit the site; showing the site's own layout")
+            self._replay_layout_broken = True
+            self._sync_replay_focus_button()
+            self._replay_zoom_timer.start()
         if d.get("max") != self._replay_actions_max:
             self._replay_actions_max = -1   # a new game: read its actions again
         if "actions" in d:
@@ -10334,37 +10348,58 @@ class StatsWindow(QWidget):
     # replay site's own credits line (it took room from the board), so the
     # thanks and its links live here.
     CREDITS = (
+        ("Limitless TCG", "built by Robin Schulz",
+         "Robin writes the site and keeps its database going, and David Hochmann handles the Japanese "
+         "cards and results. They've been at it since 2017. Online tournaments, decklists, meta numbers, "
+         "card images and the whole Limitless Dashboard tab (check-in, match chat, your opponent's list) "
+         "all come from them.",
+         (("limitlesstcg.com", "https://limitlesstcg.com/"),
+          ("Robin on X", "https://x.com/limitless_robin"),
+          ("@limitlesstcg", "https://x.com/limitlesstcg"),
+          ("Patreon", "https://www.patreon.com/limitlesstcg"))),
         ("PTCGL Replay", "by serukaizen",
-         "The game viewer in the Replay tab: every battle, played back card by card.",
+         "When you rewatch a game in the Replay tab you're using serukaizen's viewer; the board, the log "
+         "and the card art are theirs. The app just adds the timeline under it.",
          (("ptcglreplay.com", "https://www.ptcglreplay.com/"),
           ("Buy them a rare candy 🍬", "https://ko-fi.com/serukaizen"))),
-        ("TCGdex", "",
-         "The card pictures in the replay viewer.",
-         (("tcgdex.dev", "https://tcgdex.dev/"),)),
-        ("Limitless TCG", "",
-         "Tournaments, decklists, the meta data, card images, Japan results and the Limitless Dashboard "
-         "(check-in, match chat, opponent decklists).",
-         (("limitlesstcg.com", "https://limitlesstcg.com/"), ("play.limitlesstcg.com", "https://play.limitlesstcg.com/"))),
-        ("TrainerHill", "",
-         "Meta trends and deck tools in the TrainerHill tab.",
-         (("trainerhill.com", "https://www.trainerhill.com/"),)),
+        ("TrainerHill", "by Brad",
+         "Brad, a lifelong Pokémon fan and tournament player, has run TrainerHill on his own since "
+         "December 2020. The meta trends and deck tools in the TrainerHill tab are his.",
+         (("trainerhill.com", "https://www.trainerhill.com/"),
+          ("@Trainer_Hill", "https://x.com/Trainer_Hill"),
+          ("Patreon", "https://www.patreon.com/trainerhill"),
+          ("Buy Me a Coffee", "https://buymeacoffee.com/trainerhill"))),
+        ("TCGCSV", "by CptSpaceToaster",
+         "A one-person hobby project that republishes TCGplayer's prices every day. Every price you see "
+         "on a decklist here is pulled from it.",
+         (("tcgcsv.com", "https://tcgcsv.com/"),
+          ("Patreon", "https://www.patreon.com/TCGCSV"),
+          ("GitHub", "https://github.com/CptSpaceToaster/tcgcsv"))),
+        ("TCGdex", "led by Avior",
+         "An open source card database that Avior and a crowd of volunteers add every new set to. "
+         "It supplies the card pictures inside the replay viewer.",
+         (("tcgdex.dev", "https://tcgdex.dev/"),
+          ("GitHub", "https://github.com/tcgdex/cards-database"),
+          ("Sponsor", "https://github.com/sponsors/tcgdex"))),
         ("PokeData", "",
-         "In-person tournament results in the PokeData and In Person tabs.",
+         "Reads RK9 pairings while an in-person event is still running and turns them into live standings. "
+         "That's where the PokeData and In Person tabs get their results.",
          (("pokedata.ovh", "https://www.pokedata.ovh/"),)),
         ("Pokecabook & pokemon-card.com", "",
-         "Japanese tournament decks in the Japan Data tab.",
+         "Pokecabook posts the decks from Japanese tournaments, and pokemon-card.com is the official "
+         "Japanese card site. Between them they fill the Japan Data tab.",
          (("pokecabook.com", "https://pokecabook.com/"), ("pokemon-card.com", "https://www.pokemon-card.com/"))),
         ("PokeSprite & PokeAPI", "",
-         "The Pokémon sprites next to deck names.",
-         (("PokeSprite", "https://github.com/bradley-erickson/pokesprite"), ("pokeapi.co", "https://pokeapi.co/"))),
-        ("TCGCSV", "",
-         "Card prices for decklists.",
-         (("tcgcsv.com", "https://tcgcsv.com/"),)),
+         "Michiel Sikma started the PokeSprite collection years ago; the little Pokémon next to deck names "
+         "come from Bradley Erickson's fork of it, and PokeAPI covers the Pokémon data behind them.",
+         (("PokeSprite", "https://github.com/msikma/pokesprite"),
+          ("the fork we use", "https://github.com/bradley-erickson/pokesprite"),
+          ("pokeapi.co", "https://pokeapi.co/"))),
         ("Tesseract OCR", "UB Mannheim build",
-         "Reads your rank and deck name from the game's screen.",
+         "Reads your rank and deck name off the game screen.",
          (("tesseract-ocr", "https://github.com/tesseract-ocr/tesseract"),)),
         ("Qt for Python", "PySide6",
-         "Every window in the app, and its built-in browser.",
+         "Every window in the app, plus the browser inside it.",
          (("qt.io", "https://www.qt.io/qt-for-python"),)),
         ("Fonts", "Geist, Geist Mono, JetBrains Mono, Mona Sans",
          "Under the SIL Open Font License.",
@@ -10377,7 +10412,9 @@ class StatsWindow(QWidget):
         body = QVBoxLayout()
         body.setContentsMargins(16, 4, 16, 14)
         body.setSpacing(0)
-        intro = QLabel("This app stands on a lot of other people's hard work. Go show them some love.")
+        intro = QLabel("Most of what you see in this app comes from people who build Pokémon tools in their spare time, "
+                       "usually for free. If one of them saves you an hour before a tournament, a follow or a couple "
+                       "of bucks goes a long way.")
         intro.setWordWrap(True)
         intro.setStyleSheet("color: rgba(235,242,250,0.7); font-size: 12px; padding-bottom: 8px;")
         body.addWidget(intro)

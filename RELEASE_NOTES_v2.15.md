@@ -1,7 +1,13 @@
-# Pokemon TCG Live Monitor v2.15.10
+# Pokemon TCG Live Monitor v2.15.11
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.10-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.11-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.11
+- **A much bigger replay board, staggered so you can tell the sides apart.** The Replay tab hides the side panels and staggers the two boards: your opponent's up and to the left with a red outline, yours down and to the right with a blue one and a **You** tag, and the turn and stadium bar between them. Each hand sits in the corner beside its own board. The board resizes with the window to the biggest size that fits. **Side panels** (on the timeline) brings back the replay site's controls, card detail and action log; your choice is kept. If the replay site ever changes and the custom layout stops fitting, the tab falls back to the site's own layout on its own.
+- **A replay timeline with highlights.** A bar across the bottom steps through the game one action at a time (click, drag, mouse wheel, or the arrow keys). It shows each turn, coloured by player, and marks the big moments: knock outs, prizes taken, attacks and evolutions. **◀ Highlight / Highlight ▶** (or Shift+arrows) jump between them, and hovering shows what happened at that point.
+- The Replay tab's header row steps aside once a replay is loaded (more room for the board); **Open in browser** is on the timeline.
+- **Thanks to:** the Support tab now credits the people behind the projects the app runs on (Robin Schulz and the Limitless team, serukaizen's replay viewer, Brad at TrainerHill, TCGCSV, TCGdex, PokeData and more), with links to their sites, socials and Patreon or Ko-fi pages.
 
 ## What's new in 2.15.10
 - **Fewer antivirus false alarms.** Updates no longer run the installer invisibly from the Temp folder: the download goes to the app's own folder in AppData and the installer shows its progress window while it updates. The installer stops the running app without starting PowerShell, and 39 unused helper programs that came with Python's packages (pip.exe and the like) are no longer installed. Everything works as before. If you'd rather updates install with no window at all, turn on **Settings → Advanced → Install updates in the background**.
