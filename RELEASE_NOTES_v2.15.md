@@ -1,7 +1,11 @@
-# Pokemon TCG Live Monitor v2.15.14
+# Pokemon TCG Live Monitor v2.15.15
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.14-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.15-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.15
+- **Your rank is only read on the Home screen.** The app used to treat any screen with the top menu bar (Decks, Profile, Shop…) as the main menu, because those words are on all of them; on the Decks screen it could read a card as your rank. It now checks that **HOME** is the highlighted tab before it reads anything.
+- **Fixed: the rank after a battle was sometimes not saved.** When the deck name under your rank couldn't be read in time, the whole reading was dropped. On a confirmed Home screen the rank is now kept even if the deck name is missed.
 
 ## What's new in 2.15.14
 - **Bring all your decks in at once.** The first time you open the Decks tab with no games and no decklists, import mode starts: in Pokémon TCG Live, export each deck you play (Decks → the deck → Export → Copy to clipboard) and each one drops into a list, with no question every time. Press **Done**, untick the ones you don't want, give each the name it has in the game, and **Import**. They show up on the Decks tab straight away with their lists, before you've played them, and fill in with stats once you do. **Skip** ends it; you can start it again any time from the empty Decks tab or **＋ Import decklist → Import several decks at once**.

@@ -551,6 +551,8 @@ def _count_menu_misses(checks, misses):
     failed = []
     if "menu_text" in checks and not checks["menu_text"]:
         failed.append("menu_text")
+    elif checks.get("home_tab") is False:
+        failed.append("home_tab (another menu screen)")
     if "rank" in checks and not (checks["rank"] is not None and 0 < checks["rank"] < 99999):
         failed.append("rank")
     if "deck_name" in checks and (checks["deck_name"] is None or len(checks["deck_name"].strip()) < 3):

@@ -252,10 +252,16 @@ class RankDetector:
                 "menu_text",
                 ["PLAY", "SHOP", "CARDS", "BATTLE PASS", "DECK", "RANKED"]
             )
-            validations.append(("menu_text", menu_found))
             checks["menu_text"] = menu_found
+            if menu_found:
+                # The nav words are on every menu screen: HOME must be the lit tab.
+                home = home_tab_active(self.capture_region("menu_text"))
+                checks["home_tab"] = home
+                if home is False:
+                    menu_found = False
+            validations.append(("menu_text", menu_found))
             if debug:
-                print(f"  Menu text validation: {menu_found}")
+                print(f"  Menu text validation: {menu_found} (home tab: {checks.get('home_tab')})")
         if short_circuit and not menu_found:
             return False
 
@@ -285,8 +291,11 @@ class RankDetector:
         if validation_method == "any":
             return any(result for _, result in validations)
         elif validation_method == "auto" or validation_method == "strict":
-            # v2.0: Require ALL THREE elements to be present
-            # This prevents false positives from other screens
+            # Home confirmed by its lit tab: the rank is enough (the deck
+            # name is read when it can be; a miss used to drop the post-battle
+            # rank, 24 Nov 2026). Without that confirmation, all three.
+            if checks.get("home_tab") is True:
+                return rank_valid and menu_found
             return rank_valid and menu_found and deck_found
         else:
             # Check specific method
@@ -586,6 +595,33 @@ def _looks_like_name(text):
     """At least 3 letters/digits, and mostly letters/digits (junk is symbols)."""
     alnum = sum(ch.isalnum() for ch in text)
     return alnum >= 3 and alnum >= 0.7 * len(text.replace(" ", ""))
+
+
+def home_tab_active(image):
+    """Is HOME the highlighted tab in the menu_text crop (the nav bar's
+    left end)? True / False, or None when the crop has no highlight at all.
+
+    The nav bar (HOME, DECKS, PROFILE, SHOP, BATTLE PASS…) is on every menu
+    screen, so its words alone don't say which one is up: on 24 Nov 2026 the
+    Decks screen passed as the main menu and a card's text was read as rank 1.
+    The current tab is yellow and underlined; HOME is the first tab, so on
+    Home the yellow sits in the crop's left part, on Decks to its right."""
+    try:
+        a = np.asarray(image.convert("RGB")).astype(np.int16)
+    except Exception:
+        return None
+    if a.ndim != 3 or a.shape[0] < 4 or a.shape[1] < 20:
+        return None
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    yellow = (r > 170) & (g > 160) & (b < 120) & ((r - b) > 80)
+    yellow[yellow.mean(axis=1) > 0.6] = False   # the gold line under the nav bar runs the full width
+    if yellow.mean() < 0.004:
+        return None
+    xs = np.nonzero(yellow)[1]
+    return bool(xs.mean() / a.shape[1] < HOME_TAB_MAX_X)
+
+
+HOME_TAB_MAX_X = 0.55   # Home: yellow centred ~0.36 across the crop; Decks: ~0.77
 
 
 def read_deck_name_image(image):
