@@ -913,7 +913,17 @@ def main():
     parser.add_argument("--headless", action="store_true", help="No console UI (used by auto-start)")
     parser.add_argument("--no-overlay", action="store_true", help="Do not start the overlay")
     parser.add_argument("--ocr-test", action="store_true", help="Run a one-shot OCR diagnostic and exit")
+    parser.add_argument("--watchdog", action="store_true",
+                        help="Started by the watchdog task: exit quietly if already running or closed on purpose")
     args = parser.parse_args()
+
+    if args.watchdog:
+        import startup_utils
+        if startup_utils.stopped_on_purpose(BASE_DIR):
+            return 0
+        if not startup_utils.is_registry_registered():
+            startup_utils.remove_watchdog()   # auto-start was turned off
+            return 0
 
     setup_output()
     if args.ocr_test:
@@ -921,9 +931,23 @@ def main():
         return 0
 
     if not acquire_single_instance():
-        log("Another monitor instance is already running - exiting.")
+        if not args.watchdog:   # the watchdog checks every few minutes: no log line each time
+            log("Another monitor instance is already running - exiting.")
         return 0
     write_text(PID_FILE, os.getpid())
+    if args.watchdog:
+        log("Watchdog: the monitor wasn't running - started it again.")
+
+    def keep_watchdog():
+        try:
+            import startup_utils
+            startup_utils.clear_stopped(BASE_DIR)
+            result = startup_utils.ensure_watchdog(BASE_DIR)
+            if result in ("added", "removed"):
+                log(f"Watchdog task {result}.")
+        except Exception as exc:
+            log(f"Watchdog setup failed: {exc}")
+    threading.Thread(target=keep_watchdog, daemon=True, name="watchdog-setup").start()
     try:
         import deck_link
         if deck_link.register():

@@ -369,6 +369,9 @@ var
   ResultCode: Integer;
 begin
   Result := '';
+  // The watchdog would start the old copy mid-update; the app adds it back
+  // when it next starts.
+  Exec('schtasks.exe', '/delete /tn "PokemonTCGLiveMonitor_Watchdog" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   StopRunningCopies(ExpandConstant('{app}'));
   // Scheduled tasks created by v2.0-2.4 (per-user ones; elevated ones are
   // removed by the app itself when it next changes the auto-start setting).
@@ -432,10 +435,12 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Dir: String;
+  ResultCode: Integer;
 begin
   Dir := ExpandConstant('{app}');
   if CurUninstallStep = usUninstall then
   begin
+    Exec('schtasks.exe', '/delete /tn "PokemonTCGLiveMonitor_Watchdog" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     StopRunningCopies(Dir);
     if RunValueIsOurs(Dir) then
       RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}');

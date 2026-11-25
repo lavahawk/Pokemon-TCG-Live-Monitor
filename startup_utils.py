@@ -24,6 +24,17 @@ LEGACY_TASK_NAMES = (
     "PokemonLiveHelper",
 )
 MONITOR_SCRIPT_NAME = "TCGLiveMonitor.py"
+# Relaunches the monitor every few minutes if it isn't running (killed,
+# crashed, closed with the program that started it). Created and kept by the
+# monitor itself while auto-start is on.
+WATCHDOG_TASK_NAME = "PokemonTCGLiveMonitor_Watchdog"
+WATCHDOG_MINUTES = 5
+# Written when the user closes the app on purpose: the watchdog leaves it
+# closed until the next sign-in or a normal launch.
+STOPPED_MARKER = ".monitor_stopped"
+
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def find_install_root(explicit_base: str | os.PathLike[str] | None = None) -> Path:
@@ -282,6 +293,8 @@ def enable_startup(root: str | os.PathLike[str] | None = None) -> dict:
     # Keep the current task if it was just created as the fallback (BUG-016);
     # if the registry worked, the current task is redundant and removed too.
     _, removed_tasks, _ = remove_task(include_current=reg_ok)
+    if reg_ok:
+        add_watchdog(install_root)
 
     return {
         "root": install_root,
@@ -295,9 +308,193 @@ def enable_startup(root: str | os.PathLike[str] | None = None) -> dict:
     }
 
 
+def _registry_command() -> str:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_KEY) as key:
+            return str(winreg.QueryValueEx(key, REG_VALUE)[0] or "")
+    except OSError:
+        return ""
+
+
+def _same_command(a: str, b: str) -> bool:
+    return " ".join(a.lower().split()) == " ".join(b.lower().split())
+
+
+def startup_is_ours(root: str | os.PathLike[str]) -> bool:
+    """Auto-start is on and launches this copy (not another install or checkout)."""
+    _, _, command = build_headless_command(root)
+    return bool(command) and _same_command(_registry_command(), command)
+
+
+def _xml_text(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def watchdog_xml(root: str | os.PathLike[str]) -> str | None:
+    """Task Scheduler XML for the watchdog. Unlike schtasks' defaults it runs
+    on battery, never stops the monitor (no time limit, no battery stop) and
+    at normal priority (the default 7 would slow the overlay)."""
+    python, script, _ = build_headless_command(root)
+    if not python:
+        return None
+    if getattr(sys, "frozen", False):
+        command, arguments = str(python), "--headless --watchdog"
+    else:
+        command, arguments = str(python), f'"{script}" --headless --watchdog'
+    return f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Starts Pokemon TCG Live Monitor again if it stopped running.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <TimeTrigger>
+      <StartBoundary>2025-01-01T00:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <Repetition>
+        <Interval>PT{WATCHDOG_MINUTES}M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>false</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{_xml_text(command)}</Command>
+      <Arguments>{_xml_text(arguments)}</Arguments>
+      <WorkingDirectory>{_xml_text(str(Path(root)))}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"""
+
+
+def _watchdog_action() -> str:
+    """The registered watchdog's command line ("" when there is none)."""
+    result = subprocess.run(["schtasks", "/query", "/tn", WATCHDOG_TASK_NAME, "/xml"],
+                            capture_output=True, text=True, creationflags=_NO_WINDOW)
+    if result.returncode != 0:
+        return ""
+    import re
+    import html
+    command = re.search(r"<Command>(.*?)</Command>", result.stdout, re.S)
+    arguments = re.search(r"<Arguments>(.*?)</Arguments>", result.stdout, re.S)
+    return html.unescape(((command.group(1) if command else "") + " " +
+                          (arguments.group(1) if arguments else "")).strip())
+
+
+def add_watchdog(root: str | os.PathLike[str]) -> tuple[bool, str | None]:
+    xml = watchdog_xml(root)
+    if not xml:
+        return False, "pythonw.exe was not found."
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".xml")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-16") as fh:
+            fh.write(xml)
+        result = subprocess.run(["schtasks", "/create", "/tn", WATCHDOG_TASK_NAME, "/xml", path, "/f"],
+                                capture_output=True, text=True, creationflags=_NO_WINDOW)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if result.returncode == 0:
+        return True, None
+    return False, (result.stderr or result.stdout or "Unknown error").strip()
+
+
+def remove_watchdog() -> bool:
+    result = subprocess.run(["schtasks", "/delete", "/tn", WATCHDOG_TASK_NAME, "/f"],
+                            capture_output=True, text=True, creationflags=_NO_WINDOW)
+    return result.returncode == 0
+
+
+def ensure_watchdog(root: str | os.PathLike[str]) -> str:
+    """Keep the watchdog in step with auto-start: there (launching this copy)
+    while auto-start launches this copy, gone when auto-start is off. Another
+    copy's watchdog (e.g. the installed app while a dev checkout runs) is left
+    alone. Returns what it did: "ok", "added", "removed" or "skipped"."""
+    if os.name != "nt":
+        return "skipped"
+    python, script, _ = build_headless_command(root)
+    if not python:
+        return "skipped"
+    if not is_registry_registered():
+        return "removed" if remove_watchdog() else "skipped"
+    if not startup_is_ours(root):
+        return "skipped"
+    wanted = (f'{python} --headless --watchdog' if getattr(sys, "frozen", False)
+              else f'{python} "{script}" --headless --watchdog')
+    if _same_command(_watchdog_action(), wanted):
+        return "ok"
+    return "added" if add_watchdog(root)[0] else "skipped"
+
+
+def run_watchdog_now() -> bool:
+    """Start the monitor through the watchdog task: its parent is then Task
+    Scheduler, so it never dies with whatever asked for the restart."""
+    result = subprocess.run(["schtasks", "/run", "/tn", WATCHDOG_TASK_NAME],
+                            capture_output=True, text=True, creationflags=_NO_WINDOW)
+    return result.returncode == 0
+
+
+def mark_stopped(root: str | os.PathLike[str]) -> None:
+    try:
+        Path(root, STOPPED_MARKER).write_text("closed by the user", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_stopped(root: str | os.PathLike[str]) -> None:
+    try:
+        Path(root, STOPPED_MARKER).unlink()
+    except OSError:
+        pass
+
+
+def stopped_on_purpose(root: str | os.PathLike[str]) -> bool:
+    """Closed by the user since this sign-in (a restart of Windows clears it)."""
+    marker = Path(root, STOPPED_MARKER)
+    try:
+        closed_at = marker.stat().st_mtime
+    except OSError:
+        return False
+    try:
+        import psutil
+        return closed_at > psutil.boot_time()
+    except Exception:
+        return True
+
+
 def disable_startup() -> dict:
     reg_ok, reg_error = remove_registry()
     task_ok, removed_tasks, task_errors = remove_task()
+    if remove_watchdog():
+        removed_tasks.append(WATCHDOG_TASK_NAME)
     return {
         "registry_ok": reg_ok,
         "registry_error": reg_error,

@@ -15530,6 +15530,8 @@ class StatsWindow(QWidget):
                 print("\n" + "="*50)
                 print("Closing TCG Live Monitor...")
                 print("="*50 + "\n")
+                # Closed on purpose: the watchdog leaves it closed until the next sign-in.
+                startup_utils.mark_stopped(BASE_DIR)
                 
                 # Try to terminate the monitor process
                 try:
