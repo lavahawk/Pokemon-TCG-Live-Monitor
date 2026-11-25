@@ -240,6 +240,74 @@ def list_changes(old_text, new_text):
     return sorted(changes, key=lambda c: (c[1] < 0, -abs(c[1]), c[0]))
 
 
+def _name_counts(text):
+    out = {}
+    for line in list_lines(text):
+        name = spelled_name(line["name"])
+        out[name] = out.get(name, 0) + line["qty"]
+    return out
+
+
+def list_similarity(a_text, b_text):
+    """0-1: copies the two lists share by card name, over the bigger list."""
+    a, b = _name_counts(a_text), _name_counts(b_text)
+    total = max(sum(a.values()), sum(b.values()))
+    return sum(min(n, b.get(c, 0)) for c, n in a.items()) / total if total else 0.0
+
+
+def decks_with_lists(extra_names=()):
+    """Names of your decks that have a list (linked, or exported while on the menu)."""
+    data = _load()
+    names = list(extra_names or ()) + list((data.get("links") or {}).keys())
+    names += [e.get("menu_deck") for e in data.get("lists") or [] if e.get("menu_deck")]
+    out, seen = [], set()
+    for name in names:
+        key = (name or "").strip().casefold()
+        if key and key not in seen and decklist_for_deck(name) is not None:
+            seen.add(key)
+            out.append(name)
+    return out
+
+
+UPDATE_SUGGEST_MIN = 0.6   # this much of the list in common: it's probably a new version of that deck
+
+
+def closest_deck(text, extra_names=(), min_share=UPDATE_SUGGEST_MIN):
+    """(deck name, similarity) of your deck whose list is most like `text`,
+    when it's at least min_share alike; else None."""
+    best = None
+    for name in decks_with_lists(extra_names):
+        share = list_similarity(decklist_for_deck(name).get("text") or "", text)
+        if best is None or share > best[1]:
+            best = (name, share)
+    return best if best and best[1] >= min_share else None
+
+
+def update_deck_list(deck_name, text):
+    """Give `deck_name` this list (its old one stays saved). Returns the
+    changes, as list_changes."""
+    old = decklist_for_deck(deck_name)
+    import_decklist(text, deck_name)
+    return list_changes((old or {}).get("text") or "", text)
+
+
+def changes_text(changes, limit=6, html_out=True):
+    """+1 Iono · −1 Haunter (the first `limit`)."""
+    import html as _html
+    parts = []
+    for name, delta in changes[:limit]:
+        sign = "+" if delta > 0 else "−"
+        if html_out:
+            color = "#66BB6A" if delta > 0 else "#EF9A9A"
+            parts.append(f"<span style='color:{color};font-weight:700'>{sign}{abs(delta)}</span> {_html.escape(name)}")
+        else:
+            parts.append(f"{sign}{abs(delta)} {name}")
+    more = len(changes) - limit
+    if more > 0:
+        parts.append(f"{more} more")
+    return " · ".join(parts) if parts else "same cards, other prints"
+
+
 def already_have(text):
     """The saved list with these cards, else None: the same list (any order),
     or the same cards by name in other prints. A list you have never asks to

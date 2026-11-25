@@ -29,6 +29,14 @@ class FakeHud(QWidget):
     _poll_decklist_card = OverlayUI.MinimalOverlay._poll_decklist_card
     _menu_deck = staticmethod(lambda: "Dragapult ex")
     _game_is_foreground = staticmethod(lambda: FakeHud.from_game)
+    _update_action = OverlayUI.MinimalOverlay._update_action
+    _update_deck_from_clipboard = OverlayUI.MinimalOverlay._update_deck_from_clipboard
+    _hud_anchor = OverlayUI.MinimalOverlay._hud_anchor
+    db = None
+    picked = []
+
+    def _pick_deck_to_update(self, text):
+        FakeHud.picked.append(text)
     from_game = True
     opened = []
 
@@ -106,6 +114,34 @@ def test_copied_elsewhere_opens_the_import_box():
         assert hud._pending_decklist is None
     finally:
         FakeHud.from_game = True
+
+
+def test_update_a_deck_instead():
+    """A new version of one of your decks: the card's second button updates
+    the closest deck; with no close deck it opens the picker."""
+    from PySide6.QtWidgets import QPushButton
+    base = D.save_decklist(DRAGAPULT)
+    D.link_decklist("Pult Hammers", base["id"])
+    tweaked = DRAGAPULT.rstrip() + "\n1 Budew PRE 4\n"
+    hud = FakeHud()
+    hud.show()
+    hud._pending_decklist, hud._pending_from_game = tweaked, False
+    hud._poll_decklist_card((600, 380))
+    update = next(b for b in hud._decklist_card.findChildren(QPushButton) if b.text().startswith("Update"))
+    assert update.text() == "Update Pult Hammers"
+    update.click()
+    assert D.decklist_for_deck("Pult Hammers")["id"] == D.list_id(tweaked)
+    assert any("Budew" in l.text() for l in hud._decklist_card.findChildren(OverlayUI.QLabel))   # DECK UPDATED: +1 Budew
+    # a list nothing like your decks: pick which deck on the dashboard
+    other = "Pokémon: 1\n4 Charmander PAF 7\nTrainer: 1\n4 Arven SVI 166\nEnergy: 1\n10 Basic {R} Energy SVE 2\n"
+    hud._decklist_card.close()
+    QApplication.processEvents()
+    hud._pending_decklist, hud._pending_from_game = other, True
+    hud._poll_decklist_card((600, 380))
+    pick = next(b for b in hud._decklist_card.findChildren(QPushButton) if b.text().startswith("Update"))
+    assert pick.text() == "Update a deck…"
+    pick.click()
+    assert FakeHud.picked == [other]
 
 
 def test_link_round_trip():

@@ -281,6 +281,21 @@ def test_regression_null_lists_in_store():
     reset_store()
 
 
+def test_closest_deck_and_update():
+    old = "Pokémon: 2\n2 Dreepy TWM 128\nTrainer: 5\n4 Iono PAL 185\n1 Ultra Ball SVI 196\n"
+    new = "Pokémon: 3\n3 Dreepy TWM 128\nTrainer: 4\n4 Iono PAF 80\n"
+    other = "Pokémon: 1\n4 Charmander PAF 7\nTrainer: 1\n4 Arven SVI 166\n"
+    entry = D.save_decklist(old)
+    D.link_decklist("Pult Test", entry["id"])
+    assert abs(D.list_similarity(old, new) - 6 / 7) < 1e-9
+    assert D.closest_deck(new)[0] == "Pult Test"
+    assert D.closest_deck(other) is None
+    changes = D.update_deck_list("Pult Test", new)
+    assert changes == [("Dreepy", 1), ("Ultra Ball", -1)]
+    assert D.decklist_for_deck("Pult Test")["id"] == D.list_id(new)
+    assert D.changes_text(changes, html_out=False) == "+1 Dreepy · −1 Ultra Ball"
+
+
 def test_list_changes():
     old = "Pokémon: 2\n2 Dreepy TWM 128\nTrainer: 5\n4 Iono PAL 185\n1 Ultra Ball SVI 196\n"
     new = "Pokémon: 3\n3 Dreepy TWM 128\nTrainer: 3\n2 Iono PAF 80\n1 Night Stretcher SFA 61\n"

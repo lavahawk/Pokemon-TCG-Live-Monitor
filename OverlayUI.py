@@ -1130,6 +1130,53 @@ class MinimalOverlay(QWidget):
         except Exception as exc:
             _dbg(f"clipboard decklist check failed: {exc}")
 
+    def _update_action(self, text):
+        """The copied-list card's second button: "Update <deck>" for the deck
+        whose list it's closest to, else "Update a deck…" (the dashboard's
+        import panel, where you pick the deck)."""
+        from decklists import closest_deck
+        try:
+            names = self.db.get_known_deck_names() if getattr(self, "db", None) is not None else []
+        except Exception:
+            names = []
+        try:
+            close = closest_deck(text, names)
+        except Exception:
+            close = None
+        if close:
+            deck = close[0]
+            short = deck if len(deck) <= 16 else deck[:15].rstrip() + "…"
+            return (f"Update {short}", lambda: self._update_deck_from_clipboard(deck, text))
+        return ("Update a deck…", lambda: self._pick_deck_to_update(text))
+
+    def _update_deck_from_clipboard(self, deck, text):
+        from decklists import changes_text, update_deck_list
+        import html as _html
+        try:
+            changes = update_deck_list(deck, text)
+        except Exception as exc:
+            _dbg(f"deck update failed: {exc}")
+            return
+        _dbg(f"decklist: {deck} updated ({len(changes)} changes)")
+        if self.stats_window is not None:
+            self.stats_window._deck_dashboards_dirty = True
+        from deck_popup import NoticeCard
+        card = NoticeCard("DECK UPDATED", f"<b>{_html.escape(deck)}</b><br>{changes_text(changes)}",
+                          linger_ms=9000)
+        self._decklist_card = card
+        card.show_at(self._stack_anchor(self._hud_anchor(), "_decklist_card"))
+
+    def _hud_anchor(self):
+        geo = self.frameGeometry()
+        return (geo.right() + 1, geo.top() - 6)
+
+    def _pick_deck_to_update(self, text):
+        """The dashboard's import panel with this list, ready to pick the deck."""
+        self.open_stats_dashboard()
+        window = self.stats_window
+        if window is not None:
+            QTimer.singleShot(0, lambda: window._import_decklist_dialog(None, preset_text=text))
+
     @staticmethod
     def _game_is_foreground():
         try:
@@ -1195,11 +1242,15 @@ class MinimalOverlay(QWidget):
         from decklists import auto_name
         import html as _html
 
+        # Or a new version of one of your decks: Update it (the closest one by
+        # its cards), or pick which on the dashboard.
+        update = self._update_action(text)
         if not getattr(self, "_pending_from_game", True):
             self._decklist_card = NoticeCard(
                 "DECKLIST COPIED",
-                f"<b>{_html.escape(auto_name(text))}</b>. Import it into Pokémon TCG Live and your decks?",
-                primary=("Import", lambda: self._open_deck_import(text)), secondary=("Not now", lambda: None),
+                f"<b>{_html.escape(auto_name(text))}</b>. Import it into Pokémon TCG Live and your decks, "
+                f"or update one of your decks with it?",
+                primary=("Import", lambda: self._open_deck_import(text)), secondary=update,
                 linger_ms=30000)
             self._decklist_card.show_at(self._stack_anchor(anchor, "_decklist_card"))
             return
@@ -1213,8 +1264,8 @@ class MinimalOverlay(QWidget):
 
         self._decklist_card = NoticeCard(
             "DECKLIST COPIED",
-            f"<b>{_html.escape(auto_name(text))}</b>. Import it into your decklists?",
-            primary=("Import", do_import), secondary=("Not now", lambda: None), linger_ms=30000)
+            f"<b>{_html.escape(auto_name(text))}</b>. Import it into your decklists, or update a deck's list?",
+            primary=("Import", do_import), secondary=update, linger_ms=30000)
         self._decklist_card.show_at(self._stack_anchor(anchor, "_decklist_card"))
 
     def _poll_concede(self, anchor):

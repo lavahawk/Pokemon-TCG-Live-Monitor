@@ -8049,7 +8049,7 @@ class StatsWindow(QWidget):
         self._deck_dashboards_dirty = True
         QTimer.singleShot(0, self._refresh_deck_dashboards)
 
-    def _import_decklist_dialog(self, deck_name, update=False):
+    def _import_decklist_dialog(self, deck_name, update=False, preset_text=None):
         """Import a decklist, for a deck (its page's Import decklist, or
         Decklist ▾ → Update list with update=True: the new version of the
         deck's list, and what changed) or on its own (＋ Import decklist on the Decks tab, with an
@@ -8106,15 +8106,23 @@ class StatsWindow(QWidget):
             col.addWidget(title)
         else:
             row_deck = QHBoxLayout()
-            row_deck.addWidget(QLabel("<span style='color:#8A97AA;font-size:11px'>Link it to</span>"))
+            row_deck.addWidget(QLabel("<span style='color:#8A97AA;font-size:11px'>For</span>"))
             deck_combo = QComboBox()
             deck_combo.setObjectName("metaCombo")
             deck_combo.addItem("No deck (just import it)", "")
+            from decklists import closest_deck, decks_with_lists
             try:
-                for known in self.db.get_known_deck_names():
-                    deck_combo.addItem(known, known)
+                known_names = self.db.get_known_deck_names()
             except Exception:
-                pass
+                known_names = []
+            with_list = {n.casefold() for n in decks_with_lists(known_names)}
+            for known in list(dict.fromkeys(list(known_names) + decks_with_lists(known_names))):
+                # A deck with a list gets updated (you see what changed).
+                deck_combo.addItem(f"Update {known}" if known.casefold() in with_list else known, known)
+            if preset_text:
+                close = closest_deck(preset_text, known_names)
+                if close:
+                    deck_combo.setCurrentIndex(max(0, deck_combo.findData(close[0])))
             row_deck.addWidget(deck_combo, 1)
             col.addLayout(row_deck)
 
@@ -8220,6 +8228,9 @@ class StatsWindow(QWidget):
         def update_link(*_):
             text = _list_or_link(edit.toPlainText()) if edit.isVisible() else ""
             link.setEnabled(is_ptcgl_decklist(text) or choices.currentItem() is not None)
+            if deck_combo is not None and link.text() != "Done":
+                target = deck_combo.currentData()
+                link.setText("Update" if target and decklist_for_deck(target) is not None else "Import")
 
         def toggle_manual():
             show = not edit.isVisible()
@@ -8236,6 +8247,17 @@ class StatsWindow(QWidget):
                                "(Pokémon: / Trainer: / Energy: sections).</span>")
                 return
             target = deck_name or (deck_combo.currentData() if deck_combo is not None else "")
+            if not update and target and deck_combo is not None and decklist_for_deck(target) is not None:
+                # Picked one of your decks that has a list: that's an update.
+                if list_id(text) == decklist_for_deck(target).get("id"):
+                    status.setText("<span style='color:#8A97AA'>That's the list this deck already has.</span>")
+                    return
+                show_changes(list_changes(decklist_for_deck(target).get("text") or "", text),
+                             title=f"{target} updated")
+                import_decklist(text, target)
+                self._deck_dashboards_dirty = True
+                QTimer.singleShot(0, self._refresh_deck_dashboards)
+                return
             if update:
                 if list_id(text) == current.get("id"):
                     status.setText("<span style='color:#8A97AA'>That's the list this deck already has. "
@@ -8261,7 +8283,7 @@ class StatsWindow(QWidget):
                 self._decklist_hid_dashboard = False
                 self._restore_dashboard()
 
-        def show_changes(changes):
+        def show_changes(changes, title="List updated"):
             """The update is in: say what changed, and Done closes."""
             def chip(name, delta):
                 color = "#66BB6A" if delta > 0 else "#EF9A9A"
@@ -8274,7 +8296,7 @@ class StatsWindow(QWidget):
                     body += f"<br><span style='color:#8A97AA'>and {len(changes) - 14} more</span>"
             else:
                 body = "<span style='color:#8A97AA'>Same cards, different prints.</span>"
-            status.setText("<span style='color:#66BB6A;font-weight:700'>List updated</span><br>" + body)
+            status.setText(f"<span style='color:#66BB6A;font-weight:700'>{html.escape(title)}</span><br>" + body)
             dialog.set_pill_text("List updated", found=True)
             for widget in (manual_btn, edit, lists_label, choices, several_btn, cancel):
                 widget.setVisible(False)
@@ -8304,9 +8326,23 @@ class StatsWindow(QWidget):
         set_status()
         clipboard = QApplication.clipboard()
         clipboard.dataChanged.connect(check_clipboard)
-        if not update:
+        if preset_text and is_ptcgl_decklist(preset_text):
+            # From the HUD's "Update a deck…": this list, ready to pick the deck.
+            if preset_text not in known:
+                known.add(preset_text)
+                add_choice(preset_text, f"{auto_name(preset_text)}   ·   copied", select=True, top=True)
+            else:
+                for i in range(choices.count()):
+                    if choices.item(i).data(Qt.ItemDataRole.UserRole).strip() == preset_text.strip():
+                        choices.setCurrentRow(i)
+            lists_label.setVisible(True)
+            choices.setVisible(True)
+            set_status(preset_text)
+        elif not update:
             check_clipboard(arrived=False)   # (an update waits for a new export)
         choices.currentItemChanged.connect(update_link)
+        if deck_combo is not None:
+            deck_combo.currentIndexChanged.connect(update_link)
         choices.itemDoubleClicked.connect(lambda *_: accept())
         edit.textChanged.connect(update_link)
         manual_btn.clicked.connect(toggle_manual)
@@ -8334,7 +8370,7 @@ class StatsWindow(QWidget):
             if self._decklist_hid_dashboard:
                 self.minimize_to_overlay()
             return
-        if is_ptcgl_decklist((clipboard.text() or "").strip()):
+        if preset_text or is_ptcgl_decklist((clipboard.text() or "").strip()):
             dialog.open_panel()
             return
         # Nothing to link yet: a corner toast instead of a panel, and the

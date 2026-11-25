@@ -402,6 +402,10 @@ def main(argv):
         QPushButton#close { background: transparent; border: none; color: rgba(200,212,228,0.6); padding: 0;
                             font-size: 14px; }
         QPushButton#close:hover { color: white; }
+        QComboBox { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
+                    border-radius: 6px; color: rgba(235,242,250,0.92); padding: 6px 9px; font-size: 12px; }
+        QComboBox QAbstractItemView { background: #121823; color: #E6ECF5; selection-background-color:
+                                      rgba(74,159,216,0.35); border: 1px solid rgba(255,255,255,0.10); }
         QCheckBox { color: rgba(235,242,250,0.88); font-size: 12px; spacing: 8px; background: transparent; }
         QCheckBox:disabled { color: rgba(235,242,250,0.38); }
         QCheckBox::indicator { width: 14px; height: 14px; border-radius: 4px;
@@ -473,6 +477,34 @@ def main(argv):
     import game_window
     from edition import APP_NAME
     game_open = bool(game_window.find_game_hwnd())
+    # Or a new version of one of your decks: update its list instead (the
+    # closest one is picked when the cards are clearly that deck).
+    from PySide6.QtWidgets import QComboBox
+    target = QComboBox()
+    target.addItem("Add as a new deck", "")
+    for deck in decklists.decks_with_lists():
+        target.addItem(f"Update {deck}", deck)
+    close = decklists.closest_deck(text)
+    if close:
+        target.setCurrentIndex(max(0, target.findData(close[0])))
+    target.setVisible(target.count() > 1)
+    box.addWidget(target)
+    typed_name = {"text": name_field.text()}
+
+    def target_changed(*_):
+        deck = target.currentData()
+        if deck:
+            if name_field.isEnabled():
+                typed_name["text"] = name_field.text()
+            name_field.setText(deck)
+        else:
+            name_field.setText(typed_name["text"])
+        name_field.setEnabled(not deck)
+        to_game.setText("Add the new version to Pokémon TCG Live" if deck else "Add it to Pokémon TCG Live")
+        to_app.setText(f"Update {deck} in {APP_NAME}" if deck else f"Add it to {APP_NAME}")
+        if primary.text() != "Done":
+            primary.setText("Update" if deck else "Import")
+    target.currentIndexChanged.connect(target_changed)
     to_game = QCheckBox("Add it to Pokémon TCG Live")
     to_game.setChecked(game_open)
     to_game.setEnabled(game_open)
@@ -519,7 +551,7 @@ def main(argv):
         status.setText(f"<b>{APP_NAME}:</b> {html.escape(monitor_line)}<br>"
                        f"<b>Pokémon TCG Live:</b> {html.escape(game_line)}")
         status.show()
-        for widget in (name_field, to_game, to_app):
+        for widget in (name_field, target, to_game, to_app):
             widget.setEnabled(False)
         cancel.hide()
         primary.setText("Done")
@@ -538,7 +570,11 @@ def main(argv):
             fade(dialog, 1.0, 0.0, 160, dialog.accept)
             return
         deck_name = name_field.text().strip()
-        if to_app.isChecked():
+        updating = target.currentData()
+        if to_app.isChecked() and updating:
+            changes = decklists.update_deck_list(updating, text)
+            monitor_line = f"{updating} updated: {decklists.changes_text(changes, html_out=False)}."
+        elif to_app.isChecked():
             entry, had = import_list(text, deck_name)
             monitor_line = (f"you already had this list, as {entry['name']}." if had
                             else f"saved as {entry['name']}.") + (
@@ -565,6 +601,7 @@ def main(argv):
         fade(dialog, 1.0, 0.0, 180, start)
 
     primary.clicked.connect(do_import)
+    target_changed()
 
     def can_import():  # nothing to do with both boxes off
         primary.setEnabled(to_app.isChecked() or (to_game.isChecked() and to_game.isEnabled()))
