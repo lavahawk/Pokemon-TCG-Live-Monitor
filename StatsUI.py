@@ -8039,15 +8039,10 @@ class StatsWindow(QWidget):
             "QMenu::item:selected { background: rgba(74,159,216,0.28); }"
             "QMenu::separator { height: 1px; background: rgba(255,255,255,0.08); margin: 5px 10px; }")
         if entry is None:
-            # Click imports; the ▾ part holds Delete deck.
-            button.setText("＋ Import decklist")
-            button.setToolTip("Link this deck's list to unlock card suggestions and list tools.")
-            button.clicked.connect(lambda: self._import_decklist_dialog(deck_name))
-            button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-            button.setStyleSheet(button.styleSheet() +
-                                 "QToolButton#deckListBtn { padding-right: 22px; }"
-                                 "QToolButton#deckListBtn::menu-button { border: none; border-left: 1px solid"
-                                 " rgba(74,159,216,0.40); width: 18px; }")
+            # Same button as a deck with a list: its menu imports one, or deletes the deck.
+            button.setText("Decklist  ▾")
+            button.setToolTip("Import this deck's list to unlock card suggestions and list tools.")
+            button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             small = QMenu(button)
             small.setStyleSheet(menu_style)
             small.addAction("Import decklist…", lambda: self._import_decklist_dialog(deck_name))

@@ -1817,28 +1817,26 @@ class MinimalOverlay(QWidget):
         return result
     
     def _keep_above_game(self):
-        """Every window of the HUD (this, the buddy, cards, chat, icons,
-        panels shown over the game): just above the game, under anything else
-        that covers it. The dashboard keeps its own place."""
+        """Every window of the HUD (this, the buddy, cards, chat, icons):
+        just above the game, under anything else that covers it. The
+        dashboard and its panels (delete deck, import, the opponent's list…)
+        keep their own place on top of it."""
         game = getattr(self, "game_hwnd", None)
         if not game or not self.isVisible():
             return
         try:
             from game_window import keep_above_game
-            ours, unowned = [], []
+            ours = []
             for widget in QApplication.topLevelWidgets():
                 if not widget.isVisible() or widget is self.stats_window:
                     continue
                 kind = widget.windowType()
                 if kind in (Qt.WindowType.Popup, Qt.WindowType.ToolTip) or widget.isModal():
                     continue   # menus, tooltips, modal boxes: Qt's own
-                if type(widget).__name__ in ("GlassPanel", "LimitlessPopupWindow"):
-                    unowned.append(int(widget.winId()))   # dashboard panels: may outlive a minimized game
-                else:
-                    ours.append(int(widget.winId()))
+                if any(cls.__name__ == "GlassPanel" for cls in type(widget).__mro__):
+                    continue   # the dashboard's panels: above the dashboard, as before
+                ours.append(int(widget.winId()))
             keep_above_game(ours, game)
-            if unowned:
-                keep_above_game(unowned + ours, game, own=False)
         except Exception as exc:
             if not getattr(self, "_zorder_failed", False):
                 self._zorder_failed = True
