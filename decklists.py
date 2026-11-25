@@ -257,9 +257,7 @@ def card_count_warning(text):
     total = sum(line["qty"] for line in list_lines(text))
     if not total or total == DECK_SIZE:
         return ""
-    off = total - DECK_SIZE
-    return (f"This list has {total} cards, {abs(off)} {'more' if off > 0 else 'fewer'} than the 60 a deck needs. "
-            f"Pokémon TCG Live won't accept it as it is.")
+    return f"{total} cards. A deck needs 60."
 
 
 def list_similarity(a_text, b_text):
