@@ -27,6 +27,7 @@ FLAG_STYLES = {
     "pin": ("#4A9FD8", "Pin to front", "Unpin"),
     "star": ("#F9A825", "Add to Meta tab", "Remove from Meta tab"),
     "ignore": ("#EF5350", "Hide from stats", "Show in stats"),
+    "delete": ("#E85A5A", "Delete this deck", "Delete this deck"),   # a plain button, not a toggle
 }
 
 
@@ -192,7 +193,8 @@ def _eye_path():
 
 
 class DeckFlagButton(QAbstractButton):
-    """Checkable icon button: kind is 'pin', 'star' or 'ignore'."""
+    """Checkable icon button: kind is 'pin', 'star' or 'ignore'; 'delete' is
+    a plain button (a trash can that turns red under the mouse)."""
 
     SIZE = 34
 
@@ -200,8 +202,8 @@ class DeckFlagButton(QAbstractButton):
         super().__init__(parent)
         self.kind = kind
         self.accent = QColor(FLAG_STYLES[kind][0])
-        self.setCheckable(True)
-        self.setChecked(bool(checked))
+        self.setCheckable(kind != "delete")
+        self.setChecked(bool(checked) and kind != "delete")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(self.SIZE, self.SIZE)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -342,6 +344,12 @@ class DeckFlagButton(QAbstractButton):
             int(off_color.green() + (self.accent.green() - off_color.green()) * on),
             int(off_color.blue() + (self.accent.blue() - off_color.blue()) * on),
         )
+        if self.kind == "delete":
+            stroke = QColor(
+                int(off_color.red() + (self.accent.red() - off_color.red()) * hover),
+                int(off_color.green() + (self.accent.green() - off_color.green()) * hover),
+                int(off_color.blue() + (self.accent.blue() - off_color.blue()) * hover),
+            )
         fill = QColor(self.accent)
         fill.setAlpha(int(255 * on))
         pen = QPen(stroke, 1.3)
@@ -351,6 +359,22 @@ class DeckFlagButton(QAbstractButton):
         p.setBrush(fill)
         if self.kind == "star":
             p.drawPath(_star_path(8, 8.4, 7.2, 3.0))
+        elif self.kind == "delete":
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawLine(QPointF(2.5, 4.2), QPointF(13.5, 4.2))            # lid
+            p.drawLine(QPointF(6.3, 4.2), QPointF(6.8, 2.2))
+            p.drawLine(QPointF(6.8, 2.2), QPointF(9.2, 2.2))
+            p.drawLine(QPointF(9.2, 2.2), QPointF(9.7, 4.2))
+            can = QPainterPath()
+            can.moveTo(4.0, 5.6)
+            can.lineTo(4.8, 13.6)
+            can.quadTo(4.9, 14.4, 5.7, 14.4)
+            can.lineTo(10.3, 14.4)
+            can.quadTo(11.1, 14.4, 11.2, 13.6)
+            can.lineTo(12.0, 5.6)
+            p.drawPath(can)
+            p.drawLine(QPointF(6.9, 7.4), QPointF(7.1, 12.2))
+            p.drawLine(QPointF(9.1, 7.4), QPointF(8.9, 12.2))
         elif self.kind == "pin":
             p.drawPath(_pin_path())
             # needle

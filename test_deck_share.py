@@ -177,9 +177,10 @@ def test_copied_link_is_offered_once_and_own_links_never():
     once; your own links and damaged links never (temp files, no box opens)."""
     import tempfile
     import TCGLiveMonitor as M
-    saved = (S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen)
+    saved = (D.STORE_FILE, S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen)
     opened = []
     with tempfile.TemporaryDirectory() as tmp:
+        D.STORE_FILE = os.path.join(tmp, ".decklists.json")   # not your real decklists
         S.OWN_FILE, S.SEEN_FILE = os.path.join(tmp, "own"), os.path.join(tmp, "seen")
         M.subprocess.Popen = lambda args, **kw: opened.append(args[-1])
         try:
@@ -193,7 +194,7 @@ def test_copied_link_is_offered_once_and_own_links_never():
             assert monitor.handle_link(S.WEB_BASE + "#azzzz~x") and opened == [theirs]  # damaged
             assert not monitor.handle_link("just some text")
         finally:
-            S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen = saved
+            D.STORE_FILE, S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen = saved
 
 
 def test_names_cannot_hide_bidi_controls():

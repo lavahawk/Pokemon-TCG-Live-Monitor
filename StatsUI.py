@@ -6415,9 +6415,27 @@ class StatsWindow(QWidget):
         self.deck_tabs.setMovable(True)
         self.deck_tabs.setUsesScrollButtons(True)
         self.deck_tabs.setCornerWidget(self._create_deck_search_widget(), Qt.Corner.TopRightCorner)
+        self.deck_tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.deck_tab_bar.customContextMenuRequested.connect(self._deck_tab_menu)
         vlayout.addWidget(self.deck_tabs, stretch=1)
 
         return outer
+
+    def _deck_tab_menu(self, pos):
+        """Right-click a deck's tab: delete it (same as the trash button on its page)."""
+        from PySide6.QtWidgets import QMenu
+        idx = self.deck_tab_bar.tabAt(pos)
+        name = self.deck_tab_bar.tabToolTip(idx) if idx >= 0 else ""
+        if not name or name not in self.deck_tab_lookup:
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: #121823; color: #E6ECF5; border: 1px solid rgba(255,255,255,0.10);"
+            " border-radius: 8px; padding: 6px 0; }"
+            "QMenu::item { padding: 6px 22px 6px 16px; font-size: 11px; }"
+            "QMenu::item:selected { background: rgba(232,90,90,0.30); }")
+        menu.addAction(f"Delete {name}…", lambda: self._delete_deck(name))
+        menu.exec(self.deck_tab_bar.mapToGlobal(pos))
 
     def _create_deck_search_widget(self):
         container = QWidget()
@@ -7687,57 +7705,7 @@ class StatsWindow(QWidget):
         hero_top.addWidget(title_wrap)
         hero_top.addStretch()
 
-        # Pin (front of the tabs) · Star (Meta analysis) · Ignore (left out of
-        # the dashboard and overall stats).
-        flag_deck = analysis.get("deck_name", "")
-        flag_group = QWidget()
-        flag_row = QHBoxLayout(flag_group)
-        flag_row.setContentsMargins(0, 0, 4, 0)
-        flag_row.setSpacing(0)
-        for kind, active in (("pin", flag_deck in self.pinned_decks),
-                             ("star", flag_deck in self.starred_decks),
-                             ("ignore", flag_deck in self.ignored_decks)):
-            flag_btn = DeckFlagButton(kind, checked=active)
-            flag_btn.toggled.connect(lambda on, k=kind, name=flag_deck: self._set_deck_flag(k, name, on))
-            flag_row.addWidget(flag_btn)
-        hero_top.addWidget(flag_group)
-        more_btn = QToolButton()
-        more_btn.setObjectName("deckIconArrowBtn")
-        more_btn.setText("⋯")
-        more_btn.setToolTip("More: delete this deck")
-        more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        from PySide6.QtWidgets import QMenu as _QMenu
-        more_menu = _QMenu(more_btn)
-        more_menu.setStyleSheet(
-            "QMenu { background: #121823; color: #E6ECF5; border: 1px solid rgba(255,255,255,0.10);"
-            " border-radius: 8px; padding: 6px 0; }"
-            "QMenu::item { padding: 6px 22px 6px 16px; font-size: 11px; }"
-            "QMenu::item:selected { background: rgba(232,90,90,0.30); }")
-        more_menu.addAction("Delete deck…", lambda name=flag_deck: self._delete_deck(name))
-        more_btn.setMenu(more_menu)
-        hero_top.addWidget(more_btn)
-        hero_top.addWidget(self._create_decklist_button(flag_deck, matched_row))
-        from decklists import decklist_for_deck
-        list_entry = decklist_for_deck(flag_deck)
-        if list_entry is not None:
-            # Share = copy the deck's link (the picture lives in the Decklist menu).
-            share_btn = QPushButton("Share")
-            share_btn.setObjectName("limitlessBtn")
-            share_btn.setFixedHeight(30)
-            share_btn.setMinimumWidth(78)  # room for "Copied!" without the row shifting
-            share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            share_btn.setToolTip("Copy a link to this list")
-            share_btn.clicked.connect(lambda checked=False, e=list_entry, name=flag_deck, b=share_btn:
-                                      self._copy_share_link(e, name, b))
-            hero_top.addWidget(share_btn)
-
-        if matched_row.get("deck_url"):
-            open_btn = QPushButton("Limitless ↗")
-            open_btn.setObjectName("limitlessBtn")
-            open_btn.setFixedHeight(30)
-            open_btn.clicked.connect(lambda checked=False, url=matched_row.get("deck_url"): _is_safe_web_url(url) and webbrowser.open(url))
-            hero_top.addWidget(open_btn)
+        self._add_deck_header_actions(hero_top, analysis.get("deck_name", ""), matched_row)
         hero_layout.addLayout(hero_top)
 
         hero_layout.addWidget(self._create_deck_visual_metrics(analysis))
@@ -7758,6 +7726,45 @@ class StatsWindow(QWidget):
 
         scroll.setWidget(content)
         return scroll
+
+    def _add_deck_header_actions(self, row, deck_name, matched_row):
+        """The right end of a deck page's snapshot: pin · star · hide · delete,
+        then Decklist ▾, Share (when it has a list) and Limitless ↗. Played and
+        imported decks get the same row."""
+        flag_group = QWidget()
+        flag_row = QHBoxLayout(flag_group)
+        flag_row.setContentsMargins(0, 0, 4, 0)
+        flag_row.setSpacing(0)
+        for kind, active in (("pin", deck_name in self.pinned_decks),
+                             ("star", deck_name in self.starred_decks),
+                             ("ignore", deck_name in self.ignored_decks)):
+            flag_btn = DeckFlagButton(kind, checked=active)
+            flag_btn.toggled.connect(lambda on, k=kind, name=deck_name: self._set_deck_flag(k, name, on))
+            flag_row.addWidget(flag_btn)
+        delete_btn = DeckFlagButton("delete")
+        delete_btn.clicked.connect(lambda checked=False, name=deck_name: self._delete_deck(name))
+        flag_row.addWidget(delete_btn)
+        row.addWidget(flag_group)
+        row.addWidget(self._create_decklist_button(deck_name, matched_row))
+        from decklists import decklist_for_deck
+        list_entry = decklist_for_deck(deck_name)
+        if list_entry is not None:
+            share_btn = QPushButton("Share")
+            share_btn.setObjectName("limitlessBtn")
+            share_btn.setFixedHeight(30)
+            share_btn.setMinimumWidth(78)  # room for "Copied!" without the row shifting
+            share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            share_btn.setToolTip("Copy a link to this list")
+            share_btn.clicked.connect(lambda checked=False, e=list_entry, name=deck_name, b=share_btn:
+                                      self._copy_share_link(e, name, b))
+            row.addWidget(share_btn)
+        if (matched_row or {}).get("deck_url"):
+            open_btn = QPushButton("Limitless ↗")
+            open_btn.setObjectName("limitlessBtn")
+            open_btn.setFixedHeight(30)
+            open_btn.clicked.connect(lambda checked=False, url=matched_row.get("deck_url"):
+                                     _is_safe_web_url(url) and webbrowser.open(url))
+            row.addWidget(open_btn)
 
     # ── Deck Snapshot: decklist ──
     def _create_decklist_button(self, deck_name, matched_row):
@@ -7781,7 +7788,7 @@ class StatsWindow(QWidget):
             button.clicked.connect(lambda: self._import_decklist_dialog(deck_name))
             return button
         button.setText("Decklist  ▾")
-        button.setToolTip(f"{entry['name']} · exported {(entry.get('captured_at') or '')[:16]}")
+        button.setToolTip(entry["name"])
         button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(button)
         menu.setStyleSheet(
@@ -7791,41 +7798,29 @@ class StatsWindow(QWidget):
             "QMenu::item:selected { background: rgba(74,159,216,0.28); }"
             "QMenu::separator { height: 1px; background: rgba(255,255,255,0.08); margin: 5px 10px; }")
 
-        def header(text):
-            label = QLabel(text)
-            label.setStyleSheet("color: rgba(168,182,204,0.70); font-size: 9px; font-weight: 700;"
-                                " letter-spacing: 1px; padding: 6px 16px 2px 16px; background: transparent;")
-            action = QWidgetAction(menu)
-            action.setDefaultWidget(label)
-            action.setEnabled(False)
-            menu.addAction(action)
-
         def copy_then(path, fill=False):
             QApplication.clipboard().setText(entry.get("text") or "")
             self.open_trainerhill_tool(path, decklist=(entry.get("text"), deck_name) if fill else None)
 
-        header(entry["name"].upper())
-        menu.addAction("Share link", lambda: self._copy_share_link(entry, deck_name, button))
-        menu.addAction("View list", lambda: self._view_decklist(entry, deck_name))
-        menu.addAction("View as picture", lambda: self._view_decklist_picture(entry, deck_name))
+        # The everyday things first; the rest under More tools. Share has its
+        # own button beside this one.
+        menu.addAction("View cards", lambda: self._view_decklist_picture(entry, deck_name))
+        menu.addAction("Copy list", lambda: (QApplication.clipboard().setText(entry.get("text") or ""),
+                                             self._flash_button(button, "Copied!")))
         menu.addAction("Print decklist", lambda: self._print_decklist(entry, deck_name))
-        buy = QWidgetAction(menu)
-        buy_label = MenuRichLabel("Buy on TCGplayer <span style='font-style:italic; font-weight:300;"
-                                  " color:rgba(200,212,230,0.55)'>beta</span>")
-        buy_label.clicked.connect(lambda: (menu.close(), self._buy_on_tcgplayer(entry, deck_name)))
-        buy.setDefaultWidget(buy_label)
-        menu.addAction(buy)
         menu.addSeparator()
         menu.addAction("Card suggestions", lambda: self._show_card_suggestions(deck_name, matched_row, entry))
         menu.addAction("Compare with the meta", lambda: self._open_cards_compare(entry["id"]))
+        more = menu.addMenu("More tools")
+        more.setStyleSheet(menu.styleSheet())
+        more.addAction("Buy on TCGplayer (beta)", lambda: self._buy_on_tcgplayer(entry, deck_name))
+        more.addSeparator()
+        more.addAction("TrainerHill deck diff", lambda: copy_then("dashboards/deck-diff/", fill=True))
+        more.addAction("TrainerHill card usage", lambda: copy_then("dashboards/card-usage/"))
+        more.addAction("TrainerHill deck profile", lambda: copy_then("dashboards/deck-profile/"))
         menu.addSeparator()
-        header("TRAINERHILL  ·  LIST ALSO COPIED")
-        menu.addAction("Deck diff (list filled in)", lambda: copy_then("dashboards/deck-diff/", fill=True))
-        menu.addAction("Card usage", lambda: copy_then("dashboards/card-usage/"))
-        menu.addAction("Deck profile", lambda: copy_then("dashboards/deck-profile/"))
-        menu.addSeparator()
-        menu.addAction("Change list…", lambda: self._import_decklist_dialog(deck_name))
-        menu.addAction("Unlink", lambda: self._link_decklist(deck_name, None))
+        menu.addAction("Replace list…", lambda: self._import_decklist_dialog(deck_name))
+        menu.addAction("Unlink list", lambda: self._link_decklist(deck_name, None))
         button.setMenu(menu)
         return button
 
@@ -8334,49 +8329,123 @@ class StatsWindow(QWidget):
         self._save_app_setting("deck_import_offered", True)
         QTimer.singleShot(350, lambda: self._start_deck_import_mode(onboarding=True))
 
+    def _imported_deck_icons(self, deck_name, entry):
+        """Sprites for a deck you haven't played: the meta deck's (or the ones
+        you picked), else its most-played Pokémon."""
+        from decklists import list_lines
+        matched = self._match_limitless_row(deck_name)
+        matched_row = (matched or {}).get("row") or {}
+        icons = list(self._resolved_deck_icons(deck_name, list(matched_row.get("icons", [])[:3])) or [])
+        if icons:
+            return icons
+        lines = list_lines((entry or {}).get("text") or "")
+        for line in sorted((l for l in lines if l["section"] == "Pokémon"), key=lambda l: -l["qty"]):
+            words = line["name"].lower().replace(" ex", "").split()
+            sprite = words[-1] if words and words[0] == "mega" else (words[0] if words else "")
+            if sprite and sprite not in icons and self._load_sprite_pixmap(sprite, 38) is not None:
+                icons.append(sprite)
+            if len(icons) == 2:
+                break
+        return icons
+
     def _create_imported_deck_page(self, deck_name, entry):
-        """A deck you imported but haven't played yet: its name (double-click
-        to rename), its list, and what to do next."""
-        from PySide6.QtWidgets import QMenu, QPlainTextEdit
+        """A deck you imported but haven't played yet: the same snapshot as a
+        played deck (icons, name, pin/star/hide/delete, Decklist ▾, Share)
+        and its cards by section. Stats fill in once you play it."""
+        from decklists import list_lines, spelled_name
         scroll = PageScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
         content.setObjectName("contentWidget")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
-        card, card_layout = self._create_dashboard_card("DECK")
-        top = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 10)
+        layout.setSpacing(8)
+
+        matched = self._match_limitless_row(deck_name)
+        matched_row = (matched or {}).get("row") or {}
+        lines = list_lines(entry.get("text") or "")
+        icons = self._imported_deck_icons(deck_name, entry)
+
+        hero_card, hero_layout = self._create_dashboard_card("DECK SNAPSHOT")
+        hero_top = QHBoxLayout()
+        hero_top.setContentsMargins(0, 0, 0, 0)
+        hero_top.setSpacing(10)
+        icon_column = QWidget()
+        icon_column_layout = QVBoxLayout(icon_column)
+        icon_column_layout.setContentsMargins(0, 0, 0, 0)
+        icon_column_layout.setSpacing(2)
+        icon_row_wrap = QWidget()
+        icon_row_layout = QHBoxLayout(icon_row_wrap)
+        icon_row_layout.setContentsMargins(0, 0, 0, 0)
+        icon_row_layout.setSpacing(3)
+        for sprite_name in (icons or [None])[:3]:
+            pixmap = self._load_sprite_pixmap(sprite_name, 38) if sprite_name else None
+            label = QLabel()
+            label.setPixmap(pixmap or self._build_placeholder_sprite(deck_name[:1], 38))
+            label.setFixedSize(40, 40)
+            icon_row_layout.addWidget(label)
+        icon_column_layout.addWidget(icon_row_wrap, alignment=Qt.AlignmentFlag.AlignLeft)
+        icon_btn = QToolButton()
+        icon_btn.setObjectName("deckIconArrowBtn")
+        icon_btn.setText("▾")
+        icon_btn.setToolTip("Choose deck icons")
+        icon_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        icon_btn.clicked.connect(lambda checked=False: self._choose_deck_icon(deck_name))
+        icon_column_layout.addWidget(icon_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        hero_top.addWidget(icon_column)
+
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(2)
         title = DeckTitle(deck_name, self.db.get_known_deck_names())
         title.rename_requested.connect(lambda new, merge, old=deck_name: self._rename_deck(old, new, merge))
-        top.addWidget(title)
-        top.addStretch()
-        more_btn = QToolButton()
-        more_btn.setObjectName("deckIconArrowBtn")
-        more_btn.setText("⋯")
-        more_btn.setToolTip("More: delete this deck")
-        more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        more_menu = QMenu(more_btn)
-        more_menu.addAction("Delete deck…", lambda: self._delete_deck(deck_name))
-        more_btn.setMenu(more_menu)
-        top.addWidget(more_btn)
-        top.addWidget(self._create_decklist_button(deck_name, {}))
-        card_layout.addLayout(top)
-        note = QLabel("No games with this deck yet. Play it in Pokémon TCG Live and its stats fill in here. "
-                      "If the name above isn't the deck's name in the game, double-click it to change it.")
-        note.setWordWrap(True)
-        note.setObjectName("deckPageSubtitle")
-        card_layout.addWidget(note)
-        layout.addWidget(card)
+        text_col.addWidget(title)
+        total = sum(l["qty"] for l in lines)
+        subtitle = QLabel(f"Imported · {total} cards · no games yet")
+        subtitle.setObjectName("deckPageSubtitle")
+        text_col.addWidget(subtitle)
+        hero_top.addLayout(text_col)
+        hero_top.addStretch()
+        self._add_deck_header_actions(hero_top, deck_name, matched_row)
+        hero_layout.addLayout(hero_top)
+        hint = QLabel("Play it in Pokémon TCG Live and its stats, matchups and rank show up here. "
+                      "Double-click the name if it isn't the deck's name in the game.")
+        hint.setWordWrap(True)
+        hint.setObjectName("deckPageSubtitle")
+        hero_layout.addWidget(hint)
+        layout.addWidget(hero_card)
+
         list_card, list_layout = self._create_dashboard_card("DECKLIST")
-        view = QPlainTextEdit(entry.get("text") or "")
-        view.setReadOnly(True)
-        view.setMinimumHeight(360)
-        view.setStyleSheet("QPlainTextEdit { background: rgba(255,255,255,0.03); color: #E6ECF5; border: none;"
-                           " font-family: Consolas; font-size: 12px; }")
-        list_layout.addWidget(view)
+        columns = QHBoxLayout()
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setSpacing(18)
+        for section in ("Pokémon", "Trainer", "Energy"):
+            rows = [l for l in lines if l["section"] == section]
+            if not rows:
+                continue
+            col = QVBoxLayout()
+            col.setContentsMargins(0, 0, 0, 0)
+            col.setSpacing(3)
+            head = QLabel(f"{section.upper()}  ·  {sum(l['qty'] for l in rows)}")
+            head.setStyleSheet("color: rgba(168,182,204,0.75); font-size: 10px; font-weight: 700;"
+                               " letter-spacing: 1px; background: transparent; padding-bottom: 4px;")
+            col.addWidget(head)
+            for line in rows:
+                item = QLabel(f"<span style='color:#4A9FD8; font-weight:700'>{line['qty']}</span>&nbsp;&nbsp;"
+                              f"{html.escape(spelled_name(line['name']))}"
+                              f"&nbsp;&nbsp;<span style='color:rgba(200,212,230,0.40); font-size:10px'>"
+                              f"{html.escape(line['set'])} {html.escape(line['number'])}</span>")
+                item.setStyleSheet("color: rgba(236,242,252,0.92); font-size: 12px; background: transparent;")
+                item.setTextFormat(Qt.TextFormat.RichText)
+                col.addWidget(item)
+            col.addStretch()
+            columns.addLayout(col, 1)
+        list_layout.addLayout(columns)
+        view_btn = QPushButton("View cards")
+        view_btn.setObjectName("limitlessBtn")
+        view_btn.setFixedHeight(28)
+        view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        view_btn.clicked.connect(lambda: self._view_decklist_picture(entry, deck_name))
+        list_layout.addWidget(view_btn, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(list_card)
         layout.addStretch()
         scroll.setWidget(content)
@@ -9462,7 +9531,8 @@ class StatsWindow(QWidget):
         def add_imported_tabs():
             for name, entry in imported:
                 page = self._create_imported_deck_page(name, entry)
-                idx = self.deck_tabs.addTab(page, self._icon_for_deck(name, [], size=18), self._deck_tab_label(name))
+                idx = self.deck_tabs.addTab(page, self._icon_for_deck(name, self._imported_deck_icons(name, entry), size=18),
+                                            self._deck_tab_label(name))
                 self.deck_tabs.tabBar().setTabToolTip(idx, name)
                 self.deck_tab_lookup[name] = idx
 
