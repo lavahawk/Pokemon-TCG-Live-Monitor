@@ -10661,7 +10661,7 @@ class StatsWindow(QWidget):
         updates_card = self._create_updates_card()
         background_updates_card = self._create_advanced_updates_card()
         sections = [
-            ("General", (appearance_card, overlay_card, sound_card)),
+            ("General", (appearance_card, overlay_card, sound_card, self._create_ptcgl_import_prefs_card())),
             ("Battle tracking", (export_card, parser_card)),
             ("Startup && updates", (autorun_card, updates_card)),  # && shows one & on a button
             ("Your data", (import_card, transfer_card, battle_mgmt_card)),
@@ -14510,6 +14510,43 @@ class StatsWindow(QWidget):
         credit = QLabel("Sprites: PMD Sprite Repository (sprites.pmdcollab.org), CC BY-NC 4.0.")
         credit.setObjectName("settingsDesc")
         body.addWidget(credit)
+        card.layout().addLayout(body)
+        return card
+
+    def _create_ptcgl_import_prefs_card(self):
+        """Settings → General: which Import settings option the app picks when
+        it imports a deck into Pokémon TCG Live for you."""
+        import ptcgl_import
+        card = self.create_card("Importing decks into Pokémon TCG Live")
+        body = QVBoxLayout()
+        body.setContentsMargins(12, 0, 12, 12)
+        body.setSpacing(6)
+        row = QHBoxLayout()
+        label = QLabel("Import settings")
+        label.setStyleSheet("color: rgba(235,242,250,0.85); font-size: 11px;")
+        row.addWidget(label)
+        combo = QComboBox()
+        combo.setObjectName("metaCombo")
+        for key, (_ingame, name, _what) in ptcgl_import.IMPORT_MODES.items():
+            combo.addItem(name, key)
+        combo.setCurrentIndex(max(0, combo.findData(ptcgl_import.import_mode())))
+        row.addWidget(combo)
+        row.addStretch()
+        body.addLayout(row)
+        desc = QLabel()
+        desc.setObjectName("settingsDesc")
+        desc.setWordWrap(True)
+        body.addWidget(desc)
+
+        def describe():
+            desc.setText(ptcgl_import.IMPORT_MODES[combo.currentData()][2]
+                         + ". The same choice as the game's own Import settings box.")
+
+        def changed(*_):
+            describe()
+            self._save_app_setting("ptcgl_import_mode", combo.currentData())
+        combo.currentIndexChanged.connect(changed)
+        describe()
         card.layout().addLayout(body)
         return card
 

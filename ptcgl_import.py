@@ -283,13 +283,33 @@ class Screen:
         return best
 
 
+# PTCGL's Import settings, as the dialog names them. Settings → Preferences
+# → "Importing decks into Pokémon TCG Live" picks one (app setting
+# "ptcgl_import_mode"); Rarest owned by default.
+IMPORT_MODES = {
+    "rarest": ("RAREST OWNED", "Rarest owned", "Your highest-rarity copy of every card you own"),
+    "owned": ("OWNED", "Owned", "Cards you don't own are swapped for ones you do"),
+    "direct": ("DIRECT", "Direct", "Exactly the list as it was copied"),
+}
+DEFAULT_IMPORT_MODE = "rarest"
+
+
+def import_mode():
+    try:
+        from app_settings import load_app_settings
+        mode = load_app_settings().get("ptcgl_import_mode", DEFAULT_IMPORT_MODE)
+    except Exception:
+        mode = DEFAULT_IMPORT_MODE
+    return mode if mode in IMPORT_MODES else DEFAULT_IMPORT_MODE
+
+
 class PTCGLImporter:
-    def __init__(self, text, name=None, status=None, cancel=None, rarest=True):
+    def __init__(self, text, name=None, status=None, cancel=None, mode=None):
         self.text = text
         self.name = (name or "").strip()
         self.status = status or (lambda message: None)
         self.cancel = cancel or threading.Event()
-        self.rarest = rarest
+        self.mode = mode if mode in IMPORT_MODES else import_mode()
         self.hwnd = None
 
     # ── plumbing ──────────────────────────────────────────────────────────
@@ -387,19 +407,31 @@ class PTCGLImporter:
                 told = True
             time.sleep(1.5)
 
-    def _choose_rarest(self, screen, settings):
-        """Set Import settings to Rarest owned (the dropdown right of its label)."""
+    def _choose_mode(self, screen, settings):
+        """Set Import settings to self.mode (the dropdown right of its label)."""
         h = screen.size[1]
         # The dropdown sits right of the label, on the same row.
         band = (settings[0] / screen.size[0], (settings[1] - 0.03 * h) / h,
                 min(1.0, (settings[0] + 0.5 * h) / screen.size[0]), (settings[1] + 0.03 * h) / h)
-        if screen.find("RAREST OWNED", band):
+        rarest_now = screen.find("RAREST OWNED", band)
+        direct_now = screen.find("DIRECT", band)
+        if (self.mode == "rarest" and rarest_now) or (self.mode == "direct" and direct_now) or (
+                self.mode == "owned" and not rarest_now and not direct_now and screen.find("OWNED", band)):
             return
-        current = screen.find("DIRECT", band) or screen.find("OWNED", band)
+        current = rarest_now or direct_now or screen.find("OWNED", band)
         if not current:
             raise ImportStopped("Couldn't find the Import settings menu.")
         self._click(screen, current)
-        screen, option = self._wait_for("RAREST OWNED", DIALOG)
+        if self.mode == "owned":
+            # "OWNED" alone also matches RAREST OWNED: the Owned card sits
+            # halfway between Direct and Rarest owned.
+            screen, rarest = self._wait_for("RAREST OWNED", DIALOG)
+            direct = screen.find("DIRECT", DIALOG)
+            if not direct:
+                raise ImportStopped("Couldn't find the Owned option.")
+            option = ((direct[0] + rarest[0]) / 2, (direct[1] + rarest[1]) / 2)
+        else:
+            screen, option = self._wait_for(IMPORT_MODES[self.mode][0], DIALOG)
         self._click(screen, option)
         screen, confirm = self._wait_for("CONFIRM", DIALOG)
         self._click(screen, confirm)
@@ -488,9 +520,8 @@ class PTCGLImporter:
             screen, tile = self._wait_for("CREATE A DECK", DECK_GRID)
             self._click(screen, tile)
             screen, settings = self._wait_for("IMPORT SETTINGS", DIALOG)
-            if self.rarest:
-                self._say("Choosing your rarest cards…")
-                self._choose_rarest(screen, settings)
+            self._say(f"Import settings: {IMPORT_MODES[self.mode][1]}…")
+            self._choose_mode(screen, settings)
             self._put_clipboard()
             screen, button = self._wait_for("FROM YOUR CLIPBOARD", DIALOG)
             self._say("Importing…")

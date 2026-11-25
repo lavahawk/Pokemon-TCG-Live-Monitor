@@ -57,6 +57,39 @@ def test_regions_fit_any_window():
     assert wide.rect(P.DIALOG)[0] == (5120 - 1440) // 2
 
 
+def test_import_settings_choice():
+    """Settings' Import settings choice: the dropdown is opened and the
+    chosen option clicked; Owned is the card between Direct and Rarest owned."""
+    import ptcgl_import as P
+
+    class FakeScreen:
+        size = (1000, 1000)
+
+        def __init__(self, found):
+            self.found = found
+
+        def find(self, phrase, region, **_):
+            return self.found.get(phrase)
+
+    for mode, showing, want in (("rarest", "RAREST OWNED", None), ("direct", "DIRECT", None),
+                                ("owned", "DIRECT", (300, 547)), ("rarest", "DIRECT", (300, 682)),
+                                ("direct", "RAREST OWNED", (300, 412))):
+        clicks = []
+        imp = P.PTCGLImporter("x", mode=mode)
+        band = FakeScreen({showing: (600, 100), "OWNED": (620, 100)} if showing == "RAREST OWNED"
+                          else {showing: (600, 100)})
+        dialog = FakeScreen({"DIRECT": (300, 412), "RAREST OWNED": (300, 682), "CONFIRM": (300, 835),
+                             "IMPORT SETTINGS": (300, 100)})
+        imp._click = lambda screen, point: clicks.append(tuple(point))
+        imp._wait_for = lambda phrase, region, **_: (dialog, dialog.find(phrase, region))
+        imp._choose_mode(band, (500, 100))
+        if want is None:
+            assert clicks == [], (mode, showing, clicks)
+        else:
+            assert clicks == [(600, 100), want, (300, 835)], (mode, showing, clicks)
+    assert P.PTCGLImporter("x", mode="bogus").mode in P.IMPORT_MODES
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):
