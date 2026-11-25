@@ -214,3 +214,5 @@ RELEASE_NOTES_v2.12.md
 RELEASE_NOTES_v2.13.md
 RELEASE_NOTES_v2.14.md
 RELEASE_NOTES_v2.15.md
+replay_timeline.py
+replay_page.js

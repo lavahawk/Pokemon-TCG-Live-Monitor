@@ -1126,6 +1126,19 @@ class WindowResizeHandle(QFrame):
         painter.end()
 
 
+class _ResizeWatcher(QObject):
+    """Calls callback whenever the watched widget is resized."""
+
+    def __init__(self, callback, parent=None):
+        super().__init__(parent)
+        self._callback = callback
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize:
+            self._callback()
+        return False
+
+
 class ReplayWebPage(QWebEnginePage if WEBENGINE_AVAILABLE else QObject):
     """WebEngine page that can auto-answer the replay site's file picker."""
 
@@ -9166,7 +9179,9 @@ class StatsWindow(QWidget):
         vlayout.setContentsMargins(12, 12, 12, 12)
         vlayout.setSpacing(10)
 
-        header_row = QHBoxLayout()
+        self.replay_header = QWidget()
+        header_row = QHBoxLayout(self.replay_header)
+        header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(8)
 
         title = QLabel("PTCGL REPLAY")
@@ -9185,7 +9200,7 @@ class StatsWindow(QWidget):
         open_browser_btn.clicked.connect(self.open_replay_in_browser)
         header_row.addWidget(open_browser_btn)
 
-        vlayout.addLayout(header_row)
+        vlayout.addWidget(self.replay_header)
 
         self.replay_view = None
         self.replay_profile = None
@@ -9210,7 +9225,177 @@ class StatsWindow(QWidget):
         self.replay_view.setMinimumHeight(420)
         self._rebuild_replay_page()
         self._replay_host.addWidget(self.replay_view, stretch=1)
+
+        # The wide timeline under the site (replay_timeline.py), hidden until
+        # a replay is loaded.
+        from replay_timeline import ReplayTimeline
+        self.replay_timeline = ReplayTimeline()
+        self.replay_timeline.seek.connect(self._replay_seek)
+        self.replay_timeline.hide()
+        self.replay_focus_btn = self.replay_timeline.add_button("", "", self._toggle_replay_board_focus)
+        self._sync_replay_focus_button()
+        self.replay_timeline.add_button("Open in browser ↗", "Open this replay on ptcglreplay.com, at this action",
+                                        self.open_replay_in_browser)
+        self._replay_host.addWidget(self.replay_timeline)
+        self._replay_actions_max = -1
+        self._replay_poll_busy = False
+        self.replay_poll_timer = QTimer(self)
+        self.replay_poll_timer.setInterval(200)
+        self.replay_poll_timer.timeout.connect(self._poll_replay_state)
+        self.replay_poll_timer.start()
+
+        # Fit the site to the view (it lays out for about 1280 x 840 CSS px
+        # and otherwise scrolls in a small window or floats small in a big one).
+        self._replay_zoom_timer = QTimer(self)
+        self._replay_zoom_timer.setSingleShot(True)
+        self._replay_zoom_timer.setInterval(150)
+        self._replay_zoom_timer.timeout.connect(lambda: self._fit_replay_zoom(0))
+        self._replay_resize_filter = _ResizeWatcher(self._replay_zoom_timer.start, self.replay_view)
+        self.replay_view.installEventFilter(self._replay_resize_filter)
         return self.replay_view
+
+    # ── fit to the window ──
+    # The site lays out for about 1280 x 760 CSS px: its three columns are
+    # as tall as the window, and below 1024 px wide it stacks them in one
+    # column. Zoom so it sees roughly that size whatever the window, and
+    # never narrow enough to stack.
+    REPLAY_DESIGN = (1280, 760)
+    REPLAY_MAX_W = 1600         # the site's own max width: wider is empty sides
+    REPLAY_MIN_H = 640          # the board needs about this much CSS height
+    REPLAY_STACK_W = 1100
+    REPLAY_ZOOM_RANGE = (0.6, 2.0)
+    _replay_page_js = None
+
+    @classmethod
+    def _replay_script(cls):
+        """replay_page.js: the full-board layout, no stray page scrollbar,
+        image retries (injected into the site; see the file)."""
+        if cls._replay_page_js is None:
+            try:
+                with open(os.path.join(BASE_DIR, "replay_page.js"), "r", encoding="utf-8") as handle:
+                    cls._replay_page_js = handle.read()
+            except OSError:
+                cls._replay_page_js = ""
+        return cls._replay_page_js
+
+    def _replay_board_focus(self):
+        return bool(load_app_settings().get("replay_board_focus", True))
+
+    def _fit_replay_zoom(self, _rounds=0):
+        view = getattr(self, "replay_view", None)
+        page = getattr(self, "replay_page", None)
+        if view is None or page is None or view.width() < 50 or view.height() < 50:
+            return
+        focus = self._replay_board_focus()
+        if focus:
+            zoom = 1.0   # the page script sizes the board itself
+        else:
+            lo, hi = self.REPLAY_ZOOM_RANGE
+            design_w, design_h = self.REPLAY_DESIGN
+            fit = min(view.width() / design_w, view.height() / design_h)
+            fill = view.width() / self.REPLAY_MAX_W
+            cap = min(view.width() / self.REPLAY_STACK_W, view.height() / self.REPLAY_MIN_H)
+            zoom = max(lo, min(hi, min(max(fit, fill), cap)))
+        if abs(page.zoomFactor() - zoom) > 0.005:
+            page.setZoomFactor(zoom)
+        try:
+            if "ptcglreplay.com" in page.url().toString() and self._replay_script():
+                page.runJavaScript(self._replay_script())
+                page.runJavaScript(f"window.__tlm && window.__tlm.setFocus({'true' if focus else 'false'})")
+        except Exception:
+            pass
+
+    def _toggle_replay_board_focus(self):
+        self._save_app_setting("replay_board_focus", not self._replay_board_focus())
+        self._sync_replay_focus_button()
+        self._fit_replay_zoom()
+
+    def _sync_replay_focus_button(self):
+        btn = getattr(self, "replay_focus_btn", None)
+        if btn is not None:
+            focus = self._replay_board_focus()
+            btn.setText("Side panels" if focus else "Full board")
+            btn.setToolTip("Show the site's controls, card detail and action log beside the board" if focus
+                           else "Hide the side panels and lay the board out wide, as big as it fits")
+
+    # ── the timeline ──
+    REPLAY_STATE_JS = """(() => {
+        const r = document.querySelector('input[type="range"]');
+        if (!r) return JSON.stringify({ok: false});
+        const out = {ok: true, value: Number(r.value), max: Number(r.max)};
+        if (%s) {
+            // Text by its leaf elements, not innerText: the log is hidden in
+            // the full-board layout, and hidden text has no line breaks.
+            out.actions = Array.from(document.querySelectorAll('button.border-l-4')).map(b => {
+                const parts = Array.from(b.querySelectorAll('*')).filter(e => !e.children.length)
+                    .map(e => (e.textContent || '').replace(/\\s+/g, ' ').trim()).filter(Boolean);
+                if (!parts.length || !/^\\d+$/.test(parts[0])) return null;
+                return [Number(parts[0]), parts.slice(1).join(' ')];
+            }).filter(Boolean);
+        }
+        return JSON.stringify(out);
+    })()"""
+
+    def _poll_replay_state(self):
+        view = getattr(self, "replay_view", None)
+        page = getattr(self, "replay_page", None)
+        if view is None or page is None or not view.isVisible() or self._replay_poll_busy:
+            return
+        want_actions = "true" if not self.replay_timeline.has_actions() or self._replay_actions_max < 0 else "false"
+        self._replay_poll_busy = True
+        try:
+            page.runJavaScript(self.REPLAY_STATE_JS % want_actions, self._on_replay_state)
+        except Exception:
+            self._replay_poll_busy = False
+
+    def _on_replay_state(self, result):
+        self._replay_poll_busy = False
+        try:
+            d = json.loads(result) if isinstance(result, str) else {}
+        except Exception:
+            d = {}
+        timeline = self.replay_timeline
+        if not d.get("ok"):
+            # The upload page (or "New"): no replay to scrub.
+            if timeline.isVisible():
+                timeline.hide()
+                self.replay_header.show()
+                self._replay_zoom_timer.start()
+            self._replay_actions_max = -1
+            timeline.set_actions([])
+            return
+        if d.get("max") != self._replay_actions_max:
+            self._replay_actions_max = -1   # a new game: read its actions again
+        if "actions" in d:
+            try:
+                from app_settings import load_username
+                me = load_username() or ""
+            except Exception:
+                me = ""
+            timeline.set_actions([(n, t) for n, t in d["actions"]], me)
+            self._replay_actions_max = d.get("max", -1)
+        timeline.set_position(d.get("value", 0), d.get("max", 0))
+        if not timeline.isVisible():
+            timeline.show()
+            self.replay_header.hide()   # more room for the board
+            self._replay_zoom_timer.start()
+
+    def _replay_seek(self, n):
+        page = getattr(self, "replay_page", None)
+        if page is None:
+            return
+        js = """(() => { const r = document.querySelector('input[type="range"]'); if (!r) return -1;
+            const v = String(Math.max(Number(r.min) || 0, Math.min(Number(r.max), %d)));
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(r, v);
+            r.dispatchEvent(new Event('input', {bubbles: true}));
+            r.dispatchEvent(new Event('change', {bubbles: true}));
+            return Number(r.value); })()""" % int(n)
+        # Move the playhead now; the next poll confirms where the site is.
+        self.replay_timeline.set_position(int(n), self.replay_timeline.track.max)
+        try:
+            page.runJavaScript(js)
+        except Exception:
+            pass
 
     def _create_replay_profile(self):
         profile = QWebEngineProfile(self)
@@ -9284,6 +9469,8 @@ class StatsWindow(QWidget):
     def _on_replay_page_load_finished(self, ok):
         if self.sender() is not self.replay_page:
             return
+        if ok and getattr(self, "_replay_zoom_timer", None) is not None:
+            self._replay_zoom_timer.start()
         if not ok or not self.replay_pending_log_path or not self.replay_page:
             return
         current_url = self.replay_page.url().toString()
@@ -10133,10 +10320,95 @@ class StatsWindow(QWidget):
         thanks.setStyleSheet("color: rgba(255, 255, 255, 0.5); font-size: 12px; font-style: italic;")
         thanks.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(thanks)
-        
+
+        layout.addSpacing(8)
+        layout.addWidget(self._create_credits_card())
+
         layout.addStretch()
-        
-        return content
+
+        scroll = self._create_standard_scroll_area()
+        scroll.setWidget(content)
+        return scroll
+
+    # The people and projects the app is built on. The Replay tab hides the
+    # replay site's own credits line (it took room from the board), so the
+    # thanks and its links live here.
+    CREDITS = (
+        ("PTCGL Replay", "by serukaizen",
+         "The game viewer in the Replay tab: every battle, played back card by card.",
+         (("ptcglreplay.com", "https://www.ptcglreplay.com/"),
+          ("Buy them a rare candy 🍬", "https://ko-fi.com/serukaizen"))),
+        ("TCGdex", "",
+         "The card pictures in the replay viewer.",
+         (("tcgdex.dev", "https://tcgdex.dev/"),)),
+        ("Limitless TCG", "",
+         "Tournaments, decklists, the meta data, card images, Japan results and the Limitless Dashboard "
+         "(check-in, match chat, opponent decklists).",
+         (("limitlesstcg.com", "https://limitlesstcg.com/"), ("play.limitlesstcg.com", "https://play.limitlesstcg.com/"))),
+        ("TrainerHill", "",
+         "Meta trends and deck tools in the TrainerHill tab.",
+         (("trainerhill.com", "https://www.trainerhill.com/"),)),
+        ("PokeData", "",
+         "In-person tournament results in the PokeData and In Person tabs.",
+         (("pokedata.ovh", "https://www.pokedata.ovh/"),)),
+        ("Pokecabook & pokemon-card.com", "",
+         "Japanese tournament decks in the Japan Data tab.",
+         (("pokecabook.com", "https://pokecabook.com/"), ("pokemon-card.com", "https://www.pokemon-card.com/"))),
+        ("PokeSprite & PokeAPI", "",
+         "The Pokémon sprites next to deck names.",
+         (("PokeSprite", "https://github.com/bradley-erickson/pokesprite"), ("pokeapi.co", "https://pokeapi.co/"))),
+        ("TCGCSV", "",
+         "Card prices for decklists.",
+         (("tcgcsv.com", "https://tcgcsv.com/"),)),
+        ("Tesseract OCR", "UB Mannheim build",
+         "Reads your rank and deck name from the game's screen.",
+         (("tesseract-ocr", "https://github.com/tesseract-ocr/tesseract"),)),
+        ("Qt for Python", "PySide6",
+         "Every window in the app, and its built-in browser.",
+         (("qt.io", "https://www.qt.io/qt-for-python"),)),
+        ("Fonts", "Geist, Geist Mono, JetBrains Mono, Mona Sans",
+         "Under the SIL Open Font License.",
+         (("Geist", "https://vercel.com/font"), ("JetBrains Mono", "https://www.jetbrains.com/lp/mono/"),
+          ("Mona Sans", "https://github.com/github/mona-sans"))),
+    )
+
+    def _create_credits_card(self):
+        card = self.create_card("Thanks to")
+        body = QVBoxLayout()
+        body.setContentsMargins(16, 4, 16, 14)
+        body.setSpacing(0)
+        intro = QLabel("This app stands on a lot of other people's hard work. Go show them some love.")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: rgba(235,242,250,0.7); font-size: 12px; padding-bottom: 8px;")
+        body.addWidget(intro)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(12)
+        for i, (name, by, what, links) in enumerate(self.CREDITS):
+            link_html = " &nbsp;·&nbsp; ".join(
+                f"<a href='{html.escape(url)}' style='color:#6BB6E8; text-decoration:none;'>{html.escape(text)}</a>"
+                for text, url in links)
+            label = QLabel(
+                f"<b style='color:rgba(240,244,250,0.96); font-size:13px;'>{html.escape(name)}</b>"
+                + (f" <span style='color:rgba(168,182,204,0.8); font-size:11px;'>{html.escape(by)}</span>" if by else "")
+                + f"<br><span style='color:rgba(220,230,242,0.78); font-size:12px;'>{html.escape(what)}</span>"
+                + f"<br><span style='font-size:11px;'>{link_html}</span>")
+            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setWordWrap(True)
+            label.setOpenExternalLinks(True)
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+            label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            grid.addWidget(label, i // 2, i % 2)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        body.addLayout(grid)
+        note = QLabel("Pokémon TCG Live Monitor is a fan project, not affiliated with Nintendo, Creatures Inc., "
+                      "GAME FREAK or The Pokémon Company.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: rgba(168,182,204,0.6); font-size: 10px; padding-top: 12px;")
+        body.addWidget(note)
+        card.layout().addLayout(body)
+        return card
     
     # ─── META ANALYSIS TABS ─────────────────────────────────────────────────
 
