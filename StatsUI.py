@@ -16241,6 +16241,9 @@ class StatsWindow(QWidget):
             6: "deck_source",
         }
         updates = {field_map[column]: normalized_value}
+        if column == 2 and normalized_value:
+            # You set the opponent's deck: it's yours now (the detectors learn from it).
+            updates.update(deck_source="Manual", confidence=100)
 
         try:
             changed = self.db.update_battle_record(battle_id, updates=updates)

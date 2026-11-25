@@ -464,10 +464,16 @@ def _console_available():
         return False
 
 
-def local_model_ranking(battlelog, username, evidence):
-    """The card matcher re-ranked with your own games (local_model.py): your
-    ladder's deck frequencies, decks only you have met, the opponent's last
-    deck. [(deck, probability)] best first, [] when it can't run."""
+_local_models = {}
+
+
+def build_local_model(battlelog, username):
+    """local_model.LocalModel from your games (this battle left out), or None.
+    Built once per battle: the AI path and the local path share it."""
+    key = log_hash(battlelog)
+    if key in _local_models:
+        return _local_models[key]
+    model = None
     try:
         import card_usage
         import local_model
@@ -477,12 +483,73 @@ def local_model_ranking(battlelog, username, evidence):
             opponent = parse_opponent_from_log(log, username)
             return opponent, card_usage.log_card_counts(log, opponent, username)
 
-        history = local_model.history_from_db(db, extract, exclude_hash=log_hash(battlelog))
+        history = local_model.history_from_db(db, extract, exclude_hash=key)
         model = local_model.LocalModel(load_meta_rows(), history)
+    except Exception as exc:
+        print(f"[Local model] skipped: {exc}")
+    _local_models[key] = model
+    return model
+
+
+def local_model_ranking(battlelog, username, evidence):
+    """The card matcher re-ranked with your own games (local_model.py): your
+    ladder's deck frequencies, decks only you have met, the opponent's last
+    deck, and the decks you corrected. [(deck, probability)] best first, []
+    when it can't run."""
+    model = build_local_model(battlelog, username)
+    if model is None:
+        return []
+    try:
         return model.predict(evidence.get("copies") or {}, parse_opponent_from_log(battlelog, username))
     except Exception as exc:
         print(f"[Local model] skipped: {exc}")
         return []
+
+
+def deck_name_list():
+    """Every spelling the app already uses, meta sheet first: AI and local
+    picks are put in these words so one deck never shows up under two names."""
+    names = [str(r.get("deck") or "") for r in sorted(load_meta_rows(), key=lambda r: -(r.get("share") or 0))]
+    try:
+        from deck_confirm import known_deck_names
+        names += known_deck_names(db)
+    except Exception:
+        pass
+    return names
+
+
+def same_names(result):
+    """Opponent deck and candidates in the app's spelling (deck_learning.canonical_deck)."""
+    try:
+        from deck_learning import canonical_deck
+        names = deck_name_list()
+        if result.get("OpponentsDeck"):
+            result["OpponentsDeck"] = canonical_deck(result["OpponentsDeck"], names)
+        merged, seen = [], set()
+        for deck, p in result.get("Candidates") or []:
+            deck = canonical_deck(deck, names)
+            if deck.casefold() not in seen:
+                seen.add(deck.casefold())
+                merged.append((deck, p))
+        result["Candidates"] = merged
+    except Exception as exc:
+        print(f"[Names] not matched: {exc}")
+    return result
+
+
+def corrections_note(model, copies, limit=3):
+    """For the AI prompt: your corrected games that showed these cards."""
+    if model is None:
+        return ""
+    lines = []
+    for sim, deck, wrong, cards in model.recall(copies)[:limit]:
+        shown = ", ".join(cards[:6])
+        lines.append(f"- showed {shown}: it was {deck}" + (f" (not {wrong})" if wrong else "")
+                     + f" [{int(round(sim * 100))}% the same cards]")
+    if not lines:
+        return ""
+    return ("\nThis player checked the opponent's deck in similar past games. Follow these when the cards match:\n"
+            + "\n".join(lines))
 
 
 def local_fallback_parse(battlelog, username):
@@ -501,7 +568,14 @@ def local_fallback_parse(battlelog, username):
     # decks you most likely met; a weak pick never becomes the stored guess.
     ranked = local_model_ranking(battlelog, username, evidence) or evidence["ranked"]
     card_pick = ranked[0] if ranked else None
-    if card_pick and card_pick[1] >= 0.5:
+    model = build_local_model(battlelog, username)
+    learned = model.learned_pick(evidence.get("copies") or {}) if model is not None else None
+    if learned and card_pick and card_pick[0].casefold() == learned[0].casefold():
+        # A game you labelled showed nearly these cards: no need to ask.
+        print(f"[Learned] {learned[0]} ({card_pick[1] * 100:.0f}%), like a game you labelled "
+              f"({learned[1] * 100:.0f}% the same cards)")
+        inferred, source = card_pick[0], "learned"
+    elif card_pick and card_pick[1] >= 0.5:
         print(f"[Cards] {card_pick[0]} ({card_pick[1] * 100:.0f}%) from {len(evidence['cards'])} revealed cards")
         # A clear pick is shown as CARDS; a close call is a GUESS the overlay asks you to confirm.
         firm = card_pick[1] >= CARD_PICK_MIN and deck_fits_cards(card_pick[0], evidence["pokemon"])
@@ -526,14 +600,14 @@ def local_fallback_parse(battlelog, username):
     else:
         confidence = 35 if inferred else 0
 
-    return {
+    return same_names({
         "My_deck": (my_deck or "").strip() or "Unknown Deck",
         "OpponentsDeck": (opponents_deck or "").strip(),
         "Win_or_Loss": (win_or_loss or "").strip().title(),
         "Confidence": confidence,
         "deck_source": source if inferred else "none",
         "Candidates": merge_candidates(inferred, confidence / 100.0 if inferred else None, [], ranked),
-    }
+    })
 
 
 def infer_opponent_deck_from_log(battlelog):
@@ -777,6 +851,7 @@ def ai_parse(battlelog, username, api_key=None, anonymize=None, client=None, pla
         from openai import OpenAI
         client = OpenAI(api_key=api_key, timeout=45.0, max_retries=1)
     possible_decks = load_possible_decks()
+    original_log, original_username = battlelog, username
     # Card evidence is computed locally from the real log and names.
     evidence = card_evidence(battlelog, username)
     if anonymize is None:
@@ -794,6 +869,14 @@ def ai_parse(battlelog, username, api_key=None, anonymize=None, client=None, pla
         # candidate's usual tournament list explains it - e.g. 1 Zoroark ex is
         # a tech in a Gengar list, 4 make it a Zoroark deck.
         explain = evidence["explain"] or f"Opponent revealed: {sorted(evidence['pokemon'])}"
+    # What you corrected before: the closest of your labelled games (the
+    # real card names, so read before the log is anonymized - the note holds
+    # no player names). The built-in AI builds its prompt from data only;
+    # for it the check after the reply does the same job.
+    local = build_local_model(original_log, original_username)
+    copies = evidence.get("copies") or {}
+    if not (plan is not None and plan.provider == "hosted"):
+        explain += corrections_note(local, copies)
     fields = {"battlelog": battlelog, "decks": [str(d) for d in possible_decks], "explain": explain,
               "username": username, "anonymized": bool(anonymize)}
     prompt = render_prompt(**fields)
@@ -853,9 +936,21 @@ def ai_parse(battlelog, username, api_key=None, anonymize=None, client=None, pla
                 print(f"[Cards] AI said {parsed.OpponentsDeck!r}, but the opponent's cards say "
                       f"{pick[0]} ({pick[1] * 100:.0f}%) - using the cards.")
                 result.update(OpponentsDeck=pick[0], Confidence=int(round(pick[1] * 100)), deck_source="cards")
+            # Your corrections: a game you labelled that showed nearly the same
+            # cards decides it (the AI doesn't remember between battles).
+            learned = local.learned_pick(copies) if local is not None else None
+            if learned:
+                from deck_learning import canonical_deck
+                names = deck_name_list()
+                if canonical_deck(learned[0], names).casefold() != canonical_deck(result["OpponentsDeck"], names).casefold():
+                    print(f"[Learned] AI said {result['OpponentsDeck']!r}; a game you labelled showed "
+                          f"{learned[1] * 100:.0f}% the same cards and was {learned[0]} - using that.")
+                    alternatives = [(result["OpponentsDeck"], None)] + list(alternatives)
+                    result.update(OpponentsDeck=learned[0], Confidence=max(80, int(round(learned[1] * 100))),
+                                  deck_source="learned")
             result["Candidates"] = merge_candidates(result["OpponentsDeck"], result["Confidence"] / 100.0,
                                                     alternatives, evidence["ranked"])
-            return result
+            return same_names(result)
         except Exception as exc:
             last_error = exc
             if plan is not None and ai_provider.handle_failure(plan, exc)[0]:
@@ -960,7 +1055,7 @@ def main():
 
     try:
         deck_source = response_dict.get("deck_source") or "none"
-        if deck_source in ("ai", "cards") and not (response_dict.get("OpponentsDeck") or "").strip():
+        if deck_source in ("ai", "cards", "learned") and not (response_dict.get("OpponentsDeck") or "").strip():
             deck_source = "none"  # no deck: ask on the overlay card
         try:  # the card matcher's own ranking: a second opinion on the label for the stats
             card_ranked = card_evidence(battlelog, username)["ranked"]
@@ -968,7 +1063,8 @@ def main():
             card_ranked = None
         battle_id = save_to_database(my_deck, opponents_deck, win_or_loss, confidence, explicit_log_path,
                                      is_tournament=tournament, battle_hash=battle_hash,
-                                     deck_source={"ai": "AI", "cards": "Cards"}.get(deck_source, "Local"),
+                                     deck_source={"ai": "AI", "cards": "Cards", "learned": "Learned"}.get(
+                                         deck_source, "Local"),
                                      card_ranked=card_ranked)
         if battle_id:
             print(f"Battle saved to database{' (Limitless tournament)' if tournament else ''}.")
@@ -989,7 +1085,8 @@ def main():
                 # Manual mode (no key / local-only / AI failed) always asks, like the
                 # AI's low-confidence picks; the guesses are offered as choices.
                 write_request(battle_id, opponents_deck, source=deck_source,
-                              needs_input=bool(manual_reason) or deck_source not in ("ai", "cards"),
+                              needs_input=(bool(manual_reason) and deck_source != "learned")
+                              or deck_source not in ("ai", "cards", "learned"),
                               my_deck=my_deck, result=win_or_loss, confidence=confidence,
                               candidates=response_dict.get("Candidates") or [],
                               manual=manual_reason)

@@ -19,6 +19,12 @@ and nearly every deck is on the sheet. So everything is kept mild
 (LADDER_MIX_MAX, rogue decks only win on their cards) and gains weight as
 manually confirmed games pile up. Re-check with a leave-one-out run then.
 
+Your corrections (deck_learning.py): every game whose deck you set yourself
+is remembered by the cards the opponent showed. A new game showing the same
+cards leans toward that deck - the closer the cards, the more (MEMORY_MIX) -
+and away from the guess you corrected in that game (REJECT_DROP). So a deck
+the meta lists get wrong for you is right the next time it shows up.
+
 Per-log card extraction is cached in .local_model_cache.json (by log hash),
 so only new battles are read; labels come fresh from the DB, so a deck you
 correct on the overlay card counts straight away.
@@ -39,7 +45,12 @@ LADDER_MIX_GAMES = 60.0  # ...reached after this many (recency-weighted) games
 OPPONENT_BOOST = 4.0    # likelihood ratio for the deck an opponent used last time
 FLOOR = 0.004           # P(card) for a deck never seen playing it
 ROGUE_MIN_GAMES = 2     # a deck outside the meta sheet needs this many games to be suggested
-SOURCE_WEIGHT = {"Manual": 1.5, "AI": 1.0, "Cards": 1.0, "OCR": 0.8, "Local": 0.5}
+SOURCE_WEIGHT = {"Manual": 1.5, "AI": 1.0, "Cards": 1.0, "Learned": 1.0, "OCR": 0.8, "Local": 0.5}
+MEMORY_MIN_SIM = 0.45   # cards shared with a game you labelled (idf-weighted Jaccard) before it counts
+MEMORY_MIN_SHARED = 3   # ...and at least this many of the same cards
+MEMORY_MIX = 0.9        # at identical cards, this much of the answer comes from your labelled games
+REJECT_DROP = 0.8       # at identical cards, a guess you corrected keeps only 20 % of its weight
+RECALL_FIRM = 0.8       # similarity at which a remembered game decides the deck on its own
 SKIP_LABELS = ("unknown", "other")
 
 
@@ -74,6 +85,7 @@ class LocalModel:
         self.faced = Counter()
         self.games = defaultdict(list)  # deck key -> [copies, ...] (decks outside the sheet)
         self.opponents = defaultdict(Counter)
+        self.memory = []   # [(deck key, {card}, rejected key or None)] games you labelled yourself
         for game in history or ():
             if not _usable_label(game.get("deck")):
                 continue
@@ -87,7 +99,16 @@ class LocalModel:
             opp = _key(game.get("opponent"))
             if opp:
                 self.opponents[opp][key] += 1
+            if game.get("manual") and game.get("copies"):
+                rejected = _key(game.get("rejected")) if _usable_label(game.get("rejected")) else None
+                if rejected:
+                    rejected = alias.get(_base(rejected), rejected)
+                    self.names.setdefault(rejected, _norm(game["rejected"]))
+                self.memory.append((key, set(game["copies"]), rejected if rejected != key else None))
         self.faced_total = sum(self.faced.values())
+        df = Counter(c for _k, cards, _r in self.memory for c in cards)
+        n = len(self.memory)
+        self._idf = {c: math.log((n + 1) / (d + 1)) + 1.0 for c, d in df.items()}
 
     # ── pieces ──
     def _meta_prior(self):
@@ -150,6 +171,66 @@ class LocalModel:
         probs = {k: math.exp(v - best) / total for k, v in rogue_scores.items()}
         return probs, sum(probs.values())
 
+    def _similarity(self, seen, cards):
+        shared = seen & cards
+        if len(shared) < MEMORY_MIN_SHARED:
+            return 0.0
+        weight = lambda c: self._idf.get(c, 1.0)
+        union = sum(weight(c) for c in seen | cards)
+        return sum(weight(c) for c in shared) / union if union else 0.0
+
+    def recall(self, copies):
+        """Games you labelled yourself that showed these cards, closest first:
+        [(similarity, deck name, corrected guess or None, shared cards)]."""
+        seen = set(copies or ())
+        if not seen or not self.memory:
+            return []
+        out = []
+        for key, cards, rejected in self.memory:
+            sim = self._similarity(seen, cards)
+            if sim >= MEMORY_MIN_SIM:
+                out.append((sim, self.names.get(key, key), self.names.get(rejected, rejected) if rejected else None,
+                            sorted(seen & cards, key=lambda c: -self._idf.get(c, 1.0))))
+        out.sort(key=lambda m: -m[0])
+        return out
+
+    def learned_pick(self, copies):
+        """(deck, similarity) when a game you labelled showed nearly the same
+        cards (RECALL_FIRM) and the close games agree; else None."""
+        matches = [m for m in self.recall(copies) if m[0] >= RECALL_FIRM]
+        if not matches:
+            return None
+        votes = Counter()
+        for sim, deck, _rejected, _cards in matches:
+            votes[_key(deck)] += sim
+        key, score = votes.most_common(1)[0]
+        if score < 0.7 * sum(votes.values()):
+            return None  # your close games disagree: no learned answer
+        best = max(m[0] for m in matches if _key(m[1]) == key)
+        return self.names.get(key, key), best
+
+    def _apply_memory(self, probs, copies):
+        """Blend in your labelled games that showed the same cards, and push
+        down the guesses you corrected in them."""
+        matches = self.recall(copies)
+        if not matches:
+            return probs
+        votes, rejected = Counter(), {}
+        for sim, deck, wrong, _cards in matches:
+            votes[_key(deck)] += sim * sim
+            if wrong:
+                rejected[_key(wrong)] = max(rejected.get(_key(wrong), 0.0), sim)
+        total = sum(votes.values())
+        mix = MEMORY_MIX * matches[0][0] ** 2
+        out = {k: (1 - mix) * p for k, p in probs.items()}
+        for key, v in votes.items():
+            out[key] = out.get(key, 0.0) + mix * v / total
+        for key, sim in rejected.items():
+            if key in out:
+                out[key] *= 1 - REJECT_DROP * sim * sim * (1 - votes.get(key, 0.0) / total)
+        norm = sum(out.values()) or 1.0
+        return {k: v / norm for k, v in out.items()}
+
     # ── public ──
     def predict(self, copies=None, opponent=None, top=3):
         """[(deck name, probability)] best first. copies: {card: copies seen}."""
@@ -172,6 +253,8 @@ class LocalModel:
         probs = {k: (1.0 - rogue_total) * w / total for k, w in weights.items()}
         for key, p in rogue.items():
             probs[key] = p * self._opponent_ratio(key, opponent)
+        norm = sum(probs.values()) or 1.0
+        probs = self._apply_memory({k: v / norm for k, v in probs.items()}, copies)
         norm = sum(probs.values()) or 1.0
         order = sorted(probs, key=lambda k: -probs[k])[:top]
         return [(self.names.get(k, k), probs[k] / norm) for k in order]
@@ -215,6 +298,11 @@ def history_from_db(db, extract, exclude_hash=None):
     finally:
         conn.close()
     cache = _load_cache()
+    try:
+        import deck_learning
+        rejected = deck_learning.rejected_by_hash()
+    except Exception:
+        rejected = {}
     dirty = False
     history = []
     for deck, source, log_file, log_hash, ts in rows:
@@ -234,7 +322,8 @@ def history_from_db(db, extract, exclude_hash=None):
                 cache[log_hash] = entry
                 dirty = True
         history.append({"deck": deck, "copies": entry["copies"], "opponent": entry["opponent"],
-                        "ts": _timestamp(ts), "weight": SOURCE_WEIGHT.get(source or "", 1.0)})
+                        "ts": _timestamp(ts), "weight": SOURCE_WEIGHT.get(source or "", 1.0),
+                        "manual": source == "Manual", "rejected": rejected.get(log_hash)})
     if dirty:
         _save_cache(cache)
     return history

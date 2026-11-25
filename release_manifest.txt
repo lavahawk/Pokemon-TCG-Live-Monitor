@@ -20,6 +20,7 @@ RankDetector.py
 game_window.py
 leagues.py
 local_model.py
+deck_learning.py
 label_dist.py
 ai_usage.py
 updater.py

@@ -343,7 +343,11 @@ def test_ai_parse_candidates_and_fallback_model():
                                                    {"deck": "Raging Bolt", "probability": 5},
                                                    {"deck": "Extra", "probability": 5}]}
     module, calls = _fake_openai(payload, fail_models=(P.AI_MODELS[0],))
-    out = _with_openai(module, lambda: P.ai_parse("me's Turn\nopp's Turn", "me", "sk-test"))
+    names, P.deck_name_list = P.deck_name_list, lambda: []   # not the real database's spellings
+    try:
+        out = _with_openai(module, lambda: P.ai_parse("me's Turn\nopp's Turn", "me", "sk-test"))
+    finally:
+        P.deck_name_list = names
     assert calls == P.AI_MODELS[:2]  # first model failed, second used
     assert out["OpponentsDeck"] == "Dragapult ex" and out["Win_or_Loss"] == "Loss"
     assert out["Confidence"] == 70 and out["deck_source"] == "ai"

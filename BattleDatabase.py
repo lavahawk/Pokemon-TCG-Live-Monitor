@@ -245,6 +245,17 @@ class BattleDatabase:
         assignments = ", ".join(f"{column} = ?" for column in fields)
         conn = self._connect()
         try:
+            if "opponent_deck" in fields and fields.get("deck_source") == "Manual":
+                # You changed the deck the app picked: remember the guess it
+                # got wrong, so the detectors learn from it (deck_learning.py).
+                old = conn.execute("SELECT opponent_deck, deck_source, log_hash FROM battles WHERE id = ?",
+                                   (battle_id,)).fetchone()
+                if old and old[1] != "Manual":
+                    try:
+                        import deck_learning
+                        deck_learning.record(old[2], old[0], fields["opponent_deck"], old[1])
+                    except Exception:
+                        pass
             cur = conn.execute(f"UPDATE battles SET {assignments} WHERE id = ?", list(fields.values()) + [battle_id])
             changed = cur.rowcount > 0
             conn.commit()

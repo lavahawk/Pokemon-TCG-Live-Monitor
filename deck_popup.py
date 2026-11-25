@@ -448,16 +448,16 @@ class DeckConfirmPopup(QWidget):
         self.name.setContentsMargins(0, 0, 26 if mode == "done" else 0, 0)
         if mode == "show":
             low = self._low_confidence()
-            self.accent = BLUE if source in ("ai", "cards") and not low else AMBER
+            self.accent = BLUE if source in ("ai", "cards", "learned") and not low else AMBER
             self.caption.setText(("WHICH DECK WAS IT?" if low else "OPPONENT DECK")
                                  + (f"  ·  {result}" if result else ""))
             # cards = picked from the opponent's revealed cards vs public decklists
-            chip = {"ai": "AI", "cards": "CARDS"}.get(source, "GUESS")
+            chip = {"ai": "AI", "cards": "CARDS", "learned": "LEARNED"}.get(source, "GUESS")
             confidence = (self.request or {}).get("confidence")
             if confidence is not None:
                 chip += f" {int(confidence)}%"
             self._set_chip(chip, self.accent)
-            self.chip.setVisible(source in ("ai", "cards", "guess"))
+            self.chip.setVisible(source in ("ai", "cards", "learned", "guess"))
             self._set_name(self.current or "Unknown")
             self._fill_choices()
             if has_choices:
@@ -622,6 +622,12 @@ class DeckConfirmPopup(QWidget):
             return
         self.keys_hint.used()
         known = canonical_name(text, self.names)
+        if not known:
+            # "dragapult" or "Dusknoir Dragapult": the deck you already have
+            # under another spelling, so the stats don't split it in two.
+            from deck_learning import canonical_deck
+            match = canonical_deck(text, self.names)
+            known = match if match.casefold() != text.casefold() else None
         if known:
             self._save(known)
         else:
