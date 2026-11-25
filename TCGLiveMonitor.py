@@ -144,6 +144,88 @@ def alog(msg):
         pass
 
 
+# ───────────────────────────── how the last run ended ─────────────────────────────
+ALIVE_FILE = os.path.join(LOG_DIR, ".monitor_alive")
+CRASH_LOG = os.path.join(LOG_DIR, "monitor_crash.log")
+HEARTBEAT_S = 30
+_crash_handle = None
+
+
+def last_run_report(alive_text, crash_grew, now):
+    """One log line on how the previous run ended, or None if it exited
+    normally (or there was none). alive_text: the old heartbeat file."""
+    parts = (alive_text or "").split()
+    if len(parts) < 3 or parts[0] != "alive":
+        return None
+    try:
+        seen = float(parts[2])
+    except ValueError:
+        return None
+    when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(seen))
+    gap = max(0, int(now - seen))
+    if crash_grew:
+        return (f"The last run (pid {parts[1]}) crashed around {when}; "
+                f"details in Logs/monitor_crash.log.")
+    return (f"The last run (pid {parts[1]}) was ended from outside the app around {when} "
+            f"(no crash, no normal exit: another program or Windows closed it)."
+            + (f" Down for about {gap // 60} min." if gap >= 120 else ""))
+
+
+def start_death_watch():
+    """Record enough to tell later how this run ended: a heartbeat (time of
+    the last sign of life), a crash dump for native crashes and fatal Python
+    errors, uncaught thread errors, and a clean-exit mark. A kill from
+    outside (taskkill, an installer's Restart Manager) leaves only the
+    heartbeat - which is exactly what tells it apart."""
+    global _crash_handle
+    try:
+        with open(ALIVE_FILE, encoding="utf-8") as fh:
+            previous = fh.read()
+    except OSError:
+        previous = ""
+    try:
+        crash_size_at_start = os.path.getsize(CRASH_LOG)
+    except OSError:
+        crash_size_at_start = 0
+    marker_file = ALIVE_FILE + ".crashsize"
+    try:
+        with open(marker_file, encoding="utf-8") as fh:
+            crash_size_before = int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        crash_size_before = crash_size_at_start
+    report = last_run_report(previous, crash_size_at_start > crash_size_before, time.time())
+    if report:
+        log(report)
+    write_text(marker_file, crash_size_at_start)
+
+    try:
+        import faulthandler
+        _crash_handle = open(CRASH_LOG, "a", encoding="utf-8")
+        _crash_handle.write("")
+        faulthandler.enable(file=_crash_handle, all_threads=True)
+    except Exception as exc:
+        log(f"Crash recorder unavailable: {exc}")
+
+    def thread_error(args):
+        import traceback
+        log(f"Error in thread {getattr(args.thread, 'name', '?')}: "
+            + "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)).rstrip())
+    threading.excepthook = thread_error
+
+    pid = os.getpid()
+
+    def beat():
+        while True:
+            write_text(ALIVE_FILE, f"alive {pid} {time.time():.0f}")
+            time.sleep(HEARTBEAT_S)
+    threading.Thread(target=beat, daemon=True, name="heartbeat").start()
+
+    def clean_exit():
+        write_text(ALIVE_FILE, f"exited {pid} {time.time():.0f}")
+        log("Monitor stopped.")
+    atexit.register(clean_exit)
+
+
 # ───────────────────────────── single instance ─────────────────────────────
 _lock_handle = None
 
@@ -935,6 +1017,7 @@ def main():
             log("Another monitor instance is already running - exiting.")
         return 0
     write_text(PID_FILE, os.getpid())
+    start_death_watch()
     if args.watchdog:
         log("Watchdog: the monitor wasn't running - started it again.")
 

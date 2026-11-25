@@ -73,6 +73,27 @@ class StoppedMarker(unittest.TestCase):
             self.assertFalse(S.stopped_on_purpose(root))
 
 
+class LastRunReport(unittest.TestCase):
+    def setUp(self):
+        import TCGLiveMonitor
+        self.report = TCGLiveMonitor.last_run_report
+
+    def test_normal_exit_or_first_run_says_nothing(self):
+        self.assertIsNone(self.report("", False, 1000))
+        self.assertIsNone(self.report("exited 42 900", False, 1000))
+        self.assertIsNone(self.report("garbage", False, 1000))
+
+    def test_killed_from_outside(self):
+        line = self.report("alive 42 400", False, 1000)
+        self.assertIn("ended from outside", line)
+        self.assertIn("pid 42", line)
+        self.assertIn("about 10 min", line)
+        self.assertNotIn("Down for", self.report("alive 42 990", False, 1000))
+
+    def test_crashed(self):
+        self.assertIn("crashed", self.report("alive 42 400", True, 1000))
+
+
 if __name__ == "__main__":
     import sys
 
