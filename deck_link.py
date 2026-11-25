@@ -357,10 +357,13 @@ def main(argv):
     except Exception:
         pass
     link = argv[1] if len(argv) > 1 else (QGuiApplication.clipboard().text() or "")
+    # --from-clipboard: the HUD asked about a copied list and you said Import.
+    # A list you saved before (without a deck) still goes into the game.
+    from_clipboard = "--from-clipboard" in argv[2:]
     try:
         cards, shared_name = deck_share.parse(link)
         import decklists
-        have = decklists.stored_copy(cards, shared_name)
+        have = None if from_clipboard else decklists.stored_copy(cards, shared_name)
     except Exception:
         have = None  # a damaged link: the box below explains
     if have is not None:  # your own list (same cards, same name): nothing to import
@@ -416,7 +419,7 @@ def main(argv):
     box.setContentsMargins(20, 14, 16, 18)
     box.setSpacing(10)
     head = QHBoxLayout()
-    title = QLabel("SHARED DECK")
+    title = QLabel("IMPORT DECK" if from_clipboard else "SHARED DECK")
     title.setObjectName("title")
     head.addWidget(title)
     head.addStretch()
@@ -472,7 +475,12 @@ def main(argv):
     to_game = QCheckBox("Add it to Pokémon TCG Live")
     to_game.setChecked(game_open)
     to_game.setEnabled(game_open)
-    to_game.setToolTip("Creates the deck in the game under this name, with the rarest prints you own"
+    try:
+        import ptcgl_import
+        mode = ptcgl_import.IMPORT_MODES[ptcgl_import.import_mode()][1]
+    except Exception:
+        mode = "Rarest owned"
+    to_game.setToolTip(f"Creates the deck in the game under this name (Import settings: {mode})"
                        if game_open else "Open Pokémon TCG Live to add it there too")
     box.addWidget(to_game)
     to_app = QCheckBox(f"Add it to {APP_NAME}")
@@ -533,7 +541,7 @@ def main(argv):
             entry, had = import_list(text, deck_name)
             monitor_line = (f"you already had this list, as {entry['name']}." if had
                             else f"saved as {entry['name']}.") + (
-                                f" Its deck page shows it once you play {deck_name}." if deck_name else "")
+                                f" {deck_name} is on your Decks tab." if deck_name else "")
         else:
             monitor_line = "not added."
         QGuiApplication.clipboard().setText(text)

@@ -28,6 +28,12 @@ class FakeHud(QWidget):
     _on_clipboard_changed = OverlayUI.MinimalOverlay._on_clipboard_changed
     _poll_decklist_card = OverlayUI.MinimalOverlay._poll_decklist_card
     _menu_deck = staticmethod(lambda: "Dragapult ex")
+    _game_is_foreground = staticmethod(lambda: FakeHud.from_game)
+    from_game = True
+    opened = []
+
+    def _open_deck_import(self, text):
+        FakeHud.opened.append(text)
 
     def __init__(self):
         super().__init__()
@@ -68,6 +74,37 @@ def test_not_while_link_window_open():
     QApplication.clipboard().setText(DRAGAPULT.replace("4 Dreepy", "3 Dreepy", 1) if "4 Dreepy" in DRAGAPULT else DRAGAPULT + "\n")
     hud._on_clipboard_changed()
     assert hud._pending_decklist is None
+
+
+def test_copied_elsewhere_opens_the_import_box():
+    """A list copied outside the game: Import opens the shared-deck box
+    (into the game and the Decks tab), even for a list saved before."""
+    FakeHud.from_game = False
+    try:
+        hud = FakeHud()
+        hud.show()
+        QApplication.clipboard().setText(DRAGAPULT)      # stored by the first test, not linked to a deck
+        hud._on_clipboard_changed()
+        assert hud._pending_decklist
+        hud._poll_decklist_card((600, 380))
+        from PySide6.QtWidgets import QPushButton
+        btn = next(b for b in hud._decklist_card.findChildren(QPushButton) if b.text() == "Import")
+        btn.click()
+        assert FakeHud.opened and D.is_ptcgl_decklist(FakeHud.opened[-1])
+        # once it's one of your decks, copying it again doesn't ask
+        entry = D.all_decklists()[0]
+        D.link_decklist("Dragapult ex", entry["id"])
+        hud._pending_decklist = None
+        hud._on_clipboard_changed()
+        assert hud._pending_decklist is None
+    finally:
+        FakeHud.from_game = True
+
+
+def test_link_round_trip():
+    import deck_share
+    text, _name = deck_share.parse(deck_share.share_url(DRAGAPULT, web=False))
+    assert D.list_id(text) == D.list_id(DRAGAPULT)
 
 
 if __name__ == "__main__":

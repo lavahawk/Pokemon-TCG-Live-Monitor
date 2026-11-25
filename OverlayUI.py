@@ -1106,20 +1106,69 @@ class MinimalOverlay(QWidget):
     def _on_clipboard_changed(self):
         try:
             from StatsUI import _list_or_link
-            from decklists import all_decklists, is_ptcgl_decklist, list_id, save_decklist
+            from decklists import all_decklists, is_ptcgl_decklist, linked_decks, list_id, save_decklist
             text = _list_or_link(QApplication.clipboard().text() or "")
             if not is_ptcgl_decklist(text):
                 return
             if getattr(self.stats_window, "_decklist_dialog_open", False):
                 return  # the "Link a decklist" window is taking it
+            # Exported from the game (it has the focus): one of your decks, it
+            # only needs saving. Copied anywhere else (a website, a chat): a
+            # new deck, imported into the game and the app like a shared link.
+            from_game = self._game_is_foreground()
             lid = list_id(text)
-            if any(e.get("id") == lid for e in all_decklists()):
+            stored = any(e.get("id") == lid for e in all_decklists())
+            if stored and from_game:
                 save_decklist(text, self._menu_deck())   # already imported: just mark it as the newest
                 return
+            if stored and lid in {e.get("id") for e in linked_decks().values()}:
+                return  # already one of your decks
             self._pending_decklist = text
-            _dbg("decklist on the clipboard: asking whether to import it")
+            self._pending_from_game = from_game
+            _dbg(f"decklist on the clipboard ({'from the game' if from_game else 'from elsewhere'}): "
+                 f"asking whether to import it")
         except Exception as exc:
             _dbg(f"clipboard decklist check failed: {exc}")
+
+    @staticmethod
+    def _game_is_foreground():
+        try:
+            from game_window import find_game_hwnd
+            hwnd = find_game_hwnd()
+            return bool(hwnd) and win32gui.GetForegroundWindow() == hwnd
+        except Exception:
+            return False
+
+    def _open_deck_import(self, text):
+        """The shared-deck import box (deck_link.py): a name, then the deck
+        goes into Pokémon TCG Live and onto the Decks tab."""
+        import subprocess
+        import deck_link
+        import deck_share
+        link = deck_share.share_url(text, web=False)
+        proc = subprocess.Popen([deck_link._gui_python(), os.path.join(BASE_DIR, "deck_link.py"),
+                                 link, "--from-clipboard"], cwd=BASE_DIR)
+        _dbg(f"decklist import box opened (pid {proc.pid})")
+        timer = QTimer(self)
+        timer.setInterval(1000)
+
+        def check():
+            if proc.poll() is None:
+                return
+            timer.stop()
+            timer.deleteLater()
+            window = self.stats_window
+            if window is None:
+                return
+            window._deck_dashboards_dirty = True
+            try:
+                if window.isVisible():
+                    window._refresh_deck_dashboards()
+            except Exception as exc:
+                _dbg(f"deck tabs refresh after the import failed: {exc}")
+        timer.timeout.connect(check)
+        timer.start()
+        return proc
 
     @staticmethod
     def _menu_deck():
@@ -1145,6 +1194,15 @@ class MinimalOverlay(QWidget):
         from deck_popup import NoticeCard
         from decklists import auto_name
         import html as _html
+
+        if not getattr(self, "_pending_from_game", True):
+            self._decklist_card = NoticeCard(
+                "DECKLIST COPIED",
+                f"<b>{_html.escape(auto_name(text))}</b>. Import it into Pokémon TCG Live and your decks?",
+                primary=("Import", lambda: self._open_deck_import(text)), secondary=("Not now", lambda: None),
+                linger_ms=30000)
+            self._decklist_card.show_at(self._stack_anchor(anchor, "_decklist_card"))
+            return
 
         def do_import():
             from decklists import save_decklist

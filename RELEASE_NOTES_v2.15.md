@@ -1,7 +1,10 @@
-# Pokemon TCG Live Monitor v2.15.15
+# Pokemon TCG Live Monitor v2.15.16
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.15-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.16-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.16
+- **A decklist you copy from a website now really gets imported.** Copy a list from Limitless, a chat or anywhere outside the game and press **Import** on the card that pops up: the import box opens, like it does for a shared deck link. Give the deck a name and it goes into Pokémon TCG Live (with your Import settings choice) and onto the app's Decks tab. Before, Import only filed the list away with your saved decklists. Lists you export from the game itself are still just saved, since that deck is already in the game.
 
 ## What's new in 2.15.15
 - **Your rank is only read on the Home screen.** The app used to treat any screen with the top menu bar (Decks, Profile, Shop…) as the main menu, because those words are on all of them; on the Decks screen it could read a card as your rank. It now checks that **HOME** is the highlighted tab before it reads anything.
