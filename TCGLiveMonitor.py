@@ -284,6 +284,9 @@ def acquire_single_instance():
         try:
             import msvcrt
             handle = open(LOCK_FILE, "a+")
+            # Always byte 0: "a+" starts at the end of the file, whose length is the
+            # last pid's - two copies would lock different bytes and both run.
+            handle.seek(0)
             try:
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError:
