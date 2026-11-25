@@ -151,22 +151,54 @@ HEARTBEAT_S = 30
 _crash_handle = None
 
 
+# Task Manager, Process Explorer: open when the app dies = the user ended it.
+_TASK_MANAGER_CLASSES = ("TaskManagerWindow", "PROCEXPL")
+
+
+def task_manager_open():
+    """A process manager window exists (cheap: one FindWindow per class)."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        find = ctypes.windll.user32.FindWindowW
+        return any(find(cls, None) for cls in _TASK_MANAGER_CLASSES)
+    except Exception:
+        return False
+
+
+def parse_alive(text):
+    """(state, pid, time, task_manager_open) from the heartbeat file."""
+    parts = (text or "").split()
+    if len(parts) < 3:
+        return None
+    try:
+        return parts[0], int(parts[1]), float(parts[2]), len(parts) > 3 and parts[3] == "1"
+    except ValueError:
+        return None
+
+
+def closed_from_task_manager(alive_text):
+    """The last run was ended while Task Manager was open: the user did it."""
+    info = parse_alive(alive_text)
+    return bool(info and info[0] == "alive" and info[3] and not _pid_is_monitor(info[1]))
+
+
 def last_run_report(alive_text, crash_grew, now):
     """One log line on how the previous run ended, or None if it exited
     normally (or there was none). alive_text: the old heartbeat file."""
-    parts = (alive_text or "").split()
-    if len(parts) < 3 or parts[0] != "alive":
+    info = parse_alive(alive_text)
+    if not info or info[0] != "alive":
         return None
-    try:
-        seen = float(parts[2])
-    except ValueError:
-        return None
+    _, pid, seen, task_manager = info
     when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(seen))
     gap = max(0, int(now - seen))
     if crash_grew:
-        return (f"The last run (pid {parts[1]}) crashed around {when}; "
+        return (f"The last run (pid {pid}) crashed around {when}; "
                 f"details in Logs/monitor_crash.log.")
-    return (f"The last run (pid {parts[1]}) was ended from outside the app around {when} "
+    if task_manager:
+        return f"The last run (pid {pid}) was ended from Task Manager around {when}."
+    return (f"The last run (pid {pid}) was ended from outside the app around {when} "
             f"(no crash, no normal exit: another program or Windows closed it)."
             + (f" Down for about {gap // 60} min." if gap >= 120 else ""))
 
@@ -215,9 +247,15 @@ def start_death_watch():
     pid = os.getpid()
 
     def beat():
+        # Written every HEARTBEAT_S, and at once when Task Manager opens or
+        # closes, so a kill from it is always recorded as one.
+        written, shown = 0.0, None
         while True:
-            write_text(ALIVE_FILE, f"alive {pid} {time.time():.0f}")
-            time.sleep(HEARTBEAT_S)
+            now, open_now = time.time(), task_manager_open()
+            if open_now != shown or now - written >= HEARTBEAT_S:
+                write_text(ALIVE_FILE, f"alive {pid} {now:.0f} {1 if open_now else 0}")
+                written, shown = now, open_now
+            time.sleep(2)
     threading.Thread(target=beat, daemon=True, name="heartbeat").start()
 
     def clean_exit():
@@ -717,7 +755,13 @@ class Monitor:
             return
         if self.overlay_proc is not None and self.overlay_proc.poll() is None:
             return
+        if getattr(self, "_overlay_closed_by_user", False):
+            return
         import ui_restart
+        if self.overlay_proc is not None and not ui_restart.pending() and task_manager_open():
+            self._overlay_closed_by_user = True
+            log("The overlay was ended from Task Manager - not starting it again until the game is reopened.")
+            return
         if self.overlay_proc is not None and time.time() - self.overlay_started_at > OVERLAY_CRASH_WINDOW_S:
             self.overlay_starts = 0  # it ran a while: closed or killed, not a crash loop
         if ui_restart.pending():
@@ -919,6 +963,7 @@ class Monitor:
                     set_low_priority(False)
                     self.overlay_starts = 0  # a new game session gets a fresh try
                     self._overlay_gave_up = False
+                    self._overlay_closed_by_user = False
                     self.ensure_overlay()
                     self.ensure_automation()
                     last_seq = clipboard_sequence()
@@ -1008,6 +1053,21 @@ def main():
             return 0
 
     setup_output()
+    if args.watchdog:
+        try:
+            with open(ALIVE_FILE, encoding="utf-8") as fh:
+                alive = fh.read()
+        except OSError:
+            alive = ""
+        if closed_from_task_manager(alive):
+            import startup_utils
+            startup_utils.mark_stopped(BASE_DIR)
+            info = parse_alive(alive)
+            write_text(ALIVE_FILE, f"closed {info[1]} {info[2]:.0f}")
+            log(f"Ended from Task Manager around "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(info[2]))} - left closed "
+                f"until you open it or sign in again.")
+            return 0
     if args.ocr_test:
         ocr_test()
         return 0

@@ -90,6 +90,17 @@ class LastRunReport(unittest.TestCase):
         self.assertIn("about 10 min", line)
         self.assertNotIn("Down for", self.report("alive 42 990", False, 1000))
 
+    def test_task_manager_kill_stays_closed(self):
+        import TCGLiveMonitor as T
+        with mock.patch.object(T, "_pid_is_monitor", return_value=False):
+            self.assertTrue(T.closed_from_task_manager("alive 42 400 1"))
+            self.assertFalse(T.closed_from_task_manager("alive 42 400 0"))   # another program: restored
+            self.assertFalse(T.closed_from_task_manager("alive 42 400"))     # older heartbeat format
+            self.assertFalse(T.closed_from_task_manager("exited 42 400 1"))  # normal exit
+        with mock.patch.object(T, "_pid_is_monitor", return_value=True):
+            self.assertFalse(T.closed_from_task_manager("alive 42 400 1"))   # still running
+        self.assertIn("from Task Manager", self.report("alive 42 400 1", False, 1000))
+
     def test_crashed(self):
         self.assertIn("crashed", self.report("alive 42 400", True, 1000))
 
