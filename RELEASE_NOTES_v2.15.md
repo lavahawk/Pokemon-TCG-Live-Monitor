@@ -1,7 +1,10 @@
-# Pokemon TCG Live Monitor v2.15.16
+# Pokemon TCG Live Monitor v2.15.17
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.16-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.17-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.17
+- **The HUD behaves like a normal window.** The HUD, your buddy, the pop-up cards and the chat stay above Pokémon TCG Live, but any other window you put over the game covers them, only where it overlaps.
 
 ## What's new in 2.15.16
 - **A decklist you copy from a website now really gets imported.** Copy a list from Limitless, a chat or anywhere outside the game and press **Import** on the card that pops up: the import box opens, like it does for a shared deck link. Give the deck a name and it goes into Pokémon TCG Live (with your Import settings choice) and onto the app's Decks tab. Before, Import only filed the list away with your saved decklists. Lists you export from the game itself are still just saved, since that deck is already in the game.
