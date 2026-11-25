@@ -474,6 +474,11 @@ def main(argv):
     name_field = QLineEdit(decklists.game_deck_name(name or decklists.auto_name(text)))
     name_field.setMaxLength(decklists.GAME_NAME_MAX)
     box.addWidget(name_field)
+    size_warning = QLabel(decklists.card_count_warning(text))
+    size_warning.setWordWrap(True)
+    size_warning.setStyleSheet("color: #EF9A9A; font-size: 11px;")
+    size_warning.setVisible(bool(size_warning.text()))
+    box.addWidget(size_warning)
     import game_window
     from edition import APP_NAME
     game_open = bool(game_window.find_game_hwnd())

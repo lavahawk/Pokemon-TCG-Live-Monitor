@@ -8208,6 +8208,11 @@ class StatsWindow(QWidget):
         list_meta.setObjectName("muted")
         col.addWidget(list_name)
         col.addWidget(list_meta)
+        size_warning = QLabel()
+        size_warning.setWordWrap(True)
+        size_warning.setStyleSheet("color: #EF9A9A; font-size: 11px; background: transparent;")
+        size_warning.setVisible(False)
+        col.addWidget(size_warning)
         status = QLabel()
         status.setWordWrap(True)
         status.setTextFormat(Qt.TextFormat.RichText)
@@ -8320,6 +8325,10 @@ class StatsWindow(QWidget):
             list_name.setText(html.escape(auto_name(text)))
             list_meta.setText(f"{sum(l['qty'] for l in lines)} cards" + (f"  ·  {', '.join(top)}" if top else ""))
             list_meta.setVisible(True)
+            from decklists import card_count_warning
+            warning = card_count_warning(text)
+            size_warning.setText(warning)
+            size_warning.setVisible(bool(warning))
             status.setText("")
             status.setVisible(False)
             for widget in (manual_btn, edit, several_btn):

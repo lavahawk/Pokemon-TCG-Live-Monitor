@@ -296,6 +296,13 @@ def test_closest_deck_and_update():
     assert D.changes_text(changes, html_out=False) == "+1 Dreepy · −1 Ultra Ball"
 
 
+def test_card_count_warning():
+    sixty = "Pokémon: 1\n4 Dreepy TWM 128\nTrainer: 1\n46 Iono PAF 80\nEnergy: 1\n10 Basic {P} Energy SVE 5\n"
+    assert D.card_count_warning(sixty) == ""
+    assert "61 cards, 1 more" in D.card_count_warning(sixty + "1 Budew PRE 4\n")
+    assert "59 cards, 1 fewer" in D.card_count_warning(sixty.replace("46 Iono", "45 Iono"))
+
+
 def test_list_changes():
     old = "Pokémon: 2\n2 Dreepy TWM 128\nTrainer: 5\n4 Iono PAL 185\n1 Ultra Ball SVI 196\n"
     new = "Pokémon: 3\n3 Dreepy TWM 128\nTrainer: 3\n2 Iono PAF 80\n1 Night Stretcher SFA 61\n"

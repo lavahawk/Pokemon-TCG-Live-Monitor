@@ -248,6 +248,20 @@ def _name_counts(text):
     return out
 
 
+DECK_SIZE = 60
+
+
+def card_count_warning(text):
+    """A line for a list that isn't 60 cards (Pokémon TCG Live won't take
+    it as a deck), else ""."""
+    total = sum(line["qty"] for line in list_lines(text))
+    if not total or total == DECK_SIZE:
+        return ""
+    off = total - DECK_SIZE
+    return (f"This list has {total} cards, {abs(off)} {'more' if off > 0 else 'fewer'} than the 60 a deck needs. "
+            f"Pokémon TCG Live won't accept it as it is.")
+
+
 def list_similarity(a_text, b_text):
     """0-1: copies the two lists share by card name, over the bigger list."""
     a, b = _name_counts(a_text), _name_counts(b_text)
