@@ -1,7 +1,12 @@
-# Pokemon TCG Live Monitor v2.15.13
+# Pokemon TCG Live Monitor v2.15.14
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.13-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.14-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.14
+- **Bring all your decks in at once.** The first time you open the Decks tab with no games and no decklists, import mode starts: in Pokémon TCG Live, export each deck you play (Decks → the deck → Export → Copy to clipboard) and each one drops into a list, with no question every time. Press **Done**, untick the ones you don't want, give each the name it has in the game, and **Import**. They show up on the Decks tab straight away with their lists, before you've played them, and fill in with stats once you do. **Skip** ends it; you can start it again any time from the empty Decks tab or **＋ Import decklist → Import several decks at once**.
+- **No concede question after tournament games or wins.** During a Limitless match the app no longer asks "Did you concede?", and when your rank went up (you won) it doesn't ask either.
+- **Fixed: a stray reading could set your rank to 1.** A moment where another screen (the deck editor) looked like a battle made the app think a battle had ended, and it then read a card's text as your rank. A "battle" now has to last at least 20 seconds before the concede check runs, and a big rank jump is only kept when it comes with one of your deck names (a real season reset does).
 
 ## What's new in 2.15.13
 - **Fixed: the dashboard could open bigger than the screen.** On a 1080p screen with Windows scaling at 150 % or more, the first launch opened the window taller than the screen, with its resize corner out of reach. The window now opens at a size based on your screen (about three quarters of it, centred) and never bigger, and the smallest size you can drag it to shrinks on small screens too. A window saved on a bigger monitor is brought back onto the one you're using.

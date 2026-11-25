@@ -503,6 +503,16 @@ def detect_menu_stats(timeout_s, reason, update_battle_id=None):
                     suspect = rank
                     time.sleep(SUSPECT_RECHECK_S)
                     continue
+                if (rank and last and abs(rank - last) > SUSPECT_RANK_JUMP
+                        and deck not in db.get_known_deck_names()):
+                    # The suspect reading repeated, but the deck name isn't one
+                    # of yours: this wasn't the main menu (24 Nov 2026: a card
+                    # in the deck editor read as rank 1, deck "aay"). A real
+                    # jump (a season reset) comes with your deck's name.
+                    _save_rank_snapshot(detector, rank)
+                    log(f"Menu OCR ({reason}): rank {rank} (last {last}) with unknown deck {deck!r} - "
+                        f"not the main menu, nothing stored.")
+                    return
                 if deck:
                     write_text(LAST_DECK_FILE, deck)
                 if rank:
@@ -566,9 +576,22 @@ def ask_if_conceded(battle_started):
     """The battle went straight to the main menu (no end screen, so no log):
     read the rank, then let the overlay ask whether it was a concede."""
     def run():
+        try:
+            from end_screens import tournament_opponent
+            if tournament_opponent():
+                # Limitless games are reported on the match page, and a
+                # tournament game that skips the end screen isn't a concede
+                # to add here.
+                log("Battle with no end screen during a tournament match - no concede question.")
+                return
+        except Exception:
+            pass
         rank_before = read_int(LAST_RANK_FILE)
         detect_menu_stats(20, "after a battle with no end screen")
         rank_after = read_int(LAST_RANK_FILE)
+        if rank_before and rank_after and rank_after > rank_before:
+            log(f"Battle with no end screen, rank {rank_before} -> {rank_after}: a win, no concede question.")
+            return
         try:
             from deck_confirm import ask_concede
             ask_concede(battle_started, read_text(LAST_DECK_FILE) or None, rank_before, rank_after)

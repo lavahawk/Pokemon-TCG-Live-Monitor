@@ -214,6 +214,14 @@ def decklist_for_deck(deck_name):
     return entry
 
 
+def linked_decks():
+    """{deck name: its linked list} for every deck with a list (imported
+    decks you haven't played yet included)."""
+    data = _load()
+    lists = {e["id"]: e for e in data.get("lists") or []}
+    return {name: lists[lid] for name, lid in (data.get("links") or {}).items() if lid in lists}
+
+
 def stored_copy(text, name=None):
     """The stored list with exactly these cards that already goes by `name`
     (its own name, or a deck it's linked to, case-insensitive), else None.

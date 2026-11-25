@@ -112,6 +112,10 @@ BUTTON_HELD_WAIT_S = 1.5   # a held left button is let go first (mid-drag)
 # Conceding goes from the battle straight to the main menu (no end screen).
 MENU_WATCH_AFTER_S = 4     # HUD gone this long without an end screen: look for the menu
 MENU_WATCH_S = 90
+# A battle the HUD was seen for less than this isn't one: a single HUD match
+# on another screen (the deck editor, 24 Nov 2026) asked "Did you concede?"
+# and its "menu" check read a card's text as rank 1.
+MIN_BATTLE_FOR_CONCEDE_S = 20
 MENU_CHECK_EVERY_S = 2
 REARM_ABSENT_S = 60
 # A real BATTLE LOG button scores 0.97-1.00; in-battle look-alikes 0.83-0.86.
@@ -470,6 +474,11 @@ class BattleEndAutomation(threading.Thread):
         """The HUD went away with no end screen: if the main menu shows up,
         the battle ended without one (a concede). Stops as soon as the HUD
         comes back (a deck search covered it) or the end screen is handled."""
+        if hud_seen_at - battle_since < MIN_BATTLE_FOR_CONCEDE_S:
+            self.log(f"HUD seen for only {hud_seen_at - battle_since:.0f}s - not a battle, no concede question.")
+            self._battle_since = None
+            self._menu_watch = None
+            return
         try:
             from RankDetector import RankDetector
             detector = RankDetector()

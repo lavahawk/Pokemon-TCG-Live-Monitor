@@ -106,6 +106,18 @@ def test_end_screen_handled_is_not_a_concede():
     assert asked == []
 
 
+def test_a_hud_blip_is_not_a_battle():
+    # 24 Nov 2026: one HUD match on the deck editor, then a "menu": no question.
+    FakeMenu.on_menu = True
+    auto, asked = watcher()
+    auto._battle_since, auto._last_hud_at = 100.0, 103.0
+    t = threading.Thread(target=auto._watch_for_menu, args=(100.0, 103.0))
+    t.start()
+    t.join(3)
+    FakeMenu.on_menu = False
+    assert asked == [] and auto._battle_since is None
+
+
 if __name__ == "__main__":
     failures = 0
     try:

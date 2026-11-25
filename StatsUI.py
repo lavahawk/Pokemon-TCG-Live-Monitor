@@ -7949,6 +7949,13 @@ class StatsWindow(QWidget):
         choices = QListWidget()
         col.addWidget(choices, 1)
 
+        several_btn = QPushButton("▸ Import several decks at once")
+        several_btn.setObjectName("ghost")
+        several_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        several_btn.clicked.connect(lambda: (dialog.close(), self._start_deck_import_mode()))
+        several_btn.setVisible(not deck_name)
+        col.addWidget(several_btn)
+
         manual_btn = QPushButton("▸ Paste a list or link")
         manual_btn.setObjectName("ghost")
         manual_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -8087,6 +8094,289 @@ class StatsWindow(QWidget):
         self._decklist_hid_dashboard = self.isVisible()
         if self._decklist_hid_dashboard:
             self.minimize_to_overlay()
+
+    # ── import mode: bring in every deck from PTCGL at once (onboarding) ──
+    def _start_deck_import_mode(self, onboarding=False):
+        """Collect every deck you export in Pokémon TCG Live (Decks → a deck →
+        Export → Copy to clipboard), one after another, without a question
+        each time; then pick which ones to keep and name them. The kept ones
+        become decks on the Decks tab right away, before you've played them."""
+        from PySide6.QtWidgets import QCheckBox, QStackedWidget
+        from decklists import auto_name, import_decklist, is_ptcgl_decklist, list_id, rename_decklist
+
+        existing = getattr(self, "_import_mode_panel", None)
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.expand()
+                    existing.raise_()
+                    return
+            except RuntimeError:
+                pass
+        old = getattr(self, "_decklist_panel", None)
+        try:
+            if old is not None and old.isVisible():
+                old.close()
+        except RuntimeError:
+            pass
+
+        dialog = GlassPanel(self, "Import your decks", size=(500, 560), pill_text="Import mode")
+        self._import_mode_panel = dialog
+        dialog.add_style(
+            "QLabel { color: rgba(236,242,252,0.90); background: transparent; }"
+            "QListWidget { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);"
+            " border-radius: 8px; color: #E6ECF5; font-size: 12px; outline: none; padding: 4px; }"
+            "QListWidget::item { padding: 7px 8px; border-radius: 6px; }"
+            "QLineEdit { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);"
+            " border-radius: 6px; color: #F0F4FA; padding: 5px 8px; font-size: 12px; }"
+            "QLineEdit:disabled { color: rgba(240,244,250,0.35); }"
+            "QCheckBox { color: #E6ECF5; }"
+            "QPushButton#primary { background: rgba(74,159,216,0.85); border: none; border-radius: 6px;"
+            " color: white; font-weight: 700; padding: 7px 18px; }"
+            "QPushButton#primary:disabled { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.35); }"
+            "QPushButton#secondary { background: transparent; border: 1px solid rgba(255,255,255,0.16);"
+            " border-radius: 6px; color: #D6DAE0; padding: 7px 16px; }"
+            "QPushButton#secondary:hover { border-color: rgba(255,255,255,0.32); color: #FFFFFF; }")
+        stack = QStackedWidget()
+        outer = QVBoxLayout(dialog.content)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(stack)
+        collected = []   # [(list id, text)] in the order they arrived
+
+        def buttons_row(*buttons):
+            row = QHBoxLayout()
+            row.addStretch()
+            for b in buttons:
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                row.addWidget(b)
+            return row
+
+        # Step 1: collect
+        page1 = QWidget()
+        col = QVBoxLayout(page1)
+        col.setContentsMargins(18, 12, 18, 14)
+        col.setSpacing(10)
+        intro = QLabel(
+            ("<b style='font-size:14px'>Let's bring your decks in.</b><br>" if onboarding else "")
+            + "In Pokémon TCG Live, go to <b>Decks</b>. For each deck you play, open it, press "
+              "<b>Export</b>, then <b>Copy to clipboard</b>. Each one lands in this list by itself, "
+              "and you choose which to keep at the end.")
+        intro.setWordWrap(True)
+        intro.setTextFormat(Qt.TextFormat.RichText)
+        col.addWidget(intro)
+        got = QListWidget()
+        col.addWidget(got, 1)
+        count = QLabel()
+        count.setWordWrap(True)
+        count.setStyleSheet("color: rgba(168,182,204,0.85); font-size: 11px;")
+        col.addWidget(count)
+        cancel1 = QPushButton("Skip" if onboarding else "Cancel")
+        cancel1.setObjectName("secondary")
+        hide_btn = QPushButton("Hide this while I export")
+        hide_btn.setObjectName("secondary")
+        done_btn = QPushButton("Done")
+        done_btn.setObjectName("primary")
+        col.addLayout(buttons_row(cancel1, hide_btn, done_btn))
+        stack.addWidget(page1)
+
+        # Step 2: choose and name
+        page2 = QWidget()
+        col2 = QVBoxLayout(page2)
+        col2.setContentsMargins(18, 12, 18, 14)
+        col2.setSpacing(8)
+        pick_intro = QLabel("<b style='font-size:14px'>Which decks do you want in the app?</b><br>"
+                            "<span style='color:rgba(168,182,204,0.85)'>Name each one the way it's named in "
+                            "Pokémon TCG Live, so your games join up with it.</span>")
+        pick_intro.setWordWrap(True)
+        pick_intro.setTextFormat(Qt.TextFormat.RichText)
+        col2.addWidget(pick_intro)
+        rows_scroll = QScrollArea()
+        rows_scroll.setWidgetResizable(True)
+        rows_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        rows_scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        rows_host = QWidget()
+        rows_host.setStyleSheet("background: transparent;")
+        rows_layout = QVBoxLayout(rows_host)
+        rows_layout.setContentsMargins(0, 0, 0, 0)
+        rows_layout.setSpacing(6)
+        rows_scroll.setWidget(rows_host)
+        col2.addWidget(rows_scroll, 1)
+        back_btn = QPushButton("Back")
+        back_btn.setObjectName("secondary")
+        import_btn = QPushButton("Import")
+        import_btn.setObjectName("primary")
+        col2.addLayout(buttons_row(back_btn, import_btn))
+        stack.addWidget(page2)
+        picks = []   # [(checkbox, name edit, text)]
+
+        def refresh_count():
+            n = len(collected)
+            count.setText("Nothing yet. Export a deck in the game and it shows up here." if not n
+                          else f"{n} deck{'s' if n != 1 else ''} so far. Keep going, or press Done.")
+            done_btn.setEnabled(n > 0)
+            done_btn.setText(f"Done ({n})" if n else "Done")
+            dialog.set_pill_text(f"Import mode · {n} deck{'s' if n != 1 else ''}" if n
+                                 else "Import mode · export a deck in the game", found=n > 0)
+
+        def on_clipboard():
+            text = _list_or_link(QApplication.clipboard().text())
+            if not is_ptcgl_decklist(text):
+                return
+            lid = list_id(text)
+            if any(c[0] == lid for c in collected):
+                return
+            collected.append((lid, text))
+            got.addItem(QListWidgetItem(f"✓  {auto_name(text)}"))
+            got.scrollToBottom()
+            refresh_count()
+
+        def update_import():
+            n = sum(1 for box, _e, _t in picks if box.isChecked())
+            import_btn.setEnabled(n > 0)
+            import_btn.setText(f"Import {n} deck{'s' if n != 1 else ''}" if n else "Import")
+
+        def to_choose():
+            while rows_layout.count():
+                item = rows_layout.takeAt(0)
+                if item.widget() is not None:
+                    item.widget().deleteLater()
+            picks.clear()
+            for _lid, text in collected:
+                row = QWidget()
+                line = QHBoxLayout(row)
+                line.setContentsMargins(0, 0, 0, 0)
+                box = QCheckBox()
+                box.setChecked(True)
+                name = QLineEdit(auto_name(text))
+                name.setToolTip("The deck's name in Pokémon TCG Live")
+                box.toggled.connect(name.setEnabled)
+                box.toggled.connect(lambda *_: update_import())
+                line.addWidget(box)
+                line.addWidget(name, 1)
+                rows_layout.addWidget(row)
+                picks.append((box, name, text))
+            rows_layout.addStretch()
+            update_import()
+            stack.setCurrentIndex(1)
+            dialog.expand()
+
+        def do_import():
+            first = None
+            used = set()
+            for box, name_edit, text in picks:
+                if not box.isChecked():
+                    continue
+                name = " ".join(name_edit.text().split()) or auto_name(text)
+                base, n = name, 2
+                while name.lower() in used:
+                    name, n = f"{base} ({n})", n + 1
+                used.add(name.lower())
+                entry = import_decklist(text, name)
+                rename_decklist(entry["id"], name)
+                first = first or name
+            dialog.close()
+            self._deck_dashboards_dirty = True
+            decks_index = self._main_tab_index("Decks")
+            if decks_index is not None:
+                self.tab_widget.setCurrentIndex(decks_index)
+            self._refresh_deck_dashboards()
+            idx = getattr(self, "deck_tab_lookup", {}).get(first)
+            if idx is not None:
+                self.deck_tabs.setCurrentIndex(idx)
+
+        def hide_for_game():
+            dialog.collapse()
+            self._decklist_hid_dashboard = self.isVisible()
+            if self._decklist_hid_dashboard:
+                self.minimize_to_overlay()
+
+        clipboard = QApplication.clipboard()
+        clipboard.dataChanged.connect(on_clipboard)
+        self._decklist_dialog_open = True   # the HUD's "Import this decklist?" card stays quiet
+
+        def finished():
+            try:
+                clipboard.dataChanged.disconnect(on_clipboard)
+            except (RuntimeError, TypeError):
+                pass
+            self._decklist_dialog_open = False
+            if getattr(self, "_decklist_hid_dashboard", False):
+                self._decklist_hid_dashboard = False
+                self._restore_dashboard()
+        dialog.on_close(finished)
+        cancel1.clicked.connect(dialog.close)
+        hide_btn.clicked.connect(hide_for_game)
+        done_btn.clicked.connect(to_choose)
+        back_btn.clicked.connect(lambda: stack.setCurrentIndex(0))
+        import_btn.clicked.connect(do_import)
+        refresh_count()
+        dialog.open_panel()
+
+    def _maybe_offer_deck_import(self):
+        """First visit to the Decks tab with no games and no decklists:
+        start import mode (once; Skip ends it for good)."""
+        try:
+            if load_app_settings().get("deck_import_offered"):
+                return
+            from decklists import all_decklists
+            if self.db.get_known_deck_names() or all_decklists():
+                self._save_app_setting("deck_import_offered", True)
+                return
+            import tutorial
+            if tutorial.is_running():
+                return   # the tour's example deck is showing; ask after it
+        except Exception:
+            return
+        self._save_app_setting("deck_import_offered", True)
+        QTimer.singleShot(350, lambda: self._start_deck_import_mode(onboarding=True))
+
+    def _create_imported_deck_page(self, deck_name, entry):
+        """A deck you imported but haven't played yet: its name (double-click
+        to rename), its list, and what to do next."""
+        from PySide6.QtWidgets import QMenu, QPlainTextEdit
+        scroll = PageScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        content.setObjectName("contentWidget")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+        card, card_layout = self._create_dashboard_card("DECK")
+        top = QHBoxLayout()
+        title = DeckTitle(deck_name, self.db.get_known_deck_names())
+        title.rename_requested.connect(lambda new, merge, old=deck_name: self._rename_deck(old, new, merge))
+        top.addWidget(title)
+        top.addStretch()
+        more_btn = QToolButton()
+        more_btn.setObjectName("deckIconArrowBtn")
+        more_btn.setText("⋯")
+        more_btn.setToolTip("More: delete this deck")
+        more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more_menu = QMenu(more_btn)
+        more_menu.addAction("Delete deck…", lambda: self._delete_deck(deck_name))
+        more_btn.setMenu(more_menu)
+        top.addWidget(more_btn)
+        top.addWidget(self._create_decklist_button(deck_name, {}))
+        card_layout.addLayout(top)
+        note = QLabel("No games with this deck yet. Play it in Pokémon TCG Live and its stats fill in here. "
+                      "If the name above isn't the deck's name in the game, double-click it to change it.")
+        note.setWordWrap(True)
+        note.setObjectName("deckPageSubtitle")
+        card_layout.addWidget(note)
+        layout.addWidget(card)
+        list_card, list_layout = self._create_dashboard_card("DECKLIST")
+        view = QPlainTextEdit(entry.get("text") or "")
+        view.setReadOnly(True)
+        view.setMinimumHeight(360)
+        view.setStyleSheet("QPlainTextEdit { background: rgba(255,255,255,0.03); color: #E6ECF5; border: none;"
+                           " font-family: Consolas; font-size: 12px; }")
+        list_layout.addWidget(view)
+        layout.addWidget(list_card)
+        layout.addStretch()
+        scroll.setWidget(content)
+        return scroll
 
     def _view_decklist(self, entry, deck_name=None):
         from PySide6.QtWidgets import QPlainTextEdit
@@ -9013,10 +9303,12 @@ class StatsWindow(QWidget):
         except Exception:
             count = 0
         games = f"{count} battle{'s' if count != 1 else ''}"
+        question = (f"Delete \"{name}\" and its {games}?\n\nIts games come out of your stats, charts and history. "
+                    f"A copy of your data is saved in the Backups folder first." if count else
+                    f"Remove \"{name}\" from your decks?\n\nIts decklist stays in your saved decklists "
+                    f"(In Person tab).")
         answer = QMessageBox.question(
-            self, "Delete deck",
-            f"Delete \"{name}\" and its {games}?\n\nIts games come out of your stats, charts and history. "
-            f"A copy of your data is saved in the Backups folder first.",
+            self, "Delete deck", question,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
@@ -9134,16 +9426,47 @@ class StatsWindow(QWidget):
 
         self.deck_tab_lookup = {}
 
-        if not deck_analyses:
+        # Decks you imported but haven't played yet get a page too.
+        try:
+            from decklists import linked_decks
+            played = {(a.get("deck_name") or "").lower() for a in deck_analyses or []}
+            imported = [(name, entry) for name, entry in linked_decks().items()
+                        if name and name.lower() not in played and name not in self.ignored_decks]
+        except Exception:
+            imported = []
+
+        if not deck_analyses and not imported:
             placeholder = QWidget()
             placeholder_layout = QVBoxLayout(placeholder)
             placeholder_layout.setContentsMargins(16, 16, 16, 16)
-            label = QLabel("Play a match to see deck stats here.")
-            label.setStyleSheet("color: rgba(255,255,255,0.4); font-size: 11px; font-style: italic;")
+            placeholder_layout.setSpacing(10)
+            label = QLabel("No decks yet. Bring yours in from Pokémon TCG Live, or play a match and the deck "
+                           "you played shows up here.")
+            label.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 12px;")
             label.setWordWrap(True)
             placeholder_layout.addWidget(label)
+            start = QPushButton("Import your decks from Pokémon TCG Live")
+            start.setObjectName("limitlessBtn")
+            start.setFixedHeight(34)
+            start.setCursor(Qt.CursorShape.PointingHandCursor)
+            start.clicked.connect(lambda: self._start_deck_import_mode())
+            placeholder_layout.addWidget(start, alignment=Qt.AlignmentFlag.AlignLeft)
             placeholder_layout.addStretch()
             self.deck_tabs.addTab(placeholder, "No Data")
+            return
+
+        def add_imported_tabs():
+            for name, entry in imported:
+                page = self._create_imported_deck_page(name, entry)
+                idx = self.deck_tabs.addTab(page, self._icon_for_deck(name, [], size=18), self._deck_tab_label(name))
+                self.deck_tabs.tabBar().setTabToolTip(idx, name)
+                self.deck_tab_lookup[name] = idx
+
+        if not deck_analyses:
+            add_imported_tabs()
+            self._deck_dashboards_dirty = False
+            if current_name in self.deck_tab_lookup:
+                self.deck_tabs.setCurrentIndex(self.deck_tab_lookup[current_name])
             return
 
         self._deck_preload_generation = getattr(self, "_deck_preload_generation", 0) + 1
@@ -9159,6 +9482,7 @@ class StatsWindow(QWidget):
             idx = self.deck_tabs.addTab(page, icon, label)
             self.deck_tabs.tabBar().setTabToolTip(idx, deck_name)
             self.deck_tab_lookup[deck_name] = idx
+        add_imported_tabs()
 
         self._update_deck_tab_flags()
         for deck_name, scroll_value in prior_scrolls.items():
@@ -10869,6 +11193,7 @@ class StatsWindow(QWidget):
                 self._refresh_decks_meta()
             if self._deck_dashboards_dirty:
                 self._refresh_deck_dashboards()
+            self._maybe_offer_deck_import()
         elif tab_name == "Limitless Dashboard":
             if self.limitless_manager:
                 self.limitless_manager.enable_background_mode()
