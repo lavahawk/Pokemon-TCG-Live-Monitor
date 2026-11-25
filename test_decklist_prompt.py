@@ -77,13 +77,21 @@ def test_not_while_link_window_open():
 
 
 def test_copied_elsewhere_opens_the_import_box():
-    """A list copied outside the game: Import opens the shared-deck box
-    (into the game and the Decks tab), even for a list saved before."""
+    """A new list copied outside the game: Import opens the shared-deck box
+    (into the game and the Decks tab). One you already have never asks."""
     FakeHud.from_game = False
     try:
         hud = FakeHud()
         hud.show()
-        QApplication.clipboard().setText(DRAGAPULT)      # stored by the first test, not linked to a deck
+        QApplication.clipboard().setText(DRAGAPULT)      # saved by the first test
+        hud._on_clipboard_changed()
+        assert hud._pending_decklist is None
+        reordered = "\n".join(reversed(DRAGAPULT.strip().splitlines()))
+        QApplication.clipboard().setText(reordered)       # same cards, another order
+        hud._on_clipboard_changed()
+        assert hud._pending_decklist is None or not D.is_ptcgl_decklist(reordered)
+        new_list = DRAGAPULT.replace("Pokémon:", "Pokémon:\n1 Fezandipiti ex SFA 38", 1)
+        QApplication.clipboard().setText(new_list)
         hud._on_clipboard_changed()
         assert hud._pending_decklist
         hud._poll_decklist_card((600, 380))
@@ -91,9 +99,8 @@ def test_copied_elsewhere_opens_the_import_box():
         btn = next(b for b in hud._decklist_card.findChildren(QPushButton) if b.text() == "Import")
         btn.click()
         assert FakeHud.opened and D.is_ptcgl_decklist(FakeHud.opened[-1])
-        # once it's one of your decks, copying it again doesn't ask
-        entry = D.all_decklists()[0]
-        D.link_decklist("Dragapult ex", entry["id"])
+        # once you've imported it, copying it again doesn't ask
+        D.save_decklist(new_list)
         hud._pending_decklist = None
         hud._on_clipboard_changed()
         assert hud._pending_decklist is None

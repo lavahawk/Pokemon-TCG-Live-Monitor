@@ -225,6 +225,36 @@ def decklist_for_deck(deck_name):
     return entry
 
 
+def list_changes(old_text, new_text):
+    """What changed from one list to the next, by card name (a print swap
+    alone isn't a change): [(name, +n or -n)], additions first, biggest first."""
+    def counts(text):
+        out = {}
+        for line in list_lines(text):
+            name = spelled_name(line["name"])
+            out[name] = out.get(name, 0) + line["qty"]
+        return out
+    old, new = counts(old_text), counts(new_text)
+    changes = [(name, new.get(name, 0) - old.get(name, 0)) for name in set(old) | set(new)]
+    changes = [c for c in changes if c[1]]
+    return sorted(changes, key=lambda c: (c[1] < 0, -abs(c[1]), c[0]))
+
+
+def already_have(text):
+    """The saved list with these cards, else None: the same list (any order),
+    or the same cards by name in other prints. A list you have never asks to
+    be imported again."""
+    lid = list_id(text)
+    stored = all_decklists()
+    for entry in stored:
+        if entry.get("id") == lid:
+            return entry
+    for entry in stored:
+        if not list_changes(entry.get("text") or "", text):
+            return entry
+    return None
+
+
 def linked_decks():
     """{deck name: its linked list} for every deck with a list (imported
     decks you haven't played yet included)."""

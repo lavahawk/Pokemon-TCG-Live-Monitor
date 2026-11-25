@@ -281,6 +281,13 @@ def test_regression_null_lists_in_store():
     reset_store()
 
 
+def test_list_changes():
+    old = "Pokémon: 2\n2 Dreepy TWM 128\nTrainer: 5\n4 Iono PAL 185\n1 Ultra Ball SVI 196\n"
+    new = "Pokémon: 3\n3 Dreepy TWM 128\nTrainer: 3\n2 Iono PAF 80\n1 Night Stretcher SFA 61\n"
+    assert D.list_changes(old, new) == [("Dreepy", 1), ("Night Stretcher", 1), ("Iono", -2), ("Ultra Ball", -1)]
+    assert D.list_changes(old, old.replace("Iono PAL 185", "Iono PAF 80")) == []   # a print swap only
+
+
 def test_game_deck_name():
     assert D.GAME_NAME_MAX == 22
     assert D.game_deck_name("Teal Mask Ogerpon ex / Dragapult ex") == "Teal Mask Ogerpon ex /"

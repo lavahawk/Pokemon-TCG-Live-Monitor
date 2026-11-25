@@ -228,7 +228,10 @@ def test_a_deck_you_already_have_is_not_offered():
             assert D.stored_copy(LIST, "Dragapult Box") is not None  # the deck it's linked to counts
             monitor = M.Monitor.__new__(M.Monitor)
             assert monitor.handle_link(S.share_url(LIST, "Gengar Testing")) and opened == []
-            assert monitor.handle_link(S.share_url(LIST, "Other name")) and len(opened) == 1
+            # the same cards under another name are still a list you have: no box
+            assert monitor.handle_link(S.share_url(LIST, "Other name")) and opened == []
+            new = LIST.replace("2 Haunter MEP 27", "3 Haunter MEP 27")
+            assert monitor.handle_link(S.share_url(new, "Other name")) and len(opened) == 1
         finally:
             D.STORE_FILE, S.OWN_FILE, S.SEEN_FILE, M.subprocess.Popen = saved
 

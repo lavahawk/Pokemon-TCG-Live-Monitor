@@ -707,8 +707,8 @@ class Monitor:
                 return False
             if not deck_share.is_own_link(text) and not deck_share.was_offered(text):
                 cards, name = deck_share.parse(text)  # a damaged link opens nothing
-                from decklists import stored_copy
-                if stored_copy(cards, name):
+                from decklists import already_have, stored_copy
+                if stored_copy(cards, name) or already_have(cards):
                     log("Shared deck link on the clipboard: already in your decklists, not offered.")
                     return True
                 deck_share.remember_seen(text)

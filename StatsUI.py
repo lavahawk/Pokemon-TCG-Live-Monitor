@@ -7728,9 +7728,9 @@ class StatsWindow(QWidget):
         return scroll
 
     def _add_deck_header_actions(self, row, deck_name, matched_row):
-        """The right end of a deck page's snapshot: pin · star · hide · delete,
-        then Decklist ▾, Share (when it has a list) and Limitless ↗. Played and
-        imported decks get the same row."""
+        """The right end of a deck page's snapshot: pin · star · hide, then
+        Decklist ▾ (Delete deck is at its end), Share (when it has a list) and
+        Limitless ↗. Played and imported decks get the same row."""
         flag_group = QWidget()
         flag_row = QHBoxLayout(flag_group)
         flag_row.setContentsMargins(0, 0, 4, 0)
@@ -7741,9 +7741,6 @@ class StatsWindow(QWidget):
             flag_btn = DeckFlagButton(kind, checked=active)
             flag_btn.toggled.connect(lambda on, k=kind, name=deck_name: self._set_deck_flag(k, name, on))
             flag_row.addWidget(flag_btn)
-        delete_btn = DeckFlagButton("delete")
-        delete_btn.clicked.connect(lambda checked=False, name=deck_name: self._delete_deck(name))
-        flag_row.addWidget(delete_btn)
         row.addWidget(flag_group)
         row.addWidget(self._create_decklist_button(deck_name, matched_row))
         from decklists import decklist_for_deck
@@ -7782,10 +7779,28 @@ class StatsWindow(QWidget):
             " border-radius: 6px; color: rgba(255,255,255,0.95); font-size: 11px; font-weight: 600; padding: 0 12px; }"
             "QToolButton#deckListBtn:hover { background: rgba(74,159,216,0.34); }"
             "QToolButton#deckListBtn::menu-indicator { image: none; width: 0; }")
+        menu_style = (
+            "QMenu { background: #121823; color: #E6ECF5; border: 1px solid rgba(255,255,255,0.10);"
+            " border-radius: 8px; padding: 6px 0; }"
+            "QMenu::item { padding: 6px 22px 6px 16px; font-size: 11px; }"
+            "QMenu::item:selected { background: rgba(74,159,216,0.28); }"
+            "QMenu::separator { height: 1px; background: rgba(255,255,255,0.08); margin: 5px 10px; }")
         if entry is None:
+            # Click imports; the ▾ part holds Delete deck.
             button.setText("＋ Import decklist")
             button.setToolTip("Link this deck's list to unlock card suggestions and list tools.")
             button.clicked.connect(lambda: self._import_decklist_dialog(deck_name))
+            button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+            button.setStyleSheet(button.styleSheet() +
+                                 "QToolButton#deckListBtn { padding-right: 22px; }"
+                                 "QToolButton#deckListBtn::menu-button { border: none; border-left: 1px solid"
+                                 " rgba(74,159,216,0.40); width: 18px; }")
+            small = QMenu(button)
+            small.setStyleSheet(menu_style)
+            small.addAction("Import decklist…", lambda: self._import_decklist_dialog(deck_name))
+            small.addSeparator()
+            small.addAction("Delete deck…", lambda: self._delete_deck(deck_name))
+            button.setMenu(small)
             return button
         button.setText("Decklist  ▾")
         button.setToolTip(entry["name"])
@@ -7819,8 +7834,10 @@ class StatsWindow(QWidget):
         more.addAction("TrainerHill card usage", lambda: copy_then("dashboards/card-usage/"))
         more.addAction("TrainerHill deck profile", lambda: copy_then("dashboards/deck-profile/"))
         menu.addSeparator()
-        menu.addAction("Replace list…", lambda: self._import_decklist_dialog(deck_name))
+        menu.addAction("Update list…", lambda: self._import_decklist_dialog(deck_name, update=True))
         menu.addAction("Unlink list", lambda: self._link_decklist(deck_name, None))
+        menu.addSeparator()
+        menu.addAction("Delete deck…", lambda: self._delete_deck(deck_name))
         button.setMenu(menu)
         return button
 
@@ -7870,9 +7887,10 @@ class StatsWindow(QWidget):
         self._deck_dashboards_dirty = True
         QTimer.singleShot(0, self._refresh_deck_dashboards)
 
-    def _import_decklist_dialog(self, deck_name):
-        """Import a decklist, for a deck (its page's Import decklist / Change
-        list) or on its own (＋ Import decklist on the Decks tab, with an
+    def _import_decklist_dialog(self, deck_name, update=False):
+        """Import a decklist, for a deck (its page's Import decklist, or
+        Decklist ▾ → Update list with update=True: the new version of the
+        deck's list, and what changed) or on its own (＋ Import decklist on the Decks tab, with an
         optional deck to link it to). Watches the clipboard while open: a list
         exported in PTCGL (Export → Copy to clipboard) or copied from anywhere
         is imported the moment it arrives, no extra click."""
@@ -7889,8 +7907,13 @@ class StatsWindow(QWidget):
                     return
             except RuntimeError:
                 pass
-        dialog = GlassPanel(self, "Import decklist", size=(460, 460),
-                            pill_text="Waiting for a decklist on your clipboard…")
+        from decklists import decklist_for_deck, list_changes, list_id
+        current = decklist_for_deck(deck_name) if (update and deck_name) else None
+        update = current is not None
+        dialog = GlassPanel(self, "Update decklist" if update else "Import decklist",
+                            size=(460, 360) if update else (460, 460),
+                            pill_text="Waiting for the new list on your clipboard…" if update
+                            else "Waiting for a decklist on your clipboard…")
         self._decklist_panel = dialog
         dialog.add_style(
             "QLabel { color: rgba(236,242,252,0.90); background: transparent; }"
@@ -7965,7 +7988,7 @@ class StatsWindow(QWidget):
         row.addStretch()
         cancel = QPushButton("Cancel")
         cancel.setObjectName("secondary")
-        link = QPushButton("Import")
+        link = QPushButton("Update" if update else "Import")
         link.setObjectName("primary")
         for b in (cancel, link):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -7977,6 +8000,12 @@ class StatsWindow(QWidget):
                 status.setText(f"<span style='color:#66BB6A;font-weight:700'>Decklist found on your clipboard</span>"
                                f"<br><span style='color:#8A97AA'>{html.escape(auto_name(found))}</span>")
                 dialog.set_pill_text(auto_name(found), found=True)
+            elif update:
+                status.setText("<span style='color:#6BB6E8'>●</span> Changed the deck? In Pokémon TCG Live: "
+                               "<b>Decks → this deck → Export → Copy to clipboard</b>, or paste the new list below. "
+                               "You'll see what changed."
+                               "<br><span style='color:#8A97AA'>Your games so far stay with the deck; the old list "
+                               "stays in your saved decklists.</span>")
             else:
                 status.setText("<span style='color:#6BB6E8'>●</span> Waiting for a list… In Pokémon TCG Live: "
                                "<b>Decks → this deck → Export → Copy to clipboard</b>. It shows up here by itself."
@@ -7999,6 +8028,9 @@ class StatsWindow(QWidget):
             stamp = (e.get("captured_at") or "")[5:16].replace("-", "/")
             add_choice(e.get("text") or "", f"{e['name']}   ·   {stamp}",
                        select=e.get("menu_deck") == deck_name and choices.currentItem() is None)
+        if update:
+            stored = []   # an update is a new export, not one of the lists you already have
+            choices.clear()
         lists_label.setVisible(bool(stored))
         choices.setVisible(bool(stored))
 
@@ -8042,6 +8074,17 @@ class StatsWindow(QWidget):
                                "(Pokémon: / Trainer: / Energy: sections).</span>")
                 return
             target = deck_name or (deck_combo.currentData() if deck_combo is not None else "")
+            if update:
+                if list_id(text) == current.get("id"):
+                    status.setText("<span style='color:#8A97AA'>That's the list this deck already has. "
+                                   "Export it again once you've changed the deck.</span>")
+                    dialog.expand()
+                    return
+                show_changes(list_changes(current.get("text") or "", text))
+                import_decklist(text, target)
+                self._deck_dashboards_dirty = True
+                QTimer.singleShot(0, self._refresh_deck_dashboards)
+                return
             if target:
                 import_decklist(text, target)
             else:
@@ -8056,6 +8099,39 @@ class StatsWindow(QWidget):
                 self._decklist_hid_dashboard = False
                 self._restore_dashboard()
 
+        def show_changes(changes):
+            """The update is in: say what changed, and Done closes."""
+            def chip(name, delta):
+                color = "#66BB6A" if delta > 0 else "#EF9A9A"
+                sign = "+" if delta > 0 else "−"
+                return (f"<span style='color:{color};font-weight:700'>{sign}{abs(delta)}</span> "
+                        f"{html.escape(name)}")
+            if changes:
+                body = "<br>".join(chip(n, d) for n, d in changes[:14])
+                if len(changes) > 14:
+                    body += f"<br><span style='color:#8A97AA'>and {len(changes) - 14} more</span>"
+            else:
+                body = "<span style='color:#8A97AA'>Same cards, different prints.</span>"
+            status.setText("<span style='color:#66BB6A;font-weight:700'>List updated</span><br>" + body)
+            dialog.set_pill_text("List updated", found=True)
+            for widget in (manual_btn, edit, lists_label, choices, several_btn, cancel):
+                widget.setVisible(False)
+            link.setText("Done")
+            link.setEnabled(True)
+            try:
+                link.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            link.clicked.connect(dialog.close)
+            stop_watching()
+            dialog.expand()
+
+        def stop_watching():
+            try:
+                clipboard.dataChanged.disconnect(check_clipboard)
+            except (RuntimeError, TypeError):
+                pass
+
         set_status()
         clipboard = QApplication.clipboard()
         clipboard.dataChanged.connect(check_clipboard)
@@ -8067,13 +8143,11 @@ class StatsWindow(QWidget):
         cancel.clicked.connect(dialog.close)
         link.clicked.connect(accept)
         update_link()
-
-        def stop_watching():
-            try:
-                clipboard.dataChanged.disconnect(check_clipboard)
-            except (RuntimeError, TypeError):
-                pass
         dialog.on_close(stop_watching)
+        if update:
+            col.insertStretch(col.count() - 1, 1)   # no list of saved decklists: the space goes below
+            dialog.on_close(lambda: getattr(self, "_decklist_hid_dashboard", False) and (
+                setattr(self, "_decklist_hid_dashboard", False), self._restore_dashboard()))
         # While this is open it handles copied lists itself (the HUD's
         # "Import this decklist?" card stays quiet).
         self._decklist_dialog_open = True
@@ -9375,16 +9449,65 @@ class StatsWindow(QWidget):
             count = self.db.count_deck_battles(name)
         except Exception:
             count = 0
+        self._confirm_delete_deck(name, count, lambda: self._do_delete_deck(name))
+
+    def _confirm_delete_deck(self, name, count, then):
+        """The warning before a deck goes: what's lost, and the deck's name
+        typed in before Delete turns on."""
         games = f"{count} battle{'s' if count != 1 else ''}"
-        question = (f"Delete \"{name}\" and its {games}?\n\nIts games come out of your stats, charts and history. "
-                    f"A copy of your data is saved in the Backups folder first." if count else
-                    f"Remove \"{name}\" from your decks?\n\nIts decklist stays in your saved decklists "
-                    f"(In Person tab).")
-        answer = QMessageBox.question(
-            self, "Delete deck", question,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-        if answer != QMessageBox.StandardButton.Yes:
-            return
+        dialog = GlassPanel(self, "Delete deck", size=(440, 250), pill_text=f"Delete {name}?")
+        dialog.add_style(
+            "QLabel { color: rgba(236,242,252,0.90); background: transparent; }"
+            "QLineEdit { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.14);"
+            " border-radius: 6px; color: white; padding: 7px 9px; font-size: 13px; }"
+            "QLineEdit:focus { border-color: rgba(232,90,90,0.75); }"
+            "QPushButton#danger { background: rgba(232,90,90,0.85); border: none; border-radius: 6px;"
+            " color: white; font-weight: 700; padding: 7px 18px; }"
+            "QPushButton#danger:disabled { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.35); }"
+            "QPushButton#secondary { background: transparent; border: 1px solid rgba(255,255,255,0.16);"
+            " border-radius: 6px; color: #D6DAE0; padding: 7px 16px; }"
+            "QPushButton#secondary:hover { border-color: rgba(255,255,255,0.32); color: #FFFFFF; }")
+        col = QVBoxLayout(dialog.content)
+        col.setContentsMargins(18, 12, 18, 14)
+        col.setSpacing(10)
+        if count:
+            what = (f"<span style='color:#EF9A9A;font-weight:700'>This deletes {html.escape(name)} and its "
+                    f"{games}.</span><br>They come out of your stats, charts, matchups and history. "
+                    f"<span style='color:#8A97AA'>A copy of your data goes to the Backups folder first.</span>")
+        else:
+            what = (f"<span style='color:#EF9A9A;font-weight:700'>This removes {html.escape(name)} from your "
+                    f"decks.</span><br><span style='color:#8A97AA'>Its decklist stays in your saved decklists "
+                    f"(In Person tab).</span>")
+        warning = QLabel(what)
+        warning.setWordWrap(True)
+        warning.setTextFormat(Qt.TextFormat.RichText)
+        col.addWidget(warning)
+        col.addWidget(QLabel("<span style='color:#8A97AA;font-size:11px'>Type the deck's name to confirm</span>"))
+        field = QLineEdit()
+        field.setPlaceholderText(name)
+        col.addWidget(field)
+        col.addStretch()
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setObjectName("secondary")
+        delete = QPushButton("Delete deck")
+        delete.setObjectName("danger")
+        delete.setEnabled(False)
+        for b in (cancel, delete):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            row.addWidget(b)
+        col.addLayout(row)
+        matches = lambda: " ".join(field.text().split()).casefold() == " ".join(name.split()).casefold()
+        field.textChanged.connect(lambda *_: delete.setEnabled(matches()))
+        field.returnPressed.connect(lambda: matches() and delete.click())
+        cancel.clicked.connect(dialog.close)
+        delete.clicked.connect(lambda: (dialog.close(), then()))
+        self._delete_deck_panel = dialog
+        dialog.open_panel()
+        field.setFocus()
+
+    def _do_delete_deck(self, name):
         try:
             import shutil
             stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

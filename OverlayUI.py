@@ -1106,7 +1106,7 @@ class MinimalOverlay(QWidget):
     def _on_clipboard_changed(self):
         try:
             from StatsUI import _list_or_link
-            from decklists import all_decklists, is_ptcgl_decklist, linked_decks, list_id, save_decklist
+            from decklists import already_have, is_ptcgl_decklist, save_decklist
             text = _list_or_link(QApplication.clipboard().text() or "")
             if not is_ptcgl_decklist(text):
                 return
@@ -1116,13 +1116,13 @@ class MinimalOverlay(QWidget):
             # only needs saving. Copied anywhere else (a website, a chat): a
             # new deck, imported into the game and the app like a shared link.
             from_game = self._game_is_foreground()
-            lid = list_id(text)
-            stored = any(e.get("id") == lid for e in all_decklists())
-            if stored and from_game:
-                save_decklist(text, self._menu_deck())   # already imported: just mark it as the newest
+            if already_have(text):
+                # A list you already have (same cards, any order or prints):
+                # never asked about again.
+                if from_game:
+                    save_decklist(text, self._menu_deck())   # just mark it as the newest
+                _dbg("decklist on the clipboard: already in your decklists, not asked")
                 return
-            if stored and lid in {e.get("id") for e in linked_decks().values()}:
-                return  # already one of your decks
             self._pending_decklist = text
             self._pending_from_game = from_game
             _dbg(f"decklist on the clipboard ({'from the game' if from_game else 'from elsewhere'}): "
