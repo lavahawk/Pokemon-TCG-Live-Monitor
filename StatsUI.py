@@ -4878,6 +4878,97 @@ class MenuRichLabel(QLabel):
         super().mouseReleaseEvent(event)
 
 
+class _RadioDot(QWidget):
+    """The round selector on a ChoiceCard (painted, so it matches the app's blue)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(18, 18)
+        self.on = False
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        c = QPointF(9, 9)
+        p.setPen(QPen(QColor(74, 159, 216) if self.on else QColor(255, 255, 255, 90), 1.4))
+        p.setBrush(QColor(74, 159, 216, 40) if self.on else Qt.BrushStyle.NoBrush)
+        p.drawEllipse(c, 7.5, 7.5)
+        if self.on:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(74, 159, 216))
+            p.drawEllipse(c, 3.8, 3.8)
+        p.end()
+
+
+class ChoiceCard(QFrame):
+    """One option of a choice, as a card: a radio dot, a title and a line
+    saying what it does; the chosen card lights up and shows its `body`
+    (the field that goes with it). Click anywhere on it to choose it."""
+
+    picked = Signal()
+
+    STYLE = ("QFrame#choiceCard { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.10);"
+             " border-radius: 8px; }"
+             "QFrame#choiceCard:hover { background: rgba(255,255,255,0.055); }"
+             "QFrame#choiceCard[on=\"true\"] { background: rgba(74,159,216,0.10);"
+             " border: 1px solid rgba(74,159,216,0.70); }"
+             "QLabel#choiceTitle { color: #FFFFFF; font-size: 13px; font-weight: 700; background: transparent; }"
+             "QLabel#choiceSub { color: rgba(168,182,204,0.85); font-size: 11px; background: transparent; }")
+
+    def __init__(self, title, subtitle="", parent=None):
+        super().__init__(parent)
+        self.setObjectName("choiceCard")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(self.STYLE)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        self.dot = _RadioDot()
+        head.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(1)
+        self.title = QLabel(title)
+        self.title.setObjectName("choiceTitle")
+        self.sub = QLabel(subtitle)
+        self.sub.setObjectName("choiceSub")
+        self.sub.setWordWrap(True)
+        self.sub.setVisible(bool(subtitle))
+        text.addWidget(self.title)
+        text.addWidget(self.sub)
+        head.addLayout(text, 1)
+        outer.addLayout(head)
+        self.body_widget = QWidget()
+        self.body = QVBoxLayout(self.body_widget)
+        self.body.setContentsMargins(28, 0, 0, 0)
+        self.body.setSpacing(6)
+        outer.addWidget(self.body_widget)
+        self.body_widget.setVisible(False)
+        self._on = False
+
+    def isChecked(self):
+        return self._on
+
+    def setChecked(self, on):
+        self._on = bool(on)
+        self.dot.on = self._on
+        self.dot.update()
+        self.setProperty("on", "true" if self._on else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.body_widget.setVisible(self._on and self.body.count() > 0)
+
+    def set_subtitle(self, text):
+        self.sub.setText(text)
+        self.sub.setVisible(bool(text))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled() and not self._on:
+            self.picked.emit()
+        super().mousePressEvent(event)
+
+
 class PillLoader(QWidget):
     """The waiting pill's animation (GlassPanel.open_as_toast(loading=True)):
     a spinning arc where the dot was and a soft light sweeping along the
@@ -8078,7 +8169,7 @@ class StatsWindow(QWidget):
         update = current is not None
         fixed = bool(deck_name)          # the deck is decided: no choice to show
         dialog = GlassPanel(self, "Update decklist" if update else "Import decklist",
-                            size=(430, 280) if fixed else (430, 320),
+                            size=(430, 280) if fixed else (440, 400),
                             pill_text="Waiting for the new list on your clipboard…" if update
                             else "Waiting for a decklist on your clipboard…")
         self._decklist_panel = dialog
@@ -8127,27 +8218,12 @@ class StatsWindow(QWidget):
         choice_col = QVBoxLayout(choice)
         choice_col.setContentsMargins(0, 2, 0, 0)
         choice_col.setSpacing(8)
-        seg_row = QHBoxLayout()
-        seg_row.setSpacing(0)
-        new_btn = QPushButton("New deck")
-        upd_btn = QPushButton("Update a deck")
-        group = QButtonGroup(dialog)
-        for i, b in enumerate((new_btn, upd_btn)):
-            b.setCheckable(True)
-            b.setObjectName("seg")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setStyleSheet("border-top-right-radius: 0; border-bottom-right-radius: 0; border-top-left-radius: 6px;"
-                            " border-bottom-left-radius: 6px;" if i == 0 else
-                            "border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: none;"
-                            " border-top-right-radius: 6px; border-bottom-right-radius: 6px;")
-            group.addButton(b, i)
-            seg_row.addWidget(b)
-        seg_row.addStretch()
-        choice_col.addLayout(seg_row)
+        new_btn = ChoiceCard("New deck", "Adds it to your Decks tab")
+        upd_btn = ChoiceCard("Update one of your decks", "Its old list stays saved; your games stay with it")
         name_edit = QLineEdit()
         name_edit.setMaxLength(GAME_NAME_MAX)
         name_edit.setPlaceholderText("Deck name (as in Pokémon TCG Live)")
-        choice_col.addWidget(name_edit)
+        new_btn.body.addWidget(name_edit)
         deck_combo = QComboBox()
         deck_combo.setObjectName("metaCombo")
         try:
@@ -8156,11 +8232,20 @@ class StatsWindow(QWidget):
             known_names = []
         for known in list(dict.fromkeys(decks_with_lists(known_names) + known_names)):
             deck_combo.addItem(known, known)
-        choice_col.addWidget(deck_combo)
+        upd_btn.body.addWidget(deck_combo)
         preview = QLabel()
         preview.setWordWrap(True)
         preview.setTextFormat(Qt.TextFormat.RichText)
-        choice_col.addWidget(preview)
+        upd_btn.body.addWidget(preview)
+        choice_col.addWidget(new_btn)
+        choice_col.addWidget(upd_btn)
+
+        def pick(card):
+            for c in (new_btn, upd_btn):
+                c.setChecked(c is card)
+            refresh()
+        new_btn.picked.connect(lambda: pick(new_btn))
+        upd_btn.picked.connect(lambda: pick(upd_btn))
         col.addWidget(choice)
         choice.setVisible(False)
         if not deck_combo.count():
@@ -8249,9 +8334,8 @@ class StatsWindow(QWidget):
                     if i > 0:
                         deck_combo.removeItem(i)
                         deck_combo.insertItem(0, close[0], close[0])
-                    deck_combo.setItemText(0, f"{close[0]}  ·  closest match")
                     deck_combo.setCurrentIndex(0)
-                    upd_btn.setText(f"Update {close[0] if len(close[0]) <= 18 else close[0][:17] + '…'}")
+                    upd_btn.set_subtitle(f"{close[0]} looks like the closest match")
                 choice.setVisible(True)
             dialog.set_pill_text(auto_name(text), found=True)
             refresh()
@@ -8266,9 +8350,6 @@ class StatsWindow(QWidget):
                 return
             text = state["text"]
             updating = upd_btn.isChecked() and not fixed
-            if updating and deck_combo.currentData():
-                chosen = deck_combo.currentData()
-                upd_btn.setText(f"Update {chosen if len(chosen) <= 18 else chosen[:17] + '…'}")
             name_edit.setVisible(not updating and not fixed)
             deck_combo.setVisible(updating)
             preview.setText("")
@@ -8368,7 +8449,6 @@ class StatsWindow(QWidget):
 
         clipboard = QApplication.clipboard()
         clipboard.dataChanged.connect(check_clipboard)
-        group.idToggled.connect(lambda *_: refresh())
         deck_combo.currentIndexChanged.connect(refresh)
         name_edit.textChanged.connect(refresh)
         edit.textChanged.connect(paste_changed)
@@ -8385,7 +8465,7 @@ class StatsWindow(QWidget):
             setattr(self, "_decklist_hid_dashboard", False), self._restore_dashboard()))
 
         show_waiting()
-        new_btn.setChecked(True)
+        pick(new_btn)
         if preset_text and is_ptcgl_decklist(preset_text):
             set_list(preset_text)
         elif not update:
