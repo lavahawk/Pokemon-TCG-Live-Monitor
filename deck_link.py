@@ -477,16 +477,17 @@ def main(argv):
     import game_window
     from edition import APP_NAME
     game_open = bool(game_window.find_game_hwnd())
-    # Or a new version of one of your decks: update its list instead (the
-    # closest one is picked when the cards are clearly that deck).
+    # Or a new version of one of your decks: update its list instead (an
+    # option; the closest deck is listed first).
     from PySide6.QtWidgets import QComboBox
     target = QComboBox()
     target.addItem("Add as a new deck", "")
-    for deck in decklists.decks_with_lists():
-        target.addItem(f"Update {deck}", deck)
     close = decklists.closest_deck(text)
-    if close:
-        target.setCurrentIndex(max(0, target.findData(close[0])))
+    if close:   # offered first, not chosen: importing stays the default
+        target.addItem(f"Update {close[0]}  ·  closest match", close[0])
+    for deck in decklists.decks_with_lists():
+        if not close or deck != close[0]:
+            target.addItem(f"Update {deck}", deck)
     target.setVisible(target.count() > 1)
     box.addWidget(target)
     typed_name = {"text": name_field.text()}

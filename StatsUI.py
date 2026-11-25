@@ -8050,14 +8050,19 @@ class StatsWindow(QWidget):
         QTimer.singleShot(0, self._refresh_deck_dashboards)
 
     def _import_decklist_dialog(self, deck_name, update=False, preset_text=None):
-        """Import a decklist, for a deck (its page's Import decklist, or
-        Decklist ▾ → Update list with update=True: the new version of the
-        deck's list, and what changed) or on its own (＋ Import decklist on the Decks tab, with an
-        optional deck to link it to). Watches the clipboard while open: a list
-        exported in PTCGL (Export → Copy to clipboard) or copied from anywhere
-        is imported the moment it arrives, no extra click."""
-        from PySide6.QtWidgets import QPlainTextEdit
-        from decklists import all_decklists, auto_name, import_decklist, is_ptcgl_decklist, save_decklist
+        """Bring in a decklist. One list at a time: it waits for an export (a
+        corner pill while you're in the game) or takes the one you copied, shows
+        it, and asks one thing - a new deck, or an update of one of yours (the
+        closest preselected, with what would change shown before you press it).
+
+        deck_name: for that deck (its page's Import decklist); update=True with
+        it: Decklist ▾ → Update list (the animated pill; the update is made the
+        moment the new export arrives). preset_text: a list to start with (the
+        HUD's "Update a deck…")."""
+        from PySide6.QtWidgets import QButtonGroup, QPlainTextEdit
+        from decklists import (GAME_NAME_MAX, auto_name, closest_deck, decklist_for_deck, decks_with_lists,
+                               game_deck_name, import_decklist, is_ptcgl_decklist, list_changes, list_id,
+                               list_lines, spelled_name)
 
         existing = getattr(self, "_decklist_panel", None)
         if existing is not None:
@@ -8069,26 +8074,32 @@ class StatsWindow(QWidget):
                     return
             except RuntimeError:
                 pass
-        from decklists import decklist_for_deck, list_changes, list_id
         current = decklist_for_deck(deck_name) if (update and deck_name) else None
         update = current is not None
+        fixed = bool(deck_name)          # the deck is decided: no choice to show
         dialog = GlassPanel(self, "Update decklist" if update else "Import decklist",
-                            size=(460, 360) if update else (460, 460),
+                            size=(430, 280) if fixed else (430, 320),
                             pill_text="Waiting for the new list on your clipboard…" if update
                             else "Waiting for a decklist on your clipboard…")
         self._decklist_panel = dialog
         dialog.add_style(
             "QLabel { color: rgba(236,242,252,0.90); background: transparent; }"
-            "QListWidget { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);"
-            " border-radius: 8px; color: #E6ECF5; font-size: 11px; outline: none; padding: 4px; }"
-            "QListWidget::item { padding: 7px 8px; border-radius: 6px; }"
-            "QListWidget::item:selected { background: rgba(74,159,216,0.26); color: #FFFFFF; }"
-            "QListWidget::item:hover { background: rgba(255,255,255,0.05); }"
+            "QLabel#listName { font-size: 16px; font-weight: 700; color: #FFFFFF; }"
+            "QLabel#muted { color: rgba(168,182,204,0.80); font-size: 11px; }"
             "QPlainTextEdit { background: rgba(255,255,255,0.04); color: #E6ECF5; border: 1px solid"
             " rgba(255,255,255,0.10); border-radius: 6px; font-family: Consolas; font-size: 10px; }"
+            "QLineEdit { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);"
+            " border-radius: 6px; color: white; padding: 6px 9px; font-size: 13px; }"
+            "QLineEdit:focus { border-color: rgba(74,159,216,0.7); }"
             "QPushButton#ghost { background: transparent; border: none; color: rgba(168,182,204,0.85);"
             " font-size: 10px; text-align: left; padding: 2px 0; }"
             "QPushButton#ghost:hover { color: #FFFFFF; }"
+            "QPushButton#seg { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);"
+            " color: rgba(220,228,240,0.80); padding: 7px 14px; font-size: 12px; font-weight: 600; }"
+            "QPushButton#seg:checked { background: rgba(74,159,216,0.28); border-color: rgba(74,159,216,0.75);"
+            " color: #FFFFFF; }"
+            "QPushButton#seg:hover:!checked { background: rgba(255,255,255,0.08); }"
+            "QPushButton#segLeft { border-top-right-radius: 0; border-bottom-right-radius: 0; }"
             "QPushButton#primary { background: rgba(74,159,216,0.85); border: none; border-radius: 6px;"
             " color: white; font-weight: 700; padding: 7px 18px; }"
             "QPushButton#primary:disabled { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.35); }"
@@ -8099,223 +8110,255 @@ class StatsWindow(QWidget):
         col.setContentsMargins(18, 12, 18, 14)
         col.setSpacing(10)
 
-        deck_combo = None
-        if deck_name:
-            title = QLabel(f"<span style='color:#8A97AA;font-size:11px'>for</span> "
-                           f"<span style='font-size:15px;font-weight:700'>{html.escape(deck_name)}</span>")
-            col.addWidget(title)
-        else:
-            row_deck = QHBoxLayout()
-            row_deck.addWidget(QLabel("<span style='color:#8A97AA;font-size:11px'>For</span>"))
-            deck_combo = QComboBox()
-            deck_combo.setObjectName("metaCombo")
-            deck_combo.addItem("No deck (just import it)", "")
-            from decklists import closest_deck, decks_with_lists
-            try:
-                known_names = self.db.get_known_deck_names()
-            except Exception:
-                known_names = []
-            with_list = {n.casefold() for n in decks_with_lists(known_names)}
-            for known in list(dict.fromkeys(list(known_names) + decks_with_lists(known_names))):
-                # A deck with a list gets updated (you see what changed).
-                deck_combo.addItem(f"Update {known}" if known.casefold() in with_list else known, known)
-            if preset_text:
-                close = closest_deck(preset_text, known_names)
-                if close:
-                    deck_combo.setCurrentIndex(max(0, deck_combo.findData(close[0])))
-            row_deck.addWidget(deck_combo, 1)
-            col.addLayout(row_deck)
-
+        # ── the list ──
+        list_name = QLabel()
+        list_name.setObjectName("listName")
+        list_meta = QLabel()
+        list_meta.setObjectName("muted")
+        col.addWidget(list_name)
+        col.addWidget(list_meta)
         status = QLabel()
         status.setWordWrap(True)
         status.setTextFormat(Qt.TextFormat.RichText)
         col.addWidget(status)
 
-        lists_label = QLabel("YOUR DECKLISTS")
-        lists_label.setStyleSheet("color: rgba(168,182,204,0.70); font-size: 9px; font-weight: 700; letter-spacing: 1px;")
-        col.addWidget(lists_label)
-        choices = QListWidget()
-        col.addWidget(choices, 1)
+        # ── what to do with it: a new deck, or an update of one of yours ──
+        choice = QWidget()
+        choice_col = QVBoxLayout(choice)
+        choice_col.setContentsMargins(0, 2, 0, 0)
+        choice_col.setSpacing(8)
+        seg_row = QHBoxLayout()
+        seg_row.setSpacing(0)
+        new_btn = QPushButton("New deck")
+        upd_btn = QPushButton("Update a deck")
+        group = QButtonGroup(dialog)
+        for i, b in enumerate((new_btn, upd_btn)):
+            b.setCheckable(True)
+            b.setObjectName("seg")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet("border-top-right-radius: 0; border-bottom-right-radius: 0; border-top-left-radius: 6px;"
+                            " border-bottom-left-radius: 6px;" if i == 0 else
+                            "border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: none;"
+                            " border-top-right-radius: 6px; border-bottom-right-radius: 6px;")
+            group.addButton(b, i)
+            seg_row.addWidget(b)
+        seg_row.addStretch()
+        choice_col.addLayout(seg_row)
+        name_edit = QLineEdit()
+        name_edit.setMaxLength(GAME_NAME_MAX)
+        name_edit.setPlaceholderText("Deck name (as in Pokémon TCG Live)")
+        choice_col.addWidget(name_edit)
+        deck_combo = QComboBox()
+        deck_combo.setObjectName("metaCombo")
+        try:
+            known_names = list(self.db.get_known_deck_names())
+        except Exception:
+            known_names = []
+        for known in list(dict.fromkeys(decks_with_lists(known_names) + known_names)):
+            deck_combo.addItem(known, known)
+        choice_col.addWidget(deck_combo)
+        preview = QLabel()
+        preview.setWordWrap(True)
+        preview.setTextFormat(Qt.TextFormat.RichText)
+        choice_col.addWidget(preview)
+        col.addWidget(choice)
+        choice.setVisible(False)
+        if not deck_combo.count():
+            upd_btn.setEnabled(False)
 
-        several_btn = QPushButton("▸ Import several decks at once")
-        several_btn.setObjectName("ghost")
-        several_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        several_btn.clicked.connect(lambda: (dialog.close(), self._start_deck_import_mode()))
-        several_btn.setVisible(not deck_name)
-        col.addWidget(several_btn)
-
-        manual_btn = QPushButton("▸ Paste a list or link")
+        # ── while waiting: paste instead, or bring in several ──
+        manual_btn = QPushButton("▸ Paste a list or link instead")
         manual_btn.setObjectName("ghost")
         manual_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         col.addWidget(manual_btn)
         edit = QPlainTextEdit()
         edit.setPlaceholderText("Pokémon: 15\n4 Dreepy TWM 128\n…")
         edit.setVisible(False)
-        edit.setFixedHeight(150)
+        edit.setFixedHeight(120)
         col.addWidget(edit)
+        several_btn = QPushButton("▸ Import several decks at once")
+        several_btn.setObjectName("ghost")
+        several_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        several_btn.clicked.connect(lambda: (dialog.close(), self._start_deck_import_mode()))
+        several_btn.setVisible(not fixed)
+        col.addWidget(several_btn)
+        col.addStretch(1)
 
         row = QHBoxLayout()
         row.addStretch()
         cancel = QPushButton("Cancel")
         cancel.setObjectName("secondary")
-        link = QPushButton("Update" if update else "Import")
-        link.setObjectName("primary")
-        for b in (cancel, link):
+        primary = QPushButton("Import")
+        primary.setObjectName("primary")
+        primary.setEnabled(False)
+        for b in (cancel, primary):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             row.addWidget(b)
         col.addLayout(row)
 
-        def set_status(found=None):
-            if found:
-                status.setText(f"<span style='color:#66BB6A;font-weight:700'>Decklist found on your clipboard</span>"
-                               f"<br><span style='color:#8A97AA'>{html.escape(auto_name(found))}</span>")
-                dialog.set_pill_text(auto_name(found), found=True)
-            elif update:
-                status.setText("<span style='color:#6BB6E8'>●</span> Changed the deck? In Pokémon TCG Live: "
-                               "<b>Decks → this deck → Export → Copy to clipboard</b>, or paste the new list below. "
-                               "You'll see what changed."
-                               "<br><span style='color:#8A97AA'>Your games so far stay with the deck; the old list "
-                               "stays in your saved decklists.</span>")
-            else:
-                status.setText("<span style='color:#6BB6E8'>●</span> Waiting for a list… In Pokémon TCG Live: "
-                               "<b>Decks → this deck → Export → Copy to clipboard</b>. It shows up here by itself."
-                               "<br><span style='color:#8A97AA'>Minimize this (▾) while you're in the game; "
-                               "it opens again when the list arrives.</span>")
+        state = {"text": None, "done": False}
 
-        def add_choice(text, label, select=False, top=False):
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, text)
-            if top:
-                choices.insertItem(0, item)
-            else:
-                choices.addItem(item)
-            if select:
-                choices.setCurrentItem(item)
+        def show_waiting():
+            title = deck_name if fixed else "No list yet"
+            list_name.setText(html.escape(title))
+            list_meta.setText("Update its list" if update else ("Import its list" if fixed else ""))
+            list_meta.setVisible(fixed)
+            how = "<b>Decks → this deck → Export → Copy to clipboard</b>" if fixed else \
+                "<b>Decks → a deck → Export → Copy to clipboard</b>, or copy a list from any site"
+            status.setText(f"<span style='color:#6BB6E8'>●</span> In Pokémon TCG Live: {how}. "
+                           f"It shows up here by itself.")
 
-        stored = all_decklists()
-        known = {(e.get("text") or "").strip() for e in stored}
-        for e in stored:
-            stamp = (e.get("captured_at") or "")[5:16].replace("-", "/")
-            add_choice(e.get("text") or "", f"{e['name']}   ·   {stamp}",
-                       select=e.get("menu_deck") == deck_name and choices.currentItem() is None)
-        if update:
-            stored = []   # an update is a new export, not one of the lists you already have
-            choices.clear()
-        lists_label.setVisible(bool(stored))
-        choices.setVisible(bool(stored))
-
-        def check_clipboard(arrived=True):
-            text = _list_or_link(QApplication.clipboard().text())
-            if not is_ptcgl_decklist(text):
-                return
-            if arrived:
-                accept(text)   # copied while this is open: import it straight away
-                return
-            set_status(text)
-            dialog.expand()  # back from the pill once the export lands
-            if text not in known:
-                known.add(text)
-                add_choice(text, f"{auto_name(text)}   ·   on your clipboard",
-                           select=True, top=True)
-                lists_label.setVisible(True)
-                choices.setVisible(True)
-            else:
-                for i in range(choices.count()):
-                    if choices.item(i).data(Qt.ItemDataRole.UserRole).strip() == text:
-                        choices.setCurrentRow(i)
-            update_link()
-
-        def update_link(*_):
-            text = _list_or_link(edit.toPlainText()) if edit.isVisible() else ""
-            link.setEnabled(is_ptcgl_decklist(text) or choices.currentItem() is not None)
-            if deck_combo is not None and link.text() != "Done":
-                target = deck_combo.currentData()
-                link.setText("Update" if target and decklist_for_deck(target) is not None else "Import")
-
-        def toggle_manual():
-            show = not edit.isVisible()
-            edit.setVisible(show)
-            manual_btn.setText(("▾ " if show else "▸ ") + "Paste a list or link")
-            update_link()
-
-        def accept(text=None):
-            if text is None:
-                text = _list_or_link(edit.toPlainText()) if edit.isVisible() and edit.toPlainText().strip() else (
-                    choices.currentItem().data(Qt.ItemDataRole.UserRole) if choices.currentItem() else "")
-            if not is_ptcgl_decklist(text):
-                status.setText("<span style='color:#EF9A9A'>That isn't a PTCGL deck export "
-                               "(Pokémon: / Trainer: / Energy: sections).</span>")
-                return
-            target = deck_name or (deck_combo.currentData() if deck_combo is not None else "")
-            if not update and target and deck_combo is not None and decklist_for_deck(target) is not None:
-                # Picked one of your decks that has a list: that's an update.
-                if list_id(text) == decklist_for_deck(target).get("id"):
-                    status.setText("<span style='color:#8A97AA'>That's the list this deck already has.</span>")
-                    return
-                show_changes(list_changes(decklist_for_deck(target).get("text") or "", text),
-                             title=f"{target} updated")
-                import_decklist(text, target)
-                self._deck_dashboards_dirty = True
-                QTimer.singleShot(0, self._refresh_deck_dashboards)
-                return
-            if update:
-                if list_id(text) == current.get("id"):
-                    status.setText("<span style='color:#8A97AA'>That's the list this deck already has. "
-                                   "Export it again once you've changed the deck.</span>")
-                    dialog.expand()
-                    return
-                show_changes(list_changes(current.get("text") or "", text))
-                import_decklist(text, target)
-                self._deck_dashboards_dirty = True
-                QTimer.singleShot(0, self._refresh_deck_dashboards)
-                return
-            if target:
-                import_decklist(text, target)
-            else:
-                save_decklist(text, None)
-                button = getattr(self, "_deck_import_btn", None)
-                if button is not None:
-                    self._flash_button(button, "Imported ✓", 2200)
-            self._deck_dashboards_dirty = True
-            QTimer.singleShot(0, self._refresh_deck_dashboards)
-            dialog.close()
-            if getattr(self, "_decklist_hid_dashboard", False):
-                self._decklist_hid_dashboard = False
-                self._restore_dashboard()
-
-        def show_changes(changes, title="List updated"):
-            """The update is in: say what changed, and Done closes."""
-            def chip(name, delta):
+        def changes_html(changes):
+            if not changes:
+                return "<span style='color:#8A97AA'>Same cards, other prints.</span>"
+            parts = []
+            for name, delta in changes[:10]:
                 color = "#66BB6A" if delta > 0 else "#EF9A9A"
                 sign = "+" if delta > 0 else "−"
-                return (f"<span style='color:{color};font-weight:700'>{sign}{abs(delta)}</span> "
-                        f"{html.escape(name)}")
-            if changes:
-                body = "<br>".join(chip(n, d) for n, d in changes[:14])
-                if len(changes) > 14:
-                    body += f"<br><span style='color:#8A97AA'>and {len(changes) - 14} more</span>"
-            else:
-                body = "<span style='color:#8A97AA'>Same cards, different prints.</span>"
-            status.setText(f"<span style='color:#66BB6A;font-weight:700'>{html.escape(title)}</span><br>" + body)
-            dialog.set_pill_text("List updated", found=True)
-            for widget in (manual_btn, edit, lists_label, choices, several_btn, cancel):
+                parts.append(f"<span style='color:{color};font-weight:700'>{sign}{abs(delta)}</span> "
+                             f"{html.escape(name)}")
+            more = f"  <span style='color:#8A97AA'>and {len(changes) - 10} more</span>" if len(changes) > 10 else ""
+            return " &nbsp;·&nbsp; ".join(parts) + more
+
+        def set_list(text):
+            """A list to bring in: show it, then the one choice."""
+            state["text"] = text
+            lines = list_lines(text)
+            pokemon = sorted((l for l in lines if l["section"] == "Pokémon"), key=lambda l: -l["qty"])
+            top = []
+            for line in pokemon:
+                name = spelled_name(line["name"])
+                if name not in top:
+                    top.append(name)
+                if len(top) == 3:
+                    break
+            list_name.setText(html.escape(auto_name(text)))
+            list_meta.setText(f"{sum(l['qty'] for l in lines)} cards" + (f"  ·  {', '.join(top)}" if top else ""))
+            list_meta.setVisible(True)
+            status.setText("")
+            status.setVisible(False)
+            for widget in (manual_btn, edit, several_btn):
                 widget.setVisible(False)
-            link.setText("Done")
-            link.setEnabled(True)
-            try:
-                link.clicked.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            link.clicked.connect(dialog.close)
-            stop_watching()
+            if not fixed:
+                if not name_edit.text():
+                    name_edit.setText(game_deck_name(auto_name(text)))
+                close = closest_deck(text, known_names)
+                if close:
+                    # Offered, not chosen: Import stays the default.
+                    i = deck_combo.findData(close[0])
+                    if i > 0:
+                        deck_combo.removeItem(i)
+                        deck_combo.insertItem(0, close[0], close[0])
+                    deck_combo.setItemText(0, f"{close[0]}  ·  closest match")
+                    deck_combo.setCurrentIndex(0)
+                    upd_btn.setText(f"Update {close[0] if len(close[0]) <= 18 else close[0][:17] + '…'}")
+                choice.setVisible(True)
+            dialog.set_pill_text(auto_name(text), found=True)
+            refresh()
+
+        def target():
+            if fixed:
+                return deck_name
+            return deck_combo.currentData() if upd_btn.isChecked() else None
+
+        def refresh(*_):
+            if state["done"]:
+                return
+            text = state["text"]
+            updating = upd_btn.isChecked() and not fixed
+            if updating and deck_combo.currentData():
+                chosen = deck_combo.currentData()
+                upd_btn.setText(f"Update {chosen if len(chosen) <= 18 else chosen[:17] + '…'}")
+            name_edit.setVisible(not updating and not fixed)
+            deck_combo.setVisible(updating)
+            preview.setText("")
+            if not text:
+                primary.setEnabled(False)
+                return
+            deck = target()
+            old = decklist_for_deck(deck) if deck else None
+            if old is not None:
+                primary.setText("Update")
+                if list_id(text) == old.get("id"):
+                    preview.setText("<span style='color:#8A97AA'>That's the list this deck already has.</span>")
+                    primary.setEnabled(False)
+                    return
+                preview.setText(changes_html(list_changes(old.get("text") or "", text)))
+            else:
+                primary.setText("Import" if not updating else "Add list")
+            primary.setEnabled(bool(deck) or bool(" ".join(name_edit.text().split())))
+
+        def finish(title, body):
+            """Done: what happened, and one button to close."""
+            state["done"] = True
+            choice.setVisible(False)
+            status.setText(f"<span style='color:#66BB6A;font-weight:700'>{html.escape(title)}</span>"
+                           + (f"<br>{body}" if body else ""))
+            dialog.set_pill_text(title, found=True)
+            status.setVisible(True)
+            cancel.setVisible(False)
+            primary.setText("Done")
+            primary.setEnabled(True)
+            self._deck_dashboards_dirty = True
+            QTimer.singleShot(0, self._refresh_deck_dashboards)
 
             def open_up():
                 try:
                     dialog.expand()
                 except RuntimeError:
                     pass  # closed meanwhile
-            # Let the pill's check pop land before the panel opens.
+            # On the pill, let its check pop land before the panel opens.
             QTimer.singleShot(750 if dialog._collapsed else 0, open_up)
+
+        def accept():
+            if state["done"]:
+                dialog.close()
+                return
+            text = state["text"]
+            if not text:
+                return
+            deck = target()
+            old = decklist_for_deck(deck) if deck else None
+            if old is not None:
+                if list_id(text) == old.get("id"):
+                    refresh()
+                    dialog.expand()
+                    return
+                changes = list_changes(old.get("text") or "", text)
+                import_decklist(text, deck)
+                finish(f"{deck} updated", changes_html(changes))
+            elif deck:
+                import_decklist(text, deck)
+                finish(f"List added to {deck}", "")
+            else:
+                name = game_deck_name(name_edit.text()) or game_deck_name(auto_name(text))
+                import_decklist(text, name)
+                finish(f"{name} imported", "<span style='color:#8A97AA'>It's on your Decks tab.</span>")
+
+        def check_clipboard(arrived=True):
+            if state["done"]:
+                return
+            text = _list_or_link(QApplication.clipboard().text())
+            if not is_ptcgl_decklist(text):
+                return
+            set_list(text)
+            if fixed and arrived:
+                accept()          # the deck is decided: nothing to ask
+            else:
+                dialog.expand()
+
+        def paste_changed():
+            text = _list_or_link(edit.toPlainText())
+            if is_ptcgl_decklist(text):
+                set_list(text)
+
+        def toggle_manual():
+            show = not edit.isVisible()
+            edit.setVisible(show)
+            manual_btn.setText(("▾ " if show else "▸ ") + "Paste a list or link instead")
+            if show:
+                dialog.expand()
+                edit.setFocus()
 
         def stop_watching():
             try:
@@ -8323,61 +8366,47 @@ class StatsWindow(QWidget):
             except (RuntimeError, TypeError):
                 pass
 
-        set_status()
         clipboard = QApplication.clipboard()
         clipboard.dataChanged.connect(check_clipboard)
-        if preset_text and is_ptcgl_decklist(preset_text):
-            # From the HUD's "Update a deck…": this list, ready to pick the deck.
-            if preset_text not in known:
-                known.add(preset_text)
-                add_choice(preset_text, f"{auto_name(preset_text)}   ·   copied", select=True, top=True)
-            else:
-                for i in range(choices.count()):
-                    if choices.item(i).data(Qt.ItemDataRole.UserRole).strip() == preset_text.strip():
-                        choices.setCurrentRow(i)
-            lists_label.setVisible(True)
-            choices.setVisible(True)
-            set_status(preset_text)
-        elif not update:
-            check_clipboard(arrived=False)   # (an update waits for a new export)
-        choices.currentItemChanged.connect(update_link)
-        if deck_combo is not None:
-            deck_combo.currentIndexChanged.connect(update_link)
-        choices.itemDoubleClicked.connect(lambda *_: accept())
-        edit.textChanged.connect(update_link)
+        group.idToggled.connect(lambda *_: refresh())
+        deck_combo.currentIndexChanged.connect(refresh)
+        name_edit.textChanged.connect(refresh)
+        edit.textChanged.connect(paste_changed)
         manual_btn.clicked.connect(toggle_manual)
         cancel.clicked.connect(dialog.close)
-        link.clicked.connect(accept)
-        update_link()
+        primary.clicked.connect(accept)
+        name_edit.returnPressed.connect(lambda: primary.isEnabled() and primary.click())
         dialog.on_close(stop_watching)
-        if update:
-            col.insertStretch(col.count() - 1, 1)   # no list of saved decklists: the space goes below
-            dialog.on_close(lambda: getattr(self, "_decklist_hid_dashboard", False) and (
-                setattr(self, "_decklist_hid_dashboard", False), self._restore_dashboard()))
         # While this is open it handles copied lists itself (the HUD's
         # "Import this decklist?" card stays quiet).
         self._decklist_dialog_open = True
         dialog.on_close(lambda: setattr(self, "_decklist_dialog_open", False))
+        dialog.on_close(lambda: getattr(self, "_decklist_hid_dashboard", False) and (
+            setattr(self, "_decklist_hid_dashboard", False), self._restore_dashboard()))
+
+        show_waiting()
+        new_btn.setChecked(True)
+        if preset_text and is_ptcgl_decklist(preset_text):
+            set_list(preset_text)
+        elif not update:
+            check_clipboard(arrived=False)   # (an update waits for a new export)
+
+        if state["text"]:
+            dialog.open_panel()
+            return
+        # Nothing yet: a corner pill instead of a panel, and the dashboard steps
+        # aside so the game is free for the export.
         if update:
-            # Always the waiting pill: the dashboard steps aside, you change the
-            # deck in the game and export it; the panel opens with what changed.
             dialog.open_as_toast("Awaiting decklist update", loading=True)
             dialog.pill.setToolTip(infotip.tip(
                 f"Waiting for {deck_name}'s new list",
                 "In Pokémon TCG Live: Decks → this deck → Export → Copy to clipboard. "
                 "Click this to paste a list instead."))
-            self._decklist_hid_dashboard = self.isVisible()
-            if self._decklist_hid_dashboard:
-                self.minimize_to_overlay()
-            return
-        if preset_text or is_ptcgl_decklist((clipboard.text() or "").strip()):
-            dialog.open_panel()
-            return
-        # Nothing to link yet: a corner toast instead of a panel, and the
-        # dashboard steps aside so the game is free for the export.
-        dialog.open_as_toast("Please export your decklist in Pokémon TCG Live")
-        dialog.pill.setToolTip(infotip.tip("Paste a list, or export one from PTCGL",
-                                           "In PTCGL: Decks → this deck → Export → Copy to clipboard. The list opens here by itself."))
+        else:
+            dialog.open_as_toast("Awaiting decklist", loading=True)
+            dialog.pill.setToolTip(infotip.tip("Paste a list, or export one from PTCGL",
+                                               "In PTCGL: Decks → a deck → Export → Copy to clipboard. "
+                                               "It opens here by itself."))
         self._decklist_hid_dashboard = self.isVisible()
         if self._decklist_hid_dashboard:
             self.minimize_to_overlay()
