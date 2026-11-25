@@ -705,6 +705,8 @@ class Monitor:
         try:
             from decklists import is_ptcgl_decklist, save_decklist
             if is_ptcgl_decklist(text):
+                if self.overlay_proc is not None and self.overlay_proc.poll() is None:
+                    return  # the HUD asks whether to import it
                 deck = read_text(LAST_DECK_FILE) or None
                 entry = save_decklist(text, deck)
                 log(f"Decklist {'saved' if entry.get('new') else 'updated'}: {entry['deck']} ({entry['cards']} cards).")

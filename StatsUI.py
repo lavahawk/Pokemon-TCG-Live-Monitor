@@ -5363,7 +5363,7 @@ class OpponentDeckWindow(GlassPanel):
     # ── see-through background: the dashboard's slider, in the same spot ──
     # Only the glass behind the cards fades (as on the dashboard); the cards,
     # text and buttons stay solid. It used to fade the whole window.
-    SURFACE_MIN, SURFACE_MAX, SURFACE_DEFAULT = 30, 125, 50   # starts at 50 %
+    SURFACE_MIN, SURFACE_MAX, SURFACE_DEFAULT = 30, 125, 75   # starts at 75 %, like the dashboard
 
     def _surface_value(self):
         try:
@@ -5792,9 +5792,11 @@ class StatsWindow(QWidget):
         
         self.tab_widget.currentChanged.connect(self.handle_tab_changed)
 
-        # Start resizable and restore the user's preferred popup size if available
-        self.setMinimumSize(900, 520)
-        self.resize(1100, 760)
+        # Start resizable and restore the user's preferred popup size if available.
+        # The first-run size comes from the screen: 1100x760 is bigger than a
+        # 1080p screen at 150 % scaling (about 1280x690 to Qt), which used to put
+        # the resize corner off the screen.
+        self.setGeometry(self._default_rect(self._screen_area()))
         self.chrome = FramelessChrome(self)
         self.restore_window_geometry()
         self._apply_window_opacity(self.surface_opacity_scale)
@@ -5873,14 +5875,31 @@ class StatsWindow(QWidget):
             screen = self.screen() or QGuiApplication.primaryScreen()
         return screen.availableGeometry()
 
+    MIN_SIZE = (900, 520)
+
+    def _default_rect(self, area):
+        """A first-run (or reset) window sized to the screen: about 72 % of
+        its width and 82 % of its height, so it's the same share of a 1080p
+        laptop as of a 1440p monitor, centred. Never past the screen."""
+        self._fit_minimum(area)
+        w = max(self.minimumWidth(), min(area.width(), min(1760, int(area.width() * 0.72))))
+        h = max(self.minimumHeight(), min(area.height(), min(1100, int(area.height() * 0.82))))
+        w = max(self.minimumWidth(), min(w, int(h * 1.7)))   # an ultrawide gets a normal shape, not a strip
+        return QRect(area.x() + (area.width() - w) // 2, area.y() + (area.height() - h) // 2, w, h)
+
+    def _fit_minimum(self, area):
+        """The smallest size the window can be dragged to, never bigger than
+        the screen (a small or heavily scaled screen)."""
+        self.setMinimumSize(min(self.MIN_SIZE[0], max(480, area.width() - 40)),
+                            min(self.MIN_SIZE[1], max(320, area.height() - 40)))
+
     def _fit_to_screen(self, rect):
         """Clamp a normal-window rect onto a screen. A rect that fills the whole
         screen (an old saved fullscreen size) becomes a comfortable default."""
         area = self._screen_area(rect.center())
+        self._fit_minimum(area)
         if rect.width() >= area.width() - 8 and rect.height() >= area.height() - 8:
-            w = max(self.minimumWidth(), min(1100, int(area.width() * 0.8)))
-            h = max(self.minimumHeight(), min(760, int(area.height() * 0.85)))
-            return QRect(area.x() + (area.width() - w) // 2, area.y() + (area.height() - h) // 2, w, h)
+            return self._default_rect(area)
         w = min(max(rect.width(), self.minimumWidth()), area.width())
         h = min(max(rect.height(), self.minimumHeight()), area.height())
         x = min(max(rect.x(), area.left()), area.right() - w + 1)
@@ -5897,7 +5916,7 @@ class StatsWindow(QWidget):
             self.setGeometry(self._screen_area(self.geometry().center()))
         else:
             self._expanded = False
-            base = self._normal_geometry or QRect(self.x(), self.y(), 1100, 760)
+            base = self._normal_geometry or self._default_rect(self._screen_area(self.geometry().center()))
             self.setGeometry(self._fit_to_screen(base))
         self._sync_window_chrome()
         self.save_window_geometry()
@@ -6061,6 +6080,11 @@ class StatsWindow(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self.chrome.start()
+        if not self._expanded and not self._restore_expanded:
+            # Never open bigger than the screen or hanging off it.
+            area = self._screen_area(self.geometry().center())
+            if not area.contains(self.geometry()):
+                QTimer.singleShot(0, lambda: self.setGeometry(self._fit_to_screen(QRect(self.geometry()))))
         if self._restore_expanded:
             self._restore_expanded = False
             QTimer.singleShot(0, lambda: self.set_expanded(True))
@@ -7996,6 +8020,10 @@ class StatsWindow(QWidget):
             except (RuntimeError, TypeError):
                 pass
         dialog.on_close(stop_watching)
+        # While this is open it handles copied lists itself (the HUD's
+        # "Import this decklist?" card stays quiet).
+        self._decklist_dialog_open = True
+        dialog.on_close(lambda: setattr(self, "_decklist_dialog_open", False))
         if is_ptcgl_decklist((clipboard.text() or "").strip()):
             dialog.open_panel()
             return

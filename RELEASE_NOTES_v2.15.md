@@ -1,7 +1,12 @@
-# Pokemon TCG Live Monitor v2.15.12
+# Pokemon TCG Live Monitor v2.15.13
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.12-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.13-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.13
+- **Fixed: the dashboard could open bigger than the screen.** On a 1080p screen with Windows scaling at 150 % or more, the first launch opened the window taller than the screen, with its resize corner out of reach. The window now opens at a size based on your screen (about three quarters of it, centred) and never bigger, and the smallest size you can drag it to shrinks on small screens too. A window saved on a bigger monitor is brought back onto the one you're using.
+- **Copy a decklist, get asked to import it.** Copy any PTCGL-format list (from the game's Export, a website or a friend's message) while the HUD is up and a card above it asks **Import** or **Not now**. Import stores it exactly like a list exported from the game. A list you already have isn't asked about again, and nothing is stored unless you say so.
+- The opponent decklist window now starts at 75 % see-through, the same as the dashboard (it was 50 %). If you've moved its slider, your setting is kept.
 
 ## What's new in 2.15.12
 - **Replay cards you can actually read.** The Replay board is laid out like the game again, your opponent on top and you underneath, with no stagger. Each side's Active and Bench now sit in one row, which makes a side about half as tall, so the whole board draws bigger. Pokémon in play are about 1.5x the size they were in 2.15.11 and hand cards a bit bigger, while face-down prizes and the deck are smaller since only their count matters. Your side has a blue outline and a **You** tag, your opponent's a red one.

@@ -955,6 +955,14 @@ class MinimalOverlay(QWidget):
         self._session_seen = None
         self._session_prompt_due = None
         self.pet = None  # HUD buddy (pet.py), off unless overlay_pet is on
+        # A decklist copied from anywhere (PTCGL's Export, a website, a
+        # friend's message): a card above the HUD asks whether to import it.
+        self._pending_decklist = None
+        self._decklist_card = None
+        try:
+            QApplication.clipboard().dataChanged.connect(self._on_clipboard_changed)
+        except Exception as exc:
+            _dbg(f"clipboard hookup failed: {exc}")
         # Restarted from the dashboard (theme / Restart app): skip the launch
         # prompts already seen and reopen the dashboard where it was.
         import ui_restart
@@ -1004,6 +1012,7 @@ class MinimalOverlay(QWidget):
         # The Reset? prompt is scheduled here, before the notice looks for it.
         self._poll_game_session()
         try:
+            self._poll_decklist_card(anchor)
             self._poll_manual_mode_notice(anchor)
             self._poll_update(anchor)
         except Exception as exc:
@@ -1093,6 +1102,62 @@ class MinimalOverlay(QWidget):
         """The league's pixel-art ball, centred on the stats text's capitals."""
         pix = create_pokeball_icon(getattr(self, "_ball_league", "poke"), self.ball_icon.devicePixelRatioF(), angle, self._hud_scale)
         self.ball_icon.set_ball(pix, self.stats_label)
+
+    def _on_clipboard_changed(self):
+        try:
+            from StatsUI import _list_or_link
+            from decklists import all_decklists, is_ptcgl_decklist, list_id, save_decklist
+            text = _list_or_link(QApplication.clipboard().text() or "")
+            if not is_ptcgl_decklist(text):
+                return
+            if getattr(self.stats_window, "_decklist_dialog_open", False):
+                return  # the "Link a decklist" window is taking it
+            lid = list_id(text)
+            if any(e.get("id") == lid for e in all_decklists()):
+                save_decklist(text, self._menu_deck())   # already imported: just mark it as the newest
+                return
+            self._pending_decklist = text
+            _dbg("decklist on the clipboard: asking whether to import it")
+        except Exception as exc:
+            _dbg(f"clipboard decklist check failed: {exc}")
+
+    @staticmethod
+    def _menu_deck():
+        try:
+            with open(os.path.join(BASE_DIR, ".last_deck"), "r", encoding="utf-8") as handle:
+                return handle.read().strip() or None
+        except OSError:
+            return None
+
+    def _poll_decklist_card(self, anchor):
+        """Ask about a copied decklist: Import (stored like a PTCGL export,
+        ready for the Decks tab and Print your decklist) or Not now."""
+        card = getattr(self, "_decklist_card", None)
+        try:
+            if card is not None and card.isVisible():
+                card.reposition(self._stack_anchor(anchor, "_decklist_card"))
+                return
+        except RuntimeError:
+            self._decklist_card = None
+        if not self._pending_decklist or not self.isVisible():
+            return  # (kept until the HUD is showing)
+        text, self._pending_decklist = self._pending_decklist, None
+        from deck_popup import NoticeCard
+        from decklists import auto_name, card_count
+        import html as _html
+
+        def do_import():
+            from decklists import save_decklist
+            entry = save_decklist(text, self._menu_deck())
+            _dbg(f"decklist imported: {entry['deck']} ({entry['cards']} cards)")
+            if self.stats_window is not None:
+                self.stats_window._deck_dashboards_dirty = True
+
+        self._decklist_card = NoticeCard(
+            "DECKLIST COPIED",
+            f"<b>{_html.escape(auto_name(text))}</b> · {card_count(text)} cards. Import it into your decklists?",
+            primary=("Import", do_import), secondary=("Not now", lambda: None), linger_ms=30000)
+        self._decklist_card.show_at(self._stack_anchor(anchor, "_decklist_card"))
 
     def _poll_concede(self, anchor):
         """A battle went straight to the main menu (deck_confirm.ask_concede):
@@ -1194,7 +1259,7 @@ class MinimalOverlay(QWidget):
     # Cards over the mini GUI, bottom to top. Each sits above the visible
     # cards before it, and the chat above them all, so a deck card, a
     # report or friend question and the chat never cover each other.
-    HUD_CARD_ORDER = ("deck_popup", "_reset_popup", "_concede_card", "_manual_notice", "_update_card")
+    HUD_CARD_ORDER = ("deck_popup", "_reset_popup", "_concede_card", "_decklist_card", "_manual_notice", "_update_card")
 
     def _hud_card_stack(self):
         stack = [(name, getattr(self, name, None)) for name in self.HUD_CARD_ORDER]
