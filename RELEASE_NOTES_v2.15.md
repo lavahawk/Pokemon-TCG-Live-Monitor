@@ -6,6 +6,9 @@ Run **`PokemonTCGLiveMonitor-2.15.13-Free-Setup.exe`**. Install over any 2.x ver
 ## What's new in 2.15.13
 - **Fixed: the dashboard could open bigger than the screen.** On a 1080p screen with Windows scaling at 150 % or more, the first launch opened the window taller than the screen, with its resize corner out of reach. The window now opens at a size based on your screen (about three quarters of it, centred) and never bigger, and the smallest size you can drag it to shrinks on small screens too. A window saved on a bigger monitor is brought back onto the one you're using.
 - **Copy a decklist, get asked to import it.** Copy any PTCGL-format list (from the game's Export, a website or a friend's message) while the HUD is up and a card above it asks **Import** or **Not now**. Import stores it exactly like a list exported from the game. A list you already have isn't asked about again, and nothing is stored unless you say so.
+- **Delete a deck.** The **⋯** button on a deck's page has **Delete deck…**. It asks first, says how many battles go with it, and saves a copy of your data to the Backups folder before deleting anything. Your Elo history stays as it was.
+- **Import a decklist on its own.** **＋ Import decklist** at the top right of the Decks tab takes a list without picking a deck first; you can link it to one of your decks in the same window or leave it unlinked.
+- **Importing a decklist is one step.** With the Import decklist window open, copy a list (Export → Copy to clipboard in the game, or from anywhere) and it's imported and linked straight away, no extra click. A list already on your clipboard when you open the window waits for **Import**. Card counts are gone from the deck button and the list of decklists.
 - The opponent decklist window now starts at 75 % see-through, the same as the dashboard (it was 50 %). If you've moved its slider, your setting is kept.
 
 ## What's new in 2.15.12

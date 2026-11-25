@@ -6425,6 +6425,15 @@ class StatsWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
+        import_btn = QPushButton("＋ Import decklist")
+        import_btn.setObjectName("limitlessBtn")
+        import_btn.setFixedHeight(26)
+        import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        import_btn.setToolTip("Add a decklist: paste one, or export it in Pokémon TCG Live and it's picked up")
+        import_btn.clicked.connect(lambda: self._import_decklist_dialog(None))
+        self._deck_import_btn = import_btn
+        layout.addWidget(import_btn)
+
         self.deck_search_input = QLineEdit()
         self.deck_search_input.setObjectName("deckSearchInput")
         self.deck_search_input.setPlaceholderText("Find deck")
@@ -7692,6 +7701,22 @@ class StatsWindow(QWidget):
             flag_btn.toggled.connect(lambda on, k=kind, name=flag_deck: self._set_deck_flag(k, name, on))
             flag_row.addWidget(flag_btn)
         hero_top.addWidget(flag_group)
+        more_btn = QToolButton()
+        more_btn.setObjectName("deckIconArrowBtn")
+        more_btn.setText("⋯")
+        more_btn.setToolTip("More: delete this deck")
+        more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        from PySide6.QtWidgets import QMenu as _QMenu
+        more_menu = _QMenu(more_btn)
+        more_menu.setStyleSheet(
+            "QMenu { background: #121823; color: #E6ECF5; border: 1px solid rgba(255,255,255,0.10);"
+            " border-radius: 8px; padding: 6px 0; }"
+            "QMenu::item { padding: 6px 22px 6px 16px; font-size: 11px; }"
+            "QMenu::item:selected { background: rgba(232,90,90,0.30); }")
+        more_menu.addAction("Delete deck…", lambda name=flag_deck: self._delete_deck(name))
+        more_btn.setMenu(more_menu)
+        hero_top.addWidget(more_btn)
         hero_top.addWidget(self._create_decklist_button(flag_deck, matched_row))
         from decklists import decklist_for_deck
         list_entry = decklist_for_deck(flag_deck)
@@ -7755,7 +7780,7 @@ class StatsWindow(QWidget):
             button.setToolTip("Link this deck's list to unlock card suggestions and list tools.")
             button.clicked.connect(lambda: self._import_decklist_dialog(deck_name))
             return button
-        button.setText(f"Decklist · {entry.get('cards') or '?'}  ▾")
+        button.setText("Decklist  ▾")
         button.setToolTip(f"{entry['name']} · exported {(entry.get('captured_at') or '')[:16]}")
         button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(button)
@@ -7851,10 +7876,13 @@ class StatsWindow(QWidget):
         QTimer.singleShot(0, self._refresh_deck_dashboards)
 
     def _import_decklist_dialog(self, deck_name):
-        """Pick the list for a deck. Watches the clipboard while open: export
-        the deck in PTCGL (Export → Copy to clipboard) and it's picked up."""
+        """Import a decklist, for a deck (its page's Import decklist / Change
+        list) or on its own (＋ Import decklist on the Decks tab, with an
+        optional deck to link it to). Watches the clipboard while open: a list
+        exported in PTCGL (Export → Copy to clipboard) or copied from anywhere
+        is imported the moment it arrives, no extra click."""
         from PySide6.QtWidgets import QPlainTextEdit
-        from decklists import all_decklists, auto_name, card_count, import_decklist, is_ptcgl_decklist, link_decklist
+        from decklists import all_decklists, auto_name, import_decklist, is_ptcgl_decklist, save_decklist
 
         existing = getattr(self, "_decklist_panel", None)
         if existing is not None:
@@ -7891,16 +7919,31 @@ class StatsWindow(QWidget):
         col.setContentsMargins(18, 12, 18, 14)
         col.setSpacing(10)
 
-        title = QLabel(f"<span style='color:#8A97AA;font-size:11px'>for</span> "
-                       f"<span style='font-size:15px;font-weight:700'>{deck_name}</span>")
-        col.addWidget(title)
+        deck_combo = None
+        if deck_name:
+            title = QLabel(f"<span style='color:#8A97AA;font-size:11px'>for</span> "
+                           f"<span style='font-size:15px;font-weight:700'>{html.escape(deck_name)}</span>")
+            col.addWidget(title)
+        else:
+            row_deck = QHBoxLayout()
+            row_deck.addWidget(QLabel("<span style='color:#8A97AA;font-size:11px'>Link it to</span>"))
+            deck_combo = QComboBox()
+            deck_combo.setObjectName("metaCombo")
+            deck_combo.addItem("No deck (just import it)", "")
+            try:
+                for known in self.db.get_known_deck_names():
+                    deck_combo.addItem(known, known)
+            except Exception:
+                pass
+            row_deck.addWidget(deck_combo, 1)
+            col.addLayout(row_deck)
 
         status = QLabel()
         status.setWordWrap(True)
         status.setTextFormat(Qt.TextFormat.RichText)
         col.addWidget(status)
 
-        lists_label = QLabel("YOUR EXPORTED LISTS")
+        lists_label = QLabel("YOUR DECKLISTS")
         lists_label.setStyleSheet("color: rgba(168,182,204,0.70); font-size: 9px; font-weight: 700; letter-spacing: 1px;")
         col.addWidget(lists_label)
         choices = QListWidget()
@@ -7920,7 +7963,7 @@ class StatsWindow(QWidget):
         row.addStretch()
         cancel = QPushButton("Cancel")
         cancel.setObjectName("secondary")
-        link = QPushButton("Link list")
+        link = QPushButton("Import")
         link.setObjectName("primary")
         for b in (cancel, link):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -7930,9 +7973,8 @@ class StatsWindow(QWidget):
         def set_status(found=None):
             if found:
                 status.setText(f"<span style='color:#66BB6A;font-weight:700'>Decklist found on your clipboard</span>"
-                               f"<br><span style='color:#8A97AA'>{auto_name(found)} · {card_count(found)} cards"
-                               f"</span>")
-                dialog.set_pill_text(f"{auto_name(found)} · {card_count(found)} cards", found=True)
+                               f"<br><span style='color:#8A97AA'>{html.escape(auto_name(found))}</span>")
+                dialog.set_pill_text(auto_name(found), found=True)
             else:
                 status.setText("<span style='color:#6BB6E8'>●</span> Waiting for a list… In Pokémon TCG Live: "
                                "<b>Decks → this deck → Export → Copy to clipboard</b>. It shows up here by itself."
@@ -7953,20 +7995,23 @@ class StatsWindow(QWidget):
         known = {(e.get("text") or "").strip() for e in stored}
         for e in stored:
             stamp = (e.get("captured_at") or "")[5:16].replace("-", "/")
-            add_choice(e.get("text") or "", f"{e['name']}   ·   {e.get('cards', '?')} cards   ·   {stamp}",
+            add_choice(e.get("text") or "", f"{e['name']}   ·   {stamp}",
                        select=e.get("menu_deck") == deck_name and choices.currentItem() is None)
         lists_label.setVisible(bool(stored))
         choices.setVisible(bool(stored))
 
-        def check_clipboard():
+        def check_clipboard(arrived=True):
             text = _list_or_link(QApplication.clipboard().text())
             if not is_ptcgl_decklist(text):
+                return
+            if arrived:
+                accept(text)   # copied while this is open: import it straight away
                 return
             set_status(text)
             dialog.expand()  # back from the pill once the export lands
             if text not in known:
                 known.add(text)
-                add_choice(text, f"{auto_name(text)}   ·   {card_count(text)} cards   ·   from clipboard",
+                add_choice(text, f"{auto_name(text)}   ·   on your clipboard",
                            select=True, top=True)
                 lists_label.setVisible(True)
                 choices.setVisible(True)
@@ -7986,15 +8031,22 @@ class StatsWindow(QWidget):
             manual_btn.setText(("▾ " if show else "▸ ") + "Paste a list or link")
             update_link()
 
-        def accept():
-            text = _list_or_link(edit.toPlainText()) if edit.isVisible() and edit.toPlainText().strip() else (
-                choices.currentItem().data(Qt.ItemDataRole.UserRole) if choices.currentItem() else "")
+        def accept(text=None):
+            if text is None:
+                text = _list_or_link(edit.toPlainText()) if edit.isVisible() and edit.toPlainText().strip() else (
+                    choices.currentItem().data(Qt.ItemDataRole.UserRole) if choices.currentItem() else "")
             if not is_ptcgl_decklist(text):
                 status.setText("<span style='color:#EF9A9A'>That isn't a PTCGL deck export "
                                "(Pokémon: / Trainer: / Energy: sections).</span>")
                 return
-            entry = import_decklist(text, deck_name)
-            link_decklist(deck_name, entry["id"])
+            target = deck_name or (deck_combo.currentData() if deck_combo is not None else "")
+            if target:
+                import_decklist(text, target)
+            else:
+                save_decklist(text, None)
+                button = getattr(self, "_deck_import_btn", None)
+                if button is not None:
+                    self._flash_button(button, "Imported ✓", 2200)
             self._deck_dashboards_dirty = True
             QTimer.singleShot(0, self._refresh_deck_dashboards)
             dialog.close()
@@ -8005,7 +8057,7 @@ class StatsWindow(QWidget):
         set_status()
         clipboard = QApplication.clipboard()
         clipboard.dataChanged.connect(check_clipboard)
-        check_clipboard()
+        check_clipboard(arrived=False)
         choices.currentItemChanged.connect(update_link)
         choices.itemDoubleClicked.connect(lambda *_: accept())
         edit.textChanged.connect(update_link)
@@ -8946,6 +8998,53 @@ class StatsWindow(QWidget):
                 set_deck_archetype(old, "")
         except Exception as exc:
             QMessageBox.warning(self, "Merge decks" if merge else "Rename deck", f"Could not update the deck: {exc}")
+            return
+        self._deck_dashboards_dirty = True
+        self._meta_tab_dirty = True
+        self.load_stats()
+
+    def _delete_deck(self, name):
+        """Delete a deck and its battles (asked first; a copy of the database
+        goes to Backups\ before anything is removed)."""
+        if not name:
+            return
+        try:
+            count = self.db.count_deck_battles(name)
+        except Exception:
+            count = 0
+        games = f"{count} battle{'s' if count != 1 else ''}"
+        answer = QMessageBox.question(
+            self, "Delete deck",
+            f"Delete \"{name}\" and its {games}?\n\nIts games come out of your stats, charts and history. "
+            f"A copy of your data is saved in the Backups folder first.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            import shutil
+            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            folder = os.path.join(BASE_DIR, "Backups", f"pre-delete-deck-{stamp}")
+            os.makedirs(folder, exist_ok=True)
+            shutil.copy2(self.db.db_path, os.path.join(folder, os.path.basename(self.db.db_path)))
+        except Exception as exc:
+            QMessageBox.warning(self, "Delete deck", f"Couldn't back up your data first, so nothing was deleted: {exc}")
+            return
+        try:
+            self.db.delete_deck(name)
+            from decklists import link_decklist
+            link_decklist(name, None)
+            changed = False
+            for flags in (self.pinned_decks, self.starred_decks, self.ignored_decks):
+                if name in flags:
+                    flags.remove(name)
+                    changed = True
+            if changed:
+                self._save_pinned_decks()
+                self._save_deck_flags()
+            if deck_archetypes().get(name):
+                set_deck_archetype(name, "")
+        except Exception as exc:
+            QMessageBox.warning(self, "Delete deck", f"Could not delete the deck: {exc}")
             return
         self._deck_dashboards_dirty = True
         self._meta_tab_dirty = True

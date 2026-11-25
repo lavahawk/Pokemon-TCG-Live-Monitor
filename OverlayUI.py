@@ -1143,7 +1143,7 @@ class MinimalOverlay(QWidget):
             return  # (kept until the HUD is showing)
         text, self._pending_decklist = self._pending_decklist, None
         from deck_popup import NoticeCard
-        from decklists import auto_name, card_count
+        from decklists import auto_name
         import html as _html
 
         def do_import():
@@ -1155,7 +1155,7 @@ class MinimalOverlay(QWidget):
 
         self._decklist_card = NoticeCard(
             "DECKLIST COPIED",
-            f"<b>{_html.escape(auto_name(text))}</b> · {card_count(text)} cards. Import it into your decklists?",
+            f"<b>{_html.escape(auto_name(text))}</b>. Import it into your decklists?",
             primary=("Import", do_import), secondary=("Not now", lambda: None), linger_ms=30000)
         self._decklist_card.show_at(self._stack_anchor(anchor, "_decklist_card"))
 

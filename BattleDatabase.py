@@ -283,6 +283,31 @@ class BattleDatabase:
             self.rebuild_session_stats()
         return moved
 
+    def count_deck_battles(self, name):
+        conn = self._connect()
+        try:
+            return conn.execute("SELECT COUNT(*) FROM battles WHERE my_deck = ?", ((name or "").strip(),)).fetchone()[0]
+        finally:
+            conn.close()
+
+    def delete_deck(self, name):
+        """Delete one of your decks: its battles go; its rank readings stay
+        (your Elo history doesn't change) but no longer name it. Returns the
+        number of battles deleted."""
+        name = (name or "").strip()
+        if not name:
+            return 0
+        conn = self._connect()
+        try:
+            gone = conn.execute("DELETE FROM battles WHERE my_deck = ?", (name,)).rowcount
+            conn.execute("UPDATE rank_history SET deck_name = NULL WHERE deck_name = ?", (name,))
+            conn.commit()
+        finally:
+            conn.close()
+        if gone:
+            self.rebuild_session_stats()
+        return gone
+
     def get_known_deck_names(self):
         conn = self._connect()
         try:

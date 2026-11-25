@@ -251,6 +251,24 @@ def test_rename_and_merge_deck():
     assert db.rename_deck("Dragapult ex", "  ") == 0
 
 
+def test_delete_deck():
+    db = fresh()
+    db.add_battle("Gardevoir ex", "Dragapult ex", "Win")
+    db.add_battle("Gardevoir ex", "Charizard ex", "Loss")
+    db.add_battle("Raging Bolt ex", "Dragapult ex", "Win")
+    db.add_rank_update(1650, "Gardevoir ex")
+    assert db.count_deck_battles("Gardevoir ex") == 2
+    assert db.delete_deck("Gardevoir ex") == 2
+    assert db.get_known_deck_names() == ["Raging Bolt ex"]
+    conn = sqlite3.connect(db.db_path)
+    try:
+        ranks = conn.execute("SELECT rank, deck_name FROM rank_history").fetchall()
+    finally:
+        conn.close()
+    assert ranks == [(1650, None)]          # Elo history kept, no longer names the deck
+    assert db.delete_deck("") == 0 and db.delete_deck("Nope") == 0
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):
