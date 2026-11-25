@@ -199,7 +199,7 @@ class Sheet:
 
 class PetWidget(QWidget):
     def __init__(self, species="pikachu", in_ball=False):
-        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        super().__init__(None, Qt.WindowType.FramelessWindowHint
                          | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)

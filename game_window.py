@@ -32,6 +32,76 @@ GAME_PROCESS_NAMES = {"pokemon tcg live.exe", "pokémon tcg live.exe"}
 _dpi_done = False
 
 
+# ── our windows: above the game, under anything that covers it ──────────
+_user32 = None
+
+
+def _u32():
+    global _user32
+    if _user32 is None:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.WinDLL("user32", use_last_error=True)
+        u.GetWindow.restype = wintypes.HWND
+        u.GetWindow.argtypes = (wintypes.HWND, wintypes.UINT)
+        u.GetWindowLongW.restype = ctypes.c_long
+        u.GetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int)
+        u.GetWindowLongPtrW.restype = ctypes.c_void_p
+        u.GetWindowLongPtrW.argtypes = (wintypes.HWND, ctypes.c_int)
+        u.SetWindowLongPtrW.restype = ctypes.c_void_p
+        u.SetWindowLongPtrW.argtypes = (wintypes.HWND, ctypes.c_int, ctypes.c_void_p)
+        u.SetWindowPos.argtypes = (wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                   ctypes.c_int, wintypes.UINT)
+        u.IsWindowVisible.argtypes = (wintypes.HWND,)
+        _user32 = u
+    return _user32
+
+
+GW_HWNDPREV = 3
+GWL_EXSTYLE = -20
+GWLP_HWNDPARENT = -8
+WS_EX_TOPMOST = 0x8
+HWND_TOP, HWND_NOTOPMOST = 0, -2
+SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE, SWP_NOOWNERZORDER = 0x1, 0x2, 0x10, 0x200
+
+
+def keep_above_game(hwnds, game_hwnd, own=True):
+    """Put our windows (HUD, buddy, cards…) just above the game in the
+    z-order, and below any other window that covers the game - so a browser
+    dragged over the game covers them too, only where it overlaps, like any
+    window, while the game itself never hides them.
+
+    own: also make them owned by the game window (Windows then keeps them
+    above it when the game is clicked, and hides them when it's minimized).
+    Topmost is taken off them. Returns how many were moved."""
+    if os.name != "nt" or not game_hwnd:
+        return 0
+    u = _u32()
+    ours = {int(h) for h in hwnds if h}
+    moved = 0
+    for h in ours:
+        if u.GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST:
+            u.SetWindowPos(h, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        if own and (u.GetWindowLongPtrW(h, GWLP_HWNDPARENT) or 0) != int(game_hwnd):
+            u.SetWindowLongPtrW(h, GWLP_HWNDPARENT, int(game_hwnd))
+    # Walk up from the game: our windows right above it are in place; the
+    # first other window is what ours must stay under.
+    in_place = set()
+    above = u.GetWindow(int(game_hwnd), GW_HWNDPREV)
+    while above and int(above) in ours:
+        in_place.add(int(above))
+        above = u.GetWindow(above, GW_HWNDPREV)
+    # A topmost window (taskbar, other overlays) isn't one to slot under:
+    # then ours just go to the top of the normal windows.
+    after = above if above and not (u.GetWindowLongW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) else HWND_TOP
+    for h in ours - in_place:
+        if not u.IsWindowVisible(h):
+            continue
+        u.SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)
+        moved += 1
+    return moved
+
+
 def ensure_dpi_aware():
     """Make this process per-monitor DPI aware (idempotent, Windows only)."""
     global _dpi_done

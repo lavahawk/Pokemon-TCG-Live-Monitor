@@ -64,7 +64,7 @@ class ContinueBlocker(QWidget):
         # the game is in front, so a focused blocker stalled it until the
         # player clicked the game again.
         self.setWindowFlags(
-            Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+            Qt.FramelessWindowHint | Qt.Tool
             | Qt.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -244,8 +244,8 @@ class ContinueBlocker(QWidget):
                 if not self.isVisible():
                     self.show()
                 win32gui.SetWindowPos(
-                    int(self.winId()), win32con.HWND_TOPMOST,
-                    x, y, w, h, win32con.SWP_NOACTIVATE,
+                    int(self.winId()), 0,
+                    x, y, w, h, win32con.SWP_NOACTIVATE | win32con.SWP_NOZORDER,
                 )
                 self._last_geom = new_geom
                 if not getattr(self, "_ready_signalled", False):
@@ -259,6 +259,13 @@ class ContinueBlocker(QWidget):
                         pass
             except Exception as exc:
                 _dbg(f"SetWindowPos failed: {exc}")
+        try:
+            # Just above the game: it still covers Continue, but a window
+            # dragged over the game isn't blocked by it.
+            from game_window import keep_above_game
+            keep_above_game([int(self.winId())], self._window_cache.hwnd() if hasattr(self, "_window_cache") else None)
+        except Exception:
+            pass
         if not self.isVisible() and not self._closing:
             self.show()
             self._begin_fade_in()  # materialize from thin air

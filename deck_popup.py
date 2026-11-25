@@ -163,7 +163,7 @@ class SuggestionDelegate(QStyledItemDelegate):
 
 class DeckConfirmPopup(QWidget):
     def __init__(self, db, open_settings=None):
-        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        super().__init__(None, Qt.WindowType.FramelessWindowHint
                          | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -804,7 +804,7 @@ class NoticeCard(QWidget):
     of text and up to two actions. Fades by itself unless hovered."""
 
     def __init__(self, title, text, primary=None, secondary=None, linger_ms=14000):
-        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        super().__init__(None, Qt.WindowType.FramelessWindowHint
                          | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -920,7 +920,7 @@ class UpdateCard(QWidget):
     The overlay drives it; callbacks: on_update, on_later, on_skip, on_page."""
 
     def __init__(self, current, release, can_install):
-        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        super().__init__(None, Qt.WindowType.FramelessWindowHint
                          | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)

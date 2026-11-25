@@ -53,7 +53,7 @@ class FadingPopup(QWidget):
     keeps it; leaving restarts a shorter countdown). linger_ms=None = stays."""
 
     def __init__(self, linger_ms=None, opacity=0.92):
-        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        super().__init__(None, Qt.WindowType.FramelessWindowHint
                          | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._linger = linger_ms
@@ -392,7 +392,7 @@ class DeckIconWindow(QWidget):
     def __init__(self, anchor, available, on_click):
         super().__init__()
         self.setWindowTitle("OpponentDeckIcon")
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -511,7 +511,7 @@ class LimitlessChatWindow(QWidget):
         super().__init__()
         from PySide6.QtWidgets import QTextBrowser, QToolButton, QLineEdit
         self.setWindowTitle("LimitlessChat")
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -842,7 +842,7 @@ class ChatPingGlow(QWidget):
     def __init__(self):
         super().__init__()
         from PySide6.QtCore import QVariantAnimation
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -938,6 +938,11 @@ class MinimalOverlay(QWidget):
         self.position_timer.timeout.connect(self.follow_game_window)
         self.position_timer.start(1000)
         _dbg("position_timer started (1000ms)")
+        # Our windows sit just above the game, never always-on-top: another
+        # window over the game covers them like any window.
+        self.zorder_timer = QTimer()
+        self.zorder_timer.timeout.connect(self._keep_above_game)
+        self.zorder_timer.start(250)
         
         # Check if parent monitor is still running every 5 seconds
         self.monitor_timer = QTimer()
@@ -1811,6 +1816,34 @@ class MinimalOverlay(QWidget):
             _dbg(f"find_game_window: re-acquired hwnd={result}")
         return result
     
+    def _keep_above_game(self):
+        """Every window of the HUD (this, the buddy, cards, chat, icons,
+        panels shown over the game): just above the game, under anything else
+        that covers it. The dashboard keeps its own place."""
+        game = getattr(self, "game_hwnd", None)
+        if not game or not self.isVisible():
+            return
+        try:
+            from game_window import keep_above_game
+            ours, unowned = [], []
+            for widget in QApplication.topLevelWidgets():
+                if not widget.isVisible() or widget is self.stats_window:
+                    continue
+                kind = widget.windowType()
+                if kind in (Qt.WindowType.Popup, Qt.WindowType.ToolTip) or widget.isModal():
+                    continue   # menus, tooltips, modal boxes: Qt's own
+                if type(widget).__name__ in ("GlassPanel", "LimitlessPopupWindow"):
+                    unowned.append(int(widget.winId()))   # dashboard panels: may outlive a minimized game
+                else:
+                    ours.append(int(widget.winId()))
+            keep_above_game(ours, game)
+            if unowned:
+                keep_above_game(unowned + ours, game, own=False)
+        except Exception as exc:
+            if not getattr(self, "_zorder_failed", False):
+                self._zorder_failed = True
+                _dbg(f"z-order keeper failed: {exc}")
+
     def follow_game_window(self):
         """Position overlay flush to bottom-right corner of game window"""
         hwnd = self.find_game_window()
@@ -1864,12 +1897,13 @@ class MinimalOverlay(QWidget):
             if self.stats_window and self.stats_window.isVisible():
                 return
             else:
+                # Moved only: the z-order keeper (_keep_above_game) holds it
+                # above the game and under any window that covers the game.
                 win32gui.SetWindowPos(
-                    overlay_hwnd,
-                    win32con.HWND_TOPMOST,
-                    x, y, 0, 0,
-                    win32con.SWP_NOACTIVATE | win32con.SWP_NOSIZE
+                    overlay_hwnd, 0, x, y, 0, 0,
+                    win32con.SWP_NOACTIVATE | win32con.SWP_NOSIZE | win32con.SWP_NOZORDER
                 )
+                self._keep_above_game()
                 # Popups anchored to the mini GUI may only be placed from now on.
                 self._overlay_placed = True
                 if not getattr(self, "_tutorial_checked", False):
@@ -1890,8 +1924,7 @@ class MinimalOverlay(QWidget):
         from app_settings import get_scale
         self._hud_scale = get_scale("hud_scale")  # Settings -> HUD size; read at start
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | 
-            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.Tool
         )
         
