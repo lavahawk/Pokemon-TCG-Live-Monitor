@@ -1,7 +1,12 @@
-# Pokemon TCG Live Monitor v2.15.11
+# Pokemon TCG Live Monitor v2.15.12
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.11-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.12-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.12
+- **Replay cards you can actually read.** The Replay board is laid out like the game again, your opponent on top and you underneath, with no stagger. Each side's Active and Bench now sit in one row, which makes a side about half as tall, so the whole board draws bigger. Pokémon in play are about 1.5x the size they were in 2.15.11 and hand cards a bit bigger, while face-down prizes and the deck are smaller since only their count matters. Your side has a blue outline and a **You** tag, your opponent's a red one.
+- **Hover a card to see it full size.** Point at any card on the board, in a hand or in a discard pile and the full card appears at the edge of the window, big enough to read the attacks and abilities.
+- The board picks between hands beside it (wide windows) and hands above and below it (tall windows), whichever gives bigger cards, and the hands get wider as they fill up. If the replay site changes and the layout stops fitting, the tab still falls back to the site's own layout.
 
 ## What's new in 2.15.11
 - **A much bigger replay board, staggered so you can tell the sides apart.** The Replay tab hides the side panels and staggers the two boards: your opponent's up and to the left with a red outline, yours down and to the right with a blue one and a **You** tag, and the turn and stadium bar between them. Each hand sits in the corner beside its own board. The board resizes with the window to the biggest size that fits. **Side panels** (on the timeline) brings back the replay site's controls, card detail and action log; your choice is kept. If the replay site ever changes and the custom layout stops fitting, the tab falls back to the site's own layout on its own.

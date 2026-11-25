@@ -9321,7 +9321,7 @@ class StatsWindow(QWidget):
             focus = self._replay_board_focus()
             btn.setText("Side panels" if focus else "Full board")
             btn.setToolTip("Show the site's controls, card detail and action log beside the board" if focus
-                           else "Hide the side panels and lay the board out wide, as big as it fits")
+                           else "Hide the side panels and draw the board as big as it fits, with bigger cards")
 
     # ── the timeline ──
     REPLAY_STATE_JS = """(() => {
