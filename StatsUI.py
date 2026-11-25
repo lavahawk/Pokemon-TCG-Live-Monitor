@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QComboBox, QCompleter, QSlider, QCheckBox, QListWidget, QListWidgetItem,
     QButtonGroup, QListView, QSpinBox
 )
-from PySide6.QtCore import Qt, QTimer, QEasingCurve, QThread, Signal, QSize, QObject, QPoint, QEvent, QRectF, QPointF, QRect
-from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QIcon, QCursor, QGuiApplication, QKeySequence, QShortcut, QImage
+from PySide6.QtCore import Qt, QTimer, QEasingCurve, QThread, Signal, QSize, QObject, QPoint, QEvent, QRectF, QPointF, QRect, QElapsedTimer, QVariantAnimation
+from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QIcon, QCursor, QGuiApplication, QKeySequence, QShortcut, QImage, QLinearGradient, QPainterPath
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QSizePolicy, QAbstractItemView
 from BattleDatabase import BattleDatabase
 from weights import cached_expansions, load_weights, save_weights, DEFAULT_WEIGHTS, LABELS as WEIGHT_LABELS
@@ -4878,6 +4878,118 @@ class MenuRichLabel(QLabel):
         super().mouseReleaseEvent(event)
 
 
+class PillLoader(QWidget):
+    """The waiting pill's animation (GlassPanel.open_as_toast(loading=True)):
+    a spinning arc where the dot was and a soft light sweeping along the
+    pill's bottom edge, until done() turns the arc into a green check with a
+    small pop. Click-through: the pill under it keeps its clicks and drag."""
+
+    BLUE = QColor(107, 182, 232)
+    GREEN = QColor(102, 187, 106)
+
+    def __init__(self, pill, spinner_x=12):
+        super().__init__(pill)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.spinner_x = spinner_x
+        self._t = 0.0          # seconds since start (drives spin and sweep)
+        self._done = 0.0       # 0 waiting -> 1 checked
+        self._clock = QElapsedTimer()
+        self._clock.start()
+        self._tick = QTimer(self)
+        self._tick.setInterval(16)
+        self._tick.timeout.connect(self._advance)
+        self._done_anim = QVariantAnimation(self)
+        self._done_anim.setDuration(520)
+        curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        curve.setOvershoot(2.2)
+        self._done_anim.setEasingCurve(curve)
+        self._done_anim.valueChanged.connect(self._set_done)
+
+    def start(self):
+        self._done_anim.stop()
+        self._done = 0.0
+        self._clock.restart()
+        self._tick.start()
+        self.show()
+        self.raise_()
+
+    def stop(self):
+        self._tick.stop()
+        self.hide()
+
+    def done(self):
+        self._done_anim.stop()
+        self._done_anim.setStartValue(0.0)
+        self._done_anim.setEndValue(1.0)
+        self._done_anim.start()
+
+    def _set_done(self, value):
+        self._done = float(value)
+        self.update()
+
+    def _advance(self):
+        self._t = self._clock.elapsed() / 1000.0
+        if self._done >= 1.0 and self._done_anim.state() != QVariantAnimation.State.Running:
+            self._tick.stop()
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        h = self.height()
+        cx, cy, r = self.spinner_x + 6, h / 2, 6.0
+        waiting = max(0.0, 1.0 - self._done)
+        # sweep: a light gliding along the bottom edge (fades out once done)
+        if waiting > 0.01:
+            span = self.width() * 0.32
+            phase = (self._t * 0.55) % 1.0
+            x = -span + (self.width() + span) * (phase * phase * (3 - 2 * phase))
+            grad = QLinearGradient(x, 0, x + span, 0)
+            glow = QColor(self.BLUE)
+            glow.setAlphaF(0.0)
+            grad.setColorAt(0.0, glow)
+            glow.setAlphaF(0.85 * waiting)
+            grad.setColorAt(0.5, glow)
+            glow.setAlphaF(0.0)
+            grad.setColorAt(1.0, glow)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(grad)
+            p.drawRoundedRect(QRectF(14, h - 3.2, self.width() - 28, 1.8), 0.9, 0.9)
+        # spinner: a faint track and an arc that breathes as it turns
+        if waiting > 0.01:
+            track = QColor(self.BLUE)
+            track.setAlphaF(0.18 * waiting)
+            p.setPen(QPen(track, 2.0))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(QPointF(cx, cy), r, r)
+            arc = QColor(self.BLUE)
+            arc.setAlphaF(waiting)
+            pen = QPen(arc, 2.2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            start = -(self._t * 300.0) % 360.0
+            length = 70 + 150 * (0.5 + 0.5 * math.sin(self._t * 3.2))
+            p.drawArc(QRectF(cx - r, cy - r, 2 * r, 2 * r), int(start * 16), int(length * 16))
+        # done: a green disc pops in with a check
+        if self._done > 0.01:
+            scale = self._done
+            disc = QColor(self.GREEN)
+            disc.setAlphaF(min(1.0, self._done))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(disc)
+            p.drawEllipse(QPointF(cx, cy), 7.2 * scale, 7.2 * scale)
+            check = QPen(QColor(16, 22, 30), 2.0)
+            check.setCapStyle(Qt.PenCapStyle.RoundCap)
+            check.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            p.setPen(check)
+            path = QPainterPath()
+            path.moveTo(cx - 3.2 * scale, cy + 0.2 * scale)
+            path.lineTo(cx - 0.9 * scale, cy + 2.5 * scale)
+            path.lineTo(cx + 3.4 * scale, cy - 2.6 * scale)
+            p.drawPath(path)
+        p.end()
+
+
 class GlassPanel(QWidget):
     """A tool window that looks and behaves like the dashboard: the same glass
     surface, stylesheet and opacity slider, frameless, always on top, dragged
@@ -5000,10 +5112,14 @@ class GlassPanel(QWidget):
         self.raise_()
         self.activateWindow()
 
-    def open_as_toast(self, text):
+    def open_as_toast(self, text, loading=False):
         """Start as the pill in the screen's bottom-right corner, without
-        taking focus from the game; click it to open the panel."""
+        taking focus from the game; click it to open the panel. loading: an
+        animated wait (PillLoader and cycling dots) instead of the blinking
+        dot, until set_pill_text(..., found=True)."""
         self.open_panel_geometry()
+        if loading:
+            self._start_loading()
         self.set_pill_text(text)
         self.collapse()
         area = self._screen_area()
@@ -5026,20 +5142,62 @@ class GlassPanel(QWidget):
     def on_close(self, callback):
         self._closing_callbacks.append(callback)
 
+    def _start_loading(self):
+        loader = getattr(self, "_loader", None)
+        if loader is None:
+            self._loader = loader = PillLoader(self.pill)
+            self._dots = QTimer(self)
+            self._dots.setInterval(420)
+            self._dots.timeout.connect(self._step_dots)
+        self._dot_phase = 0
+        self.pill_dot.setText("")
+        self.pill_dot.setFixedWidth(14)   # the spinner sits here
+        loader.setGeometry(self.pill.rect())
+        loader.start()
+        self._dots.start()
+
+    def _step_dots(self):
+        self._dot_phase = (getattr(self, "_dot_phase", 0) + 1) % 4
+        self._render_pill_text()
+
+    def _render_pill_text(self):
+        """The text, and while loading three dots that fill in one by one (the
+        empty ones stay as space, so the pill never changes width)."""
+        text = getattr(self, "_pill_plain", self.pill_label.text())
+        dots = getattr(self, "_dots", None)
+        if dots is None or not dots.isActive():
+            self.pill_label.setTextFormat(Qt.TextFormat.PlainText)
+            self.pill_label.setText(text)
+            return
+        lit = self._dot_phase
+        marks = "".join(f"<span style='color:rgba(236,242,252,{0.92 if i < lit else 0.0})'>.</span>"
+                        for i in range(3))
+        self.pill_label.setTextFormat(Qt.TextFormat.RichText)
+        self.pill_label.setText(html.escape(text) + marks)
+
     def set_pill_text(self, text, found=False):
-        self.pill_label.setText(text)
+        self._pill_plain = text
+        loader = getattr(self, "_loader", None)
+        if found and loader is not None and self._dots.isActive():
+            self._dots.stop()
+            loader.done()
+        self._render_pill_text()
         self._pill_found = bool(found)
-        self._pulse_dot(force_on=True)
+        if loader is None or not loader.isVisible():
+            self._pulse_dot(force_on=True)
         if self._collapsed:
             right = self.geometry().right()
             width = self._pill_width()
             self.setMinimumSize(width, self.PILL_H)
             self.setGeometry(right - width + 1, self.y(), width, self.PILL_H)
             self.pill.setGeometry(0, 0, width, self.PILL_H)
+            if getattr(self, "_loader", None) is not None:
+                self._loader.setGeometry(self.pill.rect())
 
     def _pill_width(self):
         # Fit the text (it was a fixed 280 px and long texts were cut off).
-        text_w = self.pill_label.fontMetrics().horizontalAdvance(self.pill_label.text())
+        plain = getattr(self, "_pill_plain", None) or self.pill_label.text()
+        text_w = self.pill_label.fontMetrics().horizontalAdvance(plain + "...")
         return max(280, min(560, text_w + 110))
 
     # ── collapse to a pill ──
@@ -5055,6 +5213,8 @@ class GlassPanel(QWidget):
         self.setMinimumSize(width, self.PILL_H)
         self.setGeometry(self._full_geometry.right() - width + 1, self._full_geometry.top(), width, self.PILL_H)
         self.pill.setGeometry(0, 0, width, self.PILL_H)
+        if getattr(self, "_loader", None) is not None:
+            self._loader.setGeometry(self.pill.rect())
         self._pulse.start()
 
     def expand(self):
@@ -5081,6 +5241,8 @@ class GlassPanel(QWidget):
 
     def _pulse_dot(self, force_on=False):
         """Waiting: a slow blue blink. Found: steady green."""
+        if getattr(self, "_loader", None) is not None and self._loader.isVisible():
+            return  # the loader draws the state
         found = getattr(self, "_pill_found", False)
         self._pulse_on = True if (force_on or found) else not self._pulse_on
         color = QColor("#66BB6A" if found else "#6BB6E8")
@@ -8124,7 +8286,14 @@ class StatsWindow(QWidget):
                 pass
             link.clicked.connect(dialog.close)
             stop_watching()
-            dialog.expand()
+
+            def open_up():
+                try:
+                    dialog.expand()
+                except RuntimeError:
+                    pass  # closed meanwhile
+            # Let the pill's check pop land before the panel opens.
+            QTimer.singleShot(750 if dialog._collapsed else 0, open_up)
 
         def stop_watching():
             try:
@@ -8135,7 +8304,8 @@ class StatsWindow(QWidget):
         set_status()
         clipboard = QApplication.clipboard()
         clipboard.dataChanged.connect(check_clipboard)
-        check_clipboard(arrived=False)
+        if not update:
+            check_clipboard(arrived=False)   # (an update waits for a new export)
         choices.currentItemChanged.connect(update_link)
         choices.itemDoubleClicked.connect(lambda *_: accept())
         edit.textChanged.connect(update_link)
@@ -8152,6 +8322,18 @@ class StatsWindow(QWidget):
         # "Import this decklist?" card stays quiet).
         self._decklist_dialog_open = True
         dialog.on_close(lambda: setattr(self, "_decklist_dialog_open", False))
+        if update:
+            # Always the waiting pill: the dashboard steps aside, you change the
+            # deck in the game and export it; the panel opens with what changed.
+            dialog.open_as_toast("Awaiting decklist update", loading=True)
+            dialog.pill.setToolTip(infotip.tip(
+                f"Waiting for {deck_name}'s new list",
+                "In Pokémon TCG Live: Decks → this deck → Export → Copy to clipboard. "
+                "Click this to paste a list instead."))
+            self._decklist_hid_dashboard = self.isVisible()
+            if self._decklist_hid_dashboard:
+                self.minimize_to_overlay()
+            return
         if is_ptcgl_decklist((clipboard.text() or "").strip()):
             dialog.open_panel()
             return

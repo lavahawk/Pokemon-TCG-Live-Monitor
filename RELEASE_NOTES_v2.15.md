@@ -11,7 +11,7 @@ Run **`PokemonTCGLiveMonitor-2.15.16-Free-Setup.exe`**. Install over any 2.x ver
 - **Deleting a deck** is now at the end of the deck's **Decklist ▾** menu (or right-click its tab; a deck without a list has it under the ▾ of its Import decklist button). A warning says what goes with it, and Delete only turns on once you type the deck's name. The separate ⋯ button is gone.
 - **Imported decks look like the rest of the Decks tab:** the same snapshot with icons, buttons and a Share link, and the list laid out by Pokémon, Trainer and Energy instead of raw text.
 - **A shorter Decklist menu:** View cards, Copy list, Print, Card suggestions and Compare with the meta up front; TCGplayer and the TrainerHill tools under More tools.
-- **Update list.** Changed a deck? **Decklist ▾ → Update list**, export it again in the game, and the app shows what changed (+2 Iono, −1 Ultra Ball). Your games stay with the deck; the old list stays in your saved decklists.
+- **Update list.** Changed a deck? **Decklist ▾ → Update list**: the dashboard steps aside to an animated **Awaiting decklist update…** pill in the corner while you open the deck in the game and export it. When the new list lands the pill checks off and the app shows what changed (+2 Iono, −1 Ultra Ball). Your games stay with the deck; the old list stays in your saved decklists.
 - **A list you already have never asks to be imported.** Copying one of your saved lists again (in any order, or with other prints of the same cards) no longer brings up the import card or the import box.
 
 ## What's new in 2.15.15
