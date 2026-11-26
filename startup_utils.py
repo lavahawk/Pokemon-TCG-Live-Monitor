@@ -13,6 +13,9 @@ from pathlib import Path
 TASK_NAME = "PokemonTCGLiveMonitor_v2.4"
 REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 REG_VALUE = "PokemonTCGLiveMonitor"
+# Task Manager's Startup tab switches Run entries off here without removing
+# them: first byte 2 (or 6) = on, 3 (or 7) = off; no value = on.
+APPROVED_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
 # Old scheduled tasks that should be cleaned up automatically. The registry
 # Run key is the primary startup method; scheduled tasks are only a backup.
 LEGACY_TASK_NAMES = (
@@ -150,6 +153,29 @@ def is_registry_registered() -> bool:
         return False
 
 
+def startup_switched_off() -> bool:
+    """Switched off in Task Manager's Startup tab (the Run entry is kept)."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_KEY) as key:
+            data = winreg.QueryValueEx(key, REG_VALUE)[0]
+    except OSError:
+        return False
+    return isinstance(data, (bytes, bytearray)) and len(data) > 0 and data[0] % 2 == 1
+
+
+def auto_start_on() -> bool:
+    """Windows will start the app at sign-in: the entry is there and on."""
+    return is_registry_registered() and not startup_switched_off()
+
+
+def _clear_switched_off() -> None:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, REG_VALUE)
+    except OSError:
+        pass
+
+
 def add_registry(root: str | os.PathLike[str]) -> tuple[bool, str | None]:
     python, script, command = build_headless_command(root)
     if not python:
@@ -160,6 +186,8 @@ def add_registry(root: str | os.PathLike[str]) -> tuple[bool, str | None]:
     try:
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_KEY) as key:
             winreg.SetValueEx(key, REG_VALUE, 0, winreg.REG_SZ, command)
+        # Turning it on in the app also undoes a switch-off in Task Manager.
+        _clear_switched_off()
         return True, None
     except Exception as exc:
         return False, str(exc)
@@ -443,7 +471,7 @@ def ensure_watchdog(root: str | os.PathLike[str]) -> str:
     python, script, _ = build_headless_command(root)
     if not python:
         return "skipped"
-    if not is_registry_registered():
+    if not auto_start_on():   # off in the app, or switched off in Task Manager
         return "removed" if remove_watchdog() else "skipped"
     if not startup_is_ours(root):
         return "skipped"

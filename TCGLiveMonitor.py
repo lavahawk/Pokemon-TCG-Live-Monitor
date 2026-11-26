@@ -184,7 +184,7 @@ def closed_from_task_manager(alive_text):
     return bool(info and info[0] == "alive" and info[3] and not _pid_is_monitor(info[1]))
 
 
-def last_run_report(alive_text, crash_grew, now):
+def last_run_report(alive_text, crash_grew, now, closed_by_user=False, booted_at=None):
     """One log line on how the previous run ended, or None if it exited
     normally (or there was none). alive_text: the old heartbeat file."""
     info = parse_alive(alive_text)
@@ -196,6 +196,10 @@ def last_run_report(alive_text, crash_grew, now):
     if crash_grew:
         return (f"The last run (pid {pid}) crashed around {when}; "
                 f"details in Logs/monitor_crash.log.")
+    if closed_by_user:
+        return f"The last run (pid {pid}) was closed from the dashboard around {when}."
+    if booted_at and seen < booted_at:
+        return f"The last run (pid {pid}) ended when Windows restarted (last seen {when})."
     if task_manager:
         return f"The last run (pid {pid}) was ended from Task Manager around {when}."
     return (f"The last run (pid {pid}) was ended from outside the app around {when} "
@@ -225,7 +229,18 @@ def start_death_watch():
             crash_size_before = int(fh.read().strip() or 0)
     except (OSError, ValueError):
         crash_size_before = crash_size_at_start
-    report = last_run_report(previous, crash_size_at_start > crash_size_before, time.time())
+    try:
+        import startup_utils
+        closed_by_user = startup_utils.stopped_on_purpose(BASE_DIR)
+    except Exception:
+        closed_by_user = False
+    try:
+        import psutil
+        booted_at = psutil.boot_time()
+    except Exception:
+        booted_at = None
+    report = last_run_report(previous, crash_size_at_start > crash_size_before, time.time(),
+                             closed_by_user=closed_by_user, booted_at=booted_at)
     if report:
         log(report)
     write_text(marker_file, crash_size_at_start)
@@ -1051,8 +1066,8 @@ def main():
         import startup_utils
         if startup_utils.stopped_on_purpose(BASE_DIR):
             return 0
-        if not startup_utils.is_registry_registered():
-            startup_utils.remove_watchdog()   # auto-start was turned off
+        if not startup_utils.auto_start_on():
+            startup_utils.remove_watchdog()   # auto-start was turned off (in the app or Task Manager)
             return 0
 
     setup_output()

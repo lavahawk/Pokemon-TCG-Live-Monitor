@@ -60,6 +60,30 @@ class EnsureWatchdog(unittest.TestCase):
         self.assertEqual(self.run_ensure(True, True, 'py  "MON.py" --headless --watchdog'), ("ok", []))
 
 
+class TaskManagerStartupSwitch(unittest.TestCase):
+    def switched_off(self, data):
+        key = mock.MagicMock()
+        key.__enter__.return_value = key
+        with mock.patch.object(S.winreg, "OpenKey", return_value=key), \
+                mock.patch.object(S.winreg, "QueryValueEx",
+                                  side_effect=FileNotFoundError if data is None else (lambda k, v: (data, 3))):
+            return S.startup_switched_off()
+
+    def test_switch_states(self):
+        self.assertFalse(self.switched_off(None))                    # never touched: on
+        self.assertFalse(self.switched_off(b"\x02" + b"\x00" * 11))  # on
+        self.assertTrue(self.switched_off(b"\x03" + b"\x00" * 11))   # off in Task Manager
+        self.assertTrue(self.switched_off(b"\x07" + b"\x00" * 11))   # off (another flag set)
+
+    def test_switched_off_removes_the_watchdog(self):
+        with mock.patch.object(S, "build_headless_command", return_value=("py", "mon.py", "x")), \
+                mock.patch.object(S, "is_registry_registered", return_value=True), \
+                mock.patch.object(S, "startup_switched_off", return_value=True), \
+                mock.patch.object(S, "remove_watchdog", return_value=True), \
+                mock.patch.object(S.os, "name", "nt"):
+            self.assertEqual(S.ensure_watchdog("root"), "removed")
+
+
 class StoppedMarker(unittest.TestCase):
     def test_closed_since_sign_in(self):
         with tempfile.TemporaryDirectory() as root:
@@ -100,6 +124,13 @@ class LastRunReport(unittest.TestCase):
         with mock.patch.object(T, "_pid_is_monitor", return_value=True):
             self.assertFalse(T.closed_from_task_manager("alive 42 400 1"))   # still running
         self.assertIn("from Task Manager", self.report("alive 42 400 1", False, 1000))
+
+    def test_closed_from_the_dashboard(self):
+        self.assertIn("from the dashboard", self.report("alive 42 400", False, 1000, closed_by_user=True))
+
+    def test_windows_restarted(self):
+        self.assertIn("Windows restarted", self.report("alive 42 400", False, 1000, booted_at=500))
+        self.assertIn("from outside", self.report("alive 42 600", False, 1000, booted_at=500))
 
     def test_crashed(self):
         self.assertIn("crashed", self.report("alive 42 400", True, 1000))
