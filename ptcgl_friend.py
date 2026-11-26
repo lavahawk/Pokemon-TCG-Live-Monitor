@@ -36,6 +36,10 @@ FRIEND_PANEL = ("L", 0.65, 0.08, 0.5)
 # time. Measured at 1920x1080 (the panel scales with the window height).
 NAME_BOX_H = (0.175, 0.085, 0.45, 0.138)
 SEND_BOX_H = (0.205, 0.26, 0.415, 0.315)
+# The back arrow left of the name box (x, y), in window heights: after the
+# request is sent it closes the add-friend box, back to the friends list.
+BACK_ARROW_H = (0.040, 0.1115)
+SENT_WAIT_S = 2.0       # SEND greys out once the game has sent the request
 
 BLOCK_MAX_S = 25        # the input lock always lets go after this long
 ASK_TIMEOUT_S = 60      # no answer to the popup = "Not now"
@@ -528,4 +532,37 @@ class FriendAdder(PTCGLImporter):
             raise ImportStopped(f"Typed {self.friend} but the SEND button never lit up")
         self._progress("Sending the request", 0.9)
         self._click(screen, send)
+        self._back_out()
         return True, f"Sent a friend request to {self.friend} in Pokémon TCG Live."
+
+    def _back_out(self):
+        """Close the add-friend box with its back arrow once the request has
+        gone, so the game isn't left on it in the middle of a tournament.
+        The request is already sent: nothing here can fail the add."""
+        try:
+            deadline = time.time() + SENT_WAIT_S
+            while time.time() < deadline:
+                _, still_red = self._wait_send_enabled(0)
+                if not still_red:
+                    break
+                time.sleep(0.1)
+            self._progress("Closing the friend box", 0.95)
+            screen = self._screen()
+            h = screen.size[1]
+            self._click(screen, (BACK_ARROW_H[0] * h, BACK_ARROW_H[1] * h))
+            if not self._name_box_gone(1.5):
+                # No Esc fallback: on the game's menus Esc opens Settings.
+                self._say("Sent the request; couldn't close the friend box (press the back arrow).")
+        except Exception:
+            pass
+
+    def _name_box_gone(self, timeout):
+        deadline = time.time() + timeout
+        while True:
+            text, _ = self._band_text(self._screen(), NAME_BOX_H)
+            norm = re.sub(r"[^A-Z]", "", text.upper())
+            if "SCREENNAME" not in norm and "ENTERSCREEN" not in norm:
+                return True
+            if time.time() > deadline:
+                return False
+            time.sleep(0.2)
