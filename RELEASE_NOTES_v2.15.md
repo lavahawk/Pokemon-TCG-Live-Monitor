@@ -1,7 +1,14 @@
-# Pokemon TCG Live Monitor v2.15.17
+# Pokemon TCG Live Monitor v2.15.18
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.17-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.18-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.18
+- **The app restarts itself if it stops.** A background check every 5 minutes starts it again if it was closed by another program or crashed. If you close it yourself (from Settings, or from Task Manager), it stays closed until you open it again or next sign in. Turning auto-start off, in the app or in Task Manager's Startup tab, turns this off too.
+- **Your deck name is read from the main menu again.** At some window sizes the box around it caught the edges of the Decks panel and nothing was read.
+- **Rank and deck are read even when another window covers the game.** The app reads the game window itself instead of the screen.
+- **Two copies of the app can't run at once** (you'd see two buddies).
+- The log tells you how the last run ended (closed, crashed or ended by another program), and a false BATTLE LOG match is no longer logged several times a second.
 
 ## What's new in 2.15.17
 - **The HUD behaves like a normal window.** The HUD, your buddy, the pop-up cards and the chat stay above Pokémon TCG Live, but any other window you put over the game covers them, only where it overlaps.
