@@ -41,6 +41,14 @@ def test_real_capture_at_each_size():
         assert text == "Gengar Testing", (window_h, text, conf)
 
 
+def test_box_reaching_past_the_panel():
+    """25 Nov 2026 at 1920x1080: the padded box takes in the panel's red
+    edges and the rim above the name; every menu read came back empty."""
+    img = Image.open(os.path.join(FIX, "deck_name_drill_3_panel_edges.png")).convert("RGB")
+    text, conf = R.read_deck_name_image(img)
+    assert text == "Drill 3", (text, conf)
+
+
 def test_other_screen_is_not_a_deck_name():
     text, conf = R.read_deck_name_image(Image.open(OTHER).convert("RGB"))
     assert text is None, (text, conf)

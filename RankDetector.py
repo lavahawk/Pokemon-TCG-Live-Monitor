@@ -536,10 +536,66 @@ DECK_TEXT_PX = 34   # text height Tesseract reads best
 DECK_MIN_CONF = 60
 
 
+def _side_blobs(binary):
+    """Mask of the dark (0) shapes in a black-on-white image that touch its
+    left or right edge, grown a little to take their anti-aliased rims."""
+    count, labels, stats, _ = cv2.connectedComponentsWithStats((binary == 0).astype(np.uint8), connectivity=8)
+    w = binary.shape[1]
+    mask = np.zeros(binary.shape, dtype=bool)
+    for i in range(1, count):
+        x, _, bw, _, _ = stats[i]
+        if x == 0 or x + bw >= w:
+            mask |= labels == i
+    if mask.any():
+        mask = cv2.dilate(mask.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    return mask
+
+
 def _deck_name_variants(gray):
     h = gray.shape[0]
-    # The text is about 55 % of the padded box's height.
+    # First guess: the text is about 55 % of the padded box's height. Then
+    # measure it (the box's share of the panel differs by layout: on 25 Nov
+    # 2026 the name was ~35 %, read too small to be trusted) and scale again.
     scale = max(1.5, min(10.0, DECK_TEXT_PX / max(1.0, 0.55 * h)))
+    measured = _text_rows(gray, scale)
+    if measured:
+        better = max(1.5, min(10.0, DECK_TEXT_PX / max(1.0, measured / scale)))
+        if abs(better - scale) / scale > 0.15:
+            scale = better
+    yield from _variants_at(gray, scale)
+    # Thin text often reads better a little larger: a second set of votes.
+    yield from _variants_at(gray, min(10.0, scale * 1.3))
+
+
+def _text_rows(gray, scale):
+    """Height (scaled px) of the dark text in the middle of the box, or None."""
+    fixed = list(_variants_at(gray, scale))[1][14:-14, 14:-14]   # the fixed-margin variant, border off
+    w = fixed.shape[1]
+    centre = fixed[:, w // 3: w - w // 3]     # the name is centred; the panel's rim isn't there
+    count, labels, stats, _ = cv2.connectedComponentsWithStats((centre == 0).astype(np.uint8), connectivity=8)
+    keep = np.zeros(centre.shape, dtype=bool)
+    for i in range(1, count):   # glyph-sized shapes only: not specks, not bars spanning the box
+        _, _, bw, bh, area = stats[i]
+        if area >= 6 and bh < 0.9 * centre.shape[0] and bw < 0.6 * centre.shape[1]:
+            keep |= labels == i
+    dark = keep.sum(axis=1)
+    rows = np.nonzero(dark >= 2)[0]
+    if len(rows) < 4:
+        return None
+    # The name is one band of rows; the panel's rim above it is another,
+    # split from it by empty rows. Take the band with the most ink.
+    bands, start = [], rows[0]
+    for a, b in zip(rows, rows[1:]):
+        if b - a > 2:
+            bands.append((start, a))
+            start = b
+    bands.append((start, rows[-1]))
+    top, bottom = max(bands, key=lambda band: dark[band[0]:band[1] + 1].sum())
+    height = int(bottom - top + 1)
+    return height if height >= 4 else None
+
+
+def _variants_at(gray, scale):
     big = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     if np.median(big) < 128:          # light text on a dark panel: flip it
         big = 255 - big
@@ -548,6 +604,13 @@ def _deck_name_variants(gray):
     # Text darker than the panel by a margin: the dots never are.
     panel = float(np.percentile(soft, 75))
     fixed = np.where(soft < panel - 45, 0, 255).astype(np.uint8)
+    # The padded box reaches past the panel: its red edges and the dark
+    # background beside it turn into big black blocks at the sides, and
+    # Tesseract then reads the line as junk (25 Nov 2026: "Drill 3" missed on
+    # every menu). Dark shapes touching the left or right side are never the
+    # centred name: paint them out.
+    edges = _side_blobs(otsu) | _side_blobs(fixed)
+    otsu, fixed, soft = (np.where(edges, 255, img).astype(np.uint8) for img in (otsu, fixed, soft))
     for img in (otsu, fixed, soft):
         yield cv2.copyMakeBorder(img, 14, 14, 14, 14, cv2.BORDER_CONSTANT, value=255)
 
@@ -630,19 +693,28 @@ def read_deck_name_image(image):
         gray = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2GRAY)
     except Exception:
         return None, -1.0
-    best = ("", -1.0)
+    # Every pass votes for what it read, weighted by its confidence: thin
+    # text can give one confident misread ("Dritt" 78) next to several
+    # agreeing right reads ("Drill 3" 65, 86, 88), and the agreement wins.
+    votes, best_conf = {}, {}
     for variant in _deck_name_variants(gray):
         try:
             text, conf = _read_line(variant)
         except Exception:
             continue
-        if _looks_like_name(text) and conf > best[1]:
-            best = (text, conf)
-        if best[1] >= 88:   # confident: the other variants won't do better
-            break
-    if best[1] < DECK_MIN_CONF:
-        return None, best[1]
-    return (best[0] or None), best[1]
+        if not _looks_like_name(text):
+            continue
+        if conf >= 88 and not votes:   # the first pass is sure: the others won't do better
+            return text, conf
+        votes[text] = votes.get(text, 0.0) + max(conf, 0.0)
+        best_conf[text] = max(best_conf.get(text, -1.0), conf)
+    if not votes:
+        return None, -1.0
+    text = max(votes, key=votes.get)
+    conf = best_conf[text]
+    if conf < DECK_MIN_CONF:
+        return None, conf
+    return text, conf
 
 
 def read_rank_confirmed(detector, last_accepted=None, reads=2, delay=1.0, big_jump=100, debug=False):
