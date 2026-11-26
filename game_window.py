@@ -239,6 +239,59 @@ def game_rect(hwnd=None):
     return rect
 
 
+PW_RENDERFULLCONTENT = 0x2
+_window_shot = {"hwnd": None, "at": 0.0, "image": None, "rect": None}
+WINDOW_SHOT_REUSE_S = 0.25   # one capture serves the several reads of one check
+
+
+def capture_window(hwnd):
+    """The game window's own pixels, even when other windows cover it, as
+    (PIL image, its GetWindowRect dict) - or (None, None) if Windows can't
+    give them (minimized, or the capture came back blank). Our HUD isn't in
+    it, so it never confuses the OCR either. A capture is reused for
+    WINDOW_SHOT_REUSE_S."""
+    if not WIN32_AVAILABLE or not hwnd:
+        return None, None
+    import time
+    now = time.time()
+    shot = _window_shot
+    if shot["hwnd"] == hwnd and now - shot["at"] < WINDOW_SHOT_REUSE_S and shot["image"] is not None:
+        return shot["image"], shot["rect"]
+    try:
+        import ctypes
+        import win32ui
+        from PIL import Image
+        if not win32gui.IsWindow(hwnd) or win32gui.IsIconic(hwnd):
+            return None, None
+        rect = _window_rect(hwnd)
+        w, h = rect["width"], rect["height"]
+        if w <= 0 or h <= 0:
+            return None, None
+        hdc = win32gui.GetWindowDC(hwnd)
+        src = win32ui.CreateDCFromHandle(hdc)
+        mem = src.CreateCompatibleDC()
+        bmp = win32ui.CreateBitmap()
+        try:
+            bmp.CreateCompatibleBitmap(src, w, h)
+            mem.SelectObject(bmp)
+            if not ctypes.windll.user32.PrintWindow(hwnd, mem.GetSafeHdc(), PW_RENDERFULLCONTENT):
+                return None, None
+            info = bmp.GetInfo()
+            image = Image.frombuffer("RGB", (info["bmWidth"], info["bmHeight"]), bmp.GetBitmapBits(True),
+                                     "raw", "BGRX", 0, 1)
+        finally:
+            win32gui.DeleteObject(bmp.GetHandle())
+            mem.DeleteDC()
+            src.DeleteDC()
+            win32gui.ReleaseDC(hwnd, hdc)
+        if image.size != (w, h) or image.convert("L").getextrema()[1] < 16:
+            return None, None   # blank: the game didn't draw into it
+        shot.update(hwnd=hwnd, at=now, image=image, rect=rect)
+        return image, rect
+    except Exception:
+        return None, None
+
+
 def is_foreground(hwnd):
     """True if hwnd (or a window it owns) is the foreground window."""
     if not WIN32_AVAILABLE or not hwnd:

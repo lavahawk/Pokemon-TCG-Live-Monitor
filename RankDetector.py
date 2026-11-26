@@ -179,6 +179,25 @@ class RankDetector:
         try:
             import ocr_debug
             ocr_debug.report(region_name, monitor)
+        except Exception:
+            pass
+        # The game window's own pixels first: they're right even when another
+        # window covers the game (25 Nov 2026: Explorer over the menu after a
+        # battle lost its rank). The screen is the fallback.
+        window = self.game_window
+        if window and window.get("hwnd"):
+            try:
+                from game_window import capture_window
+                shot, rect = capture_window(window["hwnd"])
+                if shot is not None:
+                    x = monitor["left"] - rect["left"]
+                    y = monitor["top"] - rect["top"]
+                    if x >= 0 and y >= 0 and x + monitor["width"] <= shot.width \
+                            and y + monitor["height"] <= shot.height:
+                        return shot.crop((x, y, x + monitor["width"], y + monitor["height"]))
+            except Exception:
+                pass
+        try:
             with mss.mss() as sct:
                 screenshot = sct.grab(monitor)
             img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
