@@ -96,6 +96,7 @@ try:
                     and not (host == self.allowed_suffix or host.endswith("." + self.allowed_suffix))):
                 link = url.toString()
                 if _is_safe_web_url(link):
+                    _allow_browser_to_front()
                     webbrowser.open(link)
                 return False
             return super().acceptNavigationRequest(url, nav_type, is_main_frame)
@@ -163,6 +164,7 @@ try:
             if is_main_frame and url.scheme() in ("http", "https") and not _limitless_host(url):
                 link = url.toString()
                 if _is_safe_web_url(link):
+                    _allow_browser_to_front()
                     webbrowser.open(link)
                 if not self._decided:
                     self._decided = True
@@ -663,7 +665,10 @@ class MatchReadyToast(QWidget):
     HOLD_MS = 9000
 
     def __init__(self):
-        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        # Not always-on-top: the HUD's z-order keeper puts it over the game
+        # (or the dashboard). Forcing topmost here fought the keeper and the
+        # card flashed (25 Nov 2026).
+        super().__init__(None, Qt.WindowType.FramelessWindowHint
                          | Qt.WindowType.Tool | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -688,9 +693,6 @@ class MatchReadyToast(QWidget):
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.fade_out)
-        self._front_timer = QTimer(self)
-        self._front_timer.setInterval(500)   # the HUD re-asserts topmost every second
-        self._front_timer.timeout.connect(self._to_front)
         self._anim = None
         # Check-in: the card flashes yellow a few times, then stays yellow-edged.
         self._flash_left = 0
@@ -732,8 +734,7 @@ class MatchReadyToast(QWidget):
         elif self.windowOpacity() < 1.0:
             self._fade(self.windowOpacity(), 1.0, 150)
         self.update()
-        self._to_front()
-        self._front_timer.start()
+        self.raise_()
         self._hide_timer.start(self.HOLD_MS)
 
     def _place(self):
@@ -756,15 +757,6 @@ class MatchReadyToast(QWidget):
             area = screen.availableGeometry()
             self.move(area.center().x() - self.width() // 2, area.top() + 40)
 
-    def _to_front(self):
-        try:
-            import win32con
-            import win32gui
-            win32gui.SetWindowPos(int(self.winId()), win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
-        except Exception:
-            pass
-
     def _fade(self, start, end, ms, then=None):
         from PySide6.QtCore import QPropertyAnimation
         if self._anim is not None:
@@ -783,7 +775,6 @@ class MatchReadyToast(QWidget):
 
     def _gone(self):
         if self.windowOpacity() <= 0.01:
-            self._front_timer.stop()
             self.hide()
 
     def mousePressEvent(self, event):
@@ -812,19 +803,17 @@ class MatchReadyToast(QWidget):
 
 
 class LimitlessCheckInAlert(QWidget):
-    """Small topmost alert banner for Limitless tournament check-ins."""
+    """Small alert banner for Limitless tournament check-ins. Placed over the
+    game (or the dashboard) by the HUD's z-order keeper, not always-on-top."""
 
     check_in_requested = Signal()
     dismissed = Signal()
 
     def __init__(self):
         super().__init__(None)
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | 
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
-        )
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFixedWidth(360)
 
         outer = QVBoxLayout(self)
@@ -931,8 +920,7 @@ class LimitlessCheckInAlert(QWidget):
         self.body_label.setText(text)
         self.adjustSize()
         self.show()
-        self.raise_()
-        self.activateWindow()
+        self.raise_()   # no activateWindow: the game keeps the keyboard
 
     def position_near_overlay(self, overlay):
         try:
@@ -1449,8 +1437,16 @@ class LimitlessDashboardManager(QObject):
             QTimer.singleShot(0, page.deleteLater)
             return
         owner = getattr(self.get_overlay(), "stats_window", None)
+        if owner is None and self.visible_view is not None:
+            owner = self.visible_view.window()
         window = LimitlessPopupWindow(owner, page)
-        window.open_panel()
+        # Shown once the click that opened it is done: shown from inside the
+        # page's navigation, the dashboard took the focus back and the new
+        # window ended up behind it (25 Nov 2026).
+        self._popups = [w for w in getattr(self, "_popups", []) if w.isVisible()] + [window]
+        QTimer.singleShot(0, window.open_panel)
+        for delay in (60, 300):
+            QTimer.singleShot(delay, lambda w=window: _bring_to_front(w))
         _limitless_log(f"Opened {page.requestedUrl().toString() or 'a Limitless page'} in a window.")
 
     def _on_download(self, item):
@@ -5399,6 +5395,47 @@ def deck_section_totals(text):
                 current[1] += int(m.group(1))
             blocks.append(line)
     return "\n".join(f"{b[0]} {b[1]}" if isinstance(b, list) else b for b in blocks)
+
+
+def _bring_to_front(widget):
+    """Raise a window of ours and give it the focus, even when Windows'
+    focus rules would leave it behind (it only flashes on the taskbar)."""
+    try:
+        if widget is None or not widget.isVisible():
+            return
+        if widget.isMinimized():
+            widget.showNormal()
+        widget.raise_()
+        widget.activateWindow()
+        if os.name != "nt":
+            return
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = int(widget.winId())
+        if user32.GetForegroundWindow() == hwnd:
+            return
+        fg_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
+        own_thread = ctypes.windll.kernel32.GetCurrentThreadId()
+        attached = fg_thread and fg_thread != own_thread and user32.AttachThreadInput(own_thread, fg_thread, True)
+        try:
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(own_thread, fg_thread, False)
+    except Exception:
+        pass
+
+
+def _allow_browser_to_front():
+    """Let the browser we hand a link to come to the front (Windows only lets
+    the process the user is using pass the focus on)."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            ctypes.windll.user32.AllowSetForegroundWindow(-1)   # ASFW_ANY
+    except Exception:
+        pass
 
 
 class LimitlessPopupWindow(GlassPanel):

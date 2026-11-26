@@ -889,6 +889,10 @@ class ChatPingGlow(QWidget):
         painter.end()
 
 
+# Limitless notices: placed over the game or the dashboard (see _keep_above_game).
+NOTICE_CLASSES = {"MatchReadyToast", "LimitlessCheckInAlert", "FriendRequestPrompt"}
+
+
 class MinimalOverlay(QWidget):
     """Minimal, professional overlay that follows the game window"""
     
@@ -1825,18 +1829,31 @@ class MinimalOverlay(QWidget):
         if not game or not self.isVisible():
             return
         try:
-            from game_window import keep_above_game
-            ours = []
+            from game_window import is_above, keep_above_game
+            ours, notices = [], []
             for widget in QApplication.topLevelWidgets():
                 if not widget.isVisible() or widget is self.stats_window:
                     continue
                 kind = widget.windowType()
                 if kind in (Qt.WindowType.Popup, Qt.WindowType.ToolTip) or widget.isModal():
                     continue   # menus, tooltips, modal boxes: Qt's own
-                if any(cls.__name__ == "GlassPanel" for cls in type(widget).__mro__):
-                    continue   # the dashboard's panels: above the dashboard, as before
+                names = {cls.__name__ for cls in type(widget).__mro__}
+                if names & {"GlassPanel", "ResizeGhost"}:
+                    continue   # the dashboard's panels and resize outline: above the dashboard
+                if names & NOTICE_CLASSES:
+                    notices.append(int(widget.winId()))
+                    continue
                 ours.append(int(widget.winId()))
             keep_above_game(ours, game)
+            if notices:
+                # Match / check-in notices: over the game and the HUD - or
+                # over the dashboard when that is in front of the game.
+                anchor = game
+                dash = self.stats_window
+                if dash is not None and dash.isVisible() and not dash.isMinimized() \
+                        and is_above(int(dash.winId()), game):
+                    anchor = int(dash.winId())
+                keep_above_game(notices + ours, anchor, own=False)
         except Exception as exc:
             if not getattr(self, "_zorder_failed", False):
                 self._zorder_failed = True

@@ -102,6 +102,21 @@ def keep_above_game(hwnds, game_hwnd, own=True):
     return moved
 
 
+def is_above(a, b):
+    """Is window a above window b in the z-order?"""
+    if os.name != "nt" or not a or not b:
+        return False
+    u = _u32()
+    h = u.GetWindow(int(b), GW_HWNDPREV)
+    for _ in range(4000):
+        if not h:
+            return False
+        if int(h) == int(a):
+            return True
+        h = u.GetWindow(h, GW_HWNDPREV)
+    return False
+
+
 def ensure_dpi_aware():
     """Make this process per-monitor DPI aware (idempotent, Windows only)."""
     global _dpi_done

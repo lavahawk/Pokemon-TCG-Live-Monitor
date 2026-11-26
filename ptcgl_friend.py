@@ -12,13 +12,16 @@ game, until the main menu's PROFILE tab is on screen.
 """
 
 import json
+import math
 import os
 import re
 import threading
 import time
 
 import game_window
-from ptcgl_import import NAV, STEP_S, ImportStopped, PTCGLImporter, Screen, user32
+from ptcgl_import import NAV, STEP_S, ImportStopped, PTCGLImporter, Screen, _similar, user32
+
+import numpy as np
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DONE_FILE = os.path.join(BASE_DIR, ".friend_requests.json")  # shared by every process
@@ -39,6 +42,7 @@ SEND_BOX_H = (0.205, 0.26, 0.415, 0.315)
 # The back arrow left of the name box (x, y), in window heights: after the
 # request is sent it closes the add-friend box, back to the friends list.
 BACK_ARROW_H = (0.040, 0.1115)
+ACCEPT_MIN_R_H = 0.014   # accept button radius at least this (window heights); online dots ~0.008
 SENT_WAIT_S = 2.0       # SEND greys out once the game has sent the request
 
 BLOCK_MAX_S = 25        # the input lock always lets go after this long
@@ -515,10 +519,86 @@ class FriendAdder(PTCGLImporter):
         except Exception:
             pass
 
+    # ── a request they already sent: accept it instead ─────────────────
+    @staticmethod
+    def _accept_buttons(screen):
+        """Centres (x, y) of green accept buttons on 'Wants to be friends'
+        cards in the friends list: green circles of the button's size (the
+        online dots are much smaller). Works dimmed (the add-friend box open
+        over the list) and bright."""
+        import cv2
+        w, h = screen.size
+        x1, y0 = min(w, int(0.85 * h)), int(0.12 * h)
+        bgr = screen.image[y0:, :x1].astype(np.int16)
+        b, g, r = bgr[..., 0], bgr[..., 1], bgr[..., 2]
+        green = ((g - np.maximum(r, b) > 6) & (g > 45)).astype(np.uint8)   # dimmed, it's barely green
+        green = cv2.morphologyEx(green, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))   # the tick's gap
+        count, _labels, stats, centres = cv2.connectedComponentsWithStats(green, connectivity=8)
+        min_area = math.pi * (ACCEPT_MIN_R_H * h) ** 2
+        found = []
+        for i in range(1, count):
+            x, y, bw, bh, area = stats[i]
+            if (area >= min_area and 0.8 <= bw / max(1, bh) <= 1.25 and bh <= 0.08 * h
+                    and area >= 0.6 * bw * bh):   # a filled circle, not a patch of art
+                found.append((float(centres[i][0]), float(centres[i][1] + y0)))
+        return found
+
+    def _request_from_friend(self, screen):
+        """The accept button of <friend>'s own request, or None: the card's
+        name (under the button) must read as the friend's, with 'Wants to be
+        friends' under it."""
+        import cv2
+        h = screen.size[1]
+        tess = screen._tesseract()
+        for cx, cy in self._accept_buttons(screen):
+            # the name and status lines sit below the button, across the card
+            x0, x1 = int(max(0, cx - 0.04 * h)), int(min(screen.size[0], cx + 0.24 * h))
+            y0, y1 = int(cy + 0.16 * h), int(min(h, cy + 0.24 * h))
+            if y1 - y0 < 8:
+                continue
+            gray = cv2.cvtColor(screen.image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, None, fx=3.0 * max(1.0, 1080.0 / h), fy=3.0 * max(1.0, 1080.0 / h),
+                              interpolation=cv2.INTER_CUBIC)
+            text = ""
+            for img in (gray, 255 - gray):
+                text = tess.image_to_string(img, config="--psm 6")
+                if "WANTS" in text.upper() or "FRIEND" in text.upper():
+                    break
+            lines = [ln for ln in text.splitlines() if ln.strip()]
+            wants = any("WANTS" in ln.upper() or "FRIENDS" in ln.upper() for ln in lines)
+            named = any(_similar(ln, self.friend) >= 0.8 for ln in lines)
+            if wants and named:
+                return cx, cy
+        return None
+
+    def _accept_request(self, point):
+        """Close the add-friend box (the list is dimmed under it), then press
+        the request's green button, found again on the bright list."""
+        self._progress(f"{self.friend} already sent you a request: accepting it", 0.8)
+        screen = self._screen()
+        h = screen.size[1]
+        self._click(screen, (BACK_ARROW_H[0] * h, BACK_ARROW_H[1] * h))
+        self._name_box_gone(1.5)
+        time.sleep(0.2)
+        screen = self._screen()
+        near = [b for b in self._accept_buttons(screen)
+                if abs(b[0] - point[0]) < 0.03 * h and abs(b[1] - point[1]) < 0.03 * h]
+        if not near:
+            raise ImportStopped(f"Found {self.friend}'s request but lost its accept button")
+        self._click(screen, near[0])
+        return True, f"Accepted {self.friend}'s friend request in Pokémon TCG Live."
+
     def _add(self):
-        """Profile -> Friends -> Add friend -> type -> Send. Game in front."""
+        """Profile -> Friends -> Add friend -> type -> Send. Game in front.
+        If the opponent already sent you a request, accept that instead."""
         self._progress("Opening Profile", 0.12)
         screen, field = self._open_add_friend()
+        try:
+            request = self._request_from_friend(self._screen())
+        except Exception:
+            request = None
+        if request:
+            return self._accept_request(request)
         self._progress(f"Typing {self.friend}", 0.65)
         self._click(screen, field)
         time.sleep(0.15)

@@ -78,6 +78,42 @@ def test_back_out_never_fails_the_add():
     b._back_out()   # swallowed: the request was already sent
 
 
+REQUEST_SHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_fixtures", "friend_request_dimmed.png")
+
+
+def _request_screen():
+    import cv2
+    from ptcgl_import import Screen
+    return Screen.from_image(cv2.imread(REQUEST_SHOT))
+
+
+def test_finds_the_accept_button_dimmed():
+    """The add-friend box open over the list (dimmed): one accept button, at
+    the request card's top-left; the red decline and online dots don't count."""
+    buttons = F.FriendAdder._accept_buttons(_request_screen())
+    assert len(buttons) == 1, buttons
+    x, y = buttons[0]
+    assert abs(x - 58) < 6 and abs(y - 227) < 6, buttons
+
+
+def test_request_only_from_the_opponent():
+    a = object.__new__(F.FriendAdder)
+    screen = _request_screen()
+    a.friend = "Opponent_42"
+    assert a._request_from_friend(screen) is not None
+    a.friend = "Someone_Else"
+    assert a._request_from_friend(screen) is None
+
+
+def test_accepting_closes_the_box_then_clicks_accept():
+    a = _adder([""], red_checks=0)
+    a.friend = "Opponent_42"
+    a._accept_buttons = lambda screen: [(60.0, 230.0)]
+    ok, message = a._accept_request((58.0, 227.0))
+    assert ok and "Accepted Opponent_42" in message, message
+    assert a.clicks == [(0.040 * 1080, 0.1115 * 1080), (60.0, 230.0)], a.clicks
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in list(globals().items()):
