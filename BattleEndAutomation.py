@@ -136,6 +136,7 @@ REJECT_SIG_MAX_DIFF = 1.5   # mean abs gray difference, 0-255
 REJECT_MEMORY_S = 600
 REJECT_MEMORY_MAX = 8
 LOOKALIKE_SAVE_MAX = 20     # crops kept in Logs/battle_log_lookalikes
+LOOKALIKE_LOG_EVERY_S = 120  # one log line per look-alike spot in this time
 
 
 def _foreground_name():
@@ -326,10 +327,20 @@ class BattleEndAutomation(threading.Thread):
         finally:
             self._can_cover = False
         rejected = self.clicker.last_rejected.pop(BATTLE_LOG, None)
-        if rejected and rejected != self._last_rejected_logged:
-            self._last_rejected_logged = rejected
-            self.log(f"Ignored BATTLE LOG look-alike at ({rejected[1]},{rejected[2]}) "
-                     f"(score {rejected[0]:.2f}, text check failed).")
+        if rejected:
+            # Once per spot every LOOKALIKE_LOG_EVERY_S: its score flickers
+            # (0.87/0.88), which logged the same spot several times a second.
+            spot = (round(rejected[1] / 16), round(rejected[2] / 16))
+            now = time.time()
+            logged = getattr(self, "_lookalike_logged", {})
+            self._lookalike_logged = logged
+            if now - logged.get(spot, 0.0) >= LOOKALIKE_LOG_EVERY_S:
+                logged[spot] = now
+                for old in [k for k, t in logged.items() if now - t > 2 * LOOKALIKE_LOG_EVERY_S]:
+                    del logged[old]
+                self._last_rejected_logged = rejected
+                self.log(f"Ignored BATTLE LOG look-alike at ({rejected[1]},{rejected[2]}) "
+                         f"(score {rejected[0]:.2f}, text check failed).")
         return hit
 
     # ── main loop ──────────────────────────────────────────────────────
