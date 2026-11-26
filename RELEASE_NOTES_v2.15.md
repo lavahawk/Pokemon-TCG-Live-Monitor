@@ -1,7 +1,13 @@
-# Pokemon TCG Live Monitor v2.15.18
+# Pokemon TCG Live Monitor v2.15.19
 
 ## Install
-Run **`PokemonTCGLiveMonitor-2.15.18-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+Run **`PokemonTCGLiveMonitor-2.15.19-Free-Setup.exe`**. Install over any 2.x version; your battles and settings are kept. If SmartScreen warns you, click **More info → Run anyway** (the installer isn't signed). Windows 10/11, 64-bit.
+
+## What's new in 2.15.19
+- **New app icon.** A red and black card back with a watching eye, on the taskbar, Start menu, installer and tray.
+- **Auto friend add is tidier.** If your opponent already sent you a friend request, it accepts theirs instead of sending one. After sending, it presses the back arrow so the game isn't left on the add-friend box.
+- **Limitless notices no longer flash.** The round and check-in notices sit over the game (or over the dashboard when it's in front) and don't take the keyboard from the game.
+- **Open as image comes to the front** instead of opening behind the dashboard.
 
 ## What's new in 2.15.18
 - **The app restarts itself if it stops.** A background check every 5 minutes starts it again if it was closed by another program or crashed. If you close it yourself (from Settings, or from Task Manager), it stays closed until you open it again or next sign in. Turning auto-start off, in the app or in Task Manager's Startup tab, turns this off too.
